@@ -4,12 +4,13 @@
 
 	;; System variables
 	;;
-	;; FC3E - Points to 0A1B
 	;; FC40 - interrogated at end of restart
 	;; FC54 - frame counter???
-	;; FC56 - Top of memory (set during init of system variables)
-	;; FC6E - Set to BD00 during initialisation, if sufficient memory
-	;; FC76 - Set to BD00 during initialisation, if sufficient memory
+	;; FC56 - Amount of RAM (set during init of system variables)
+	;; FC5C - TIME - system clock (see Ch 15 of manual)
+	;; FC68 - PERiod - tic limit at which clock resets (see Ch 15 of manual)
+	;; FC6E - Set to BD00/ FD00 during initialisation, based on memory tes
+	;; FC76 - Set to BD00/ FD00 during initialisation, based on memory test
 	;; FC78 - Some kind of counter (incremented during restart)
 	;; FC7C - Set to 0050 during restart
 	;; FC7E - Pointer to 8080
@@ -20,24 +21,35 @@
 	;; FC8A -
 	;; FC8C - Init value of FC88
 	;; FC8E - Init value of FC8A
-	;; FC90 - Start of parameter stack?
-	;; FC96 - Points to FC36
+	;; FC90 - Start of parameter stack
+	;; FC94 - PSTACK0: Pointer to machine-stack 0 (grows down from FB80)
+	;; FC96 - PSTACK1: Pointer to machine-stack 1 (FC3E)
 	;; FCA5 - Flags (Bit 0 - ; Bit 6 - tested at 0937 ; Bit 7 - set at 1071
-	;; FCAD - Flags (Bit 4 - reset during restart; But 5 - reset during restart)
+	;; FCAD - Flags (Bit 4 - Machine Stack in use; But 5 - stack changed)
 	;; FCBF - Reset at start of main monitor loop
 
 	;; Memory map
 	;; 
-	;; FB80 - top of machine stack
+	;; FB80 - top of machine stack 0
+	;; FC3E - top of machine stack 1
+	;; FCC0--FCFF -- Character stack (wraps around)
 	;; FD00--FFFF - video RAM
+
+PSTACKC:	equ 0xFC84
+PSTACK0:	equ 0xFC94
+PSTACK1:	equ 0xFC96
+STACKC_BASE:	equ 0xFCC0
+STACK0_BASE:	equ 0xFB80
+STACK1_BASE:	equ 0xFC3E
+	
 	org	00000h
 
 l0000h:
 	out (0fdh),a		;0000 - Disable NMI
 l0002h:
-	ld sp,0fb80h		;0002 - Set stack pointer
+	ld sp,STACK0_BASE		;0002 - Set stack pointer
 l0005h:
-	jp l0946h		;0005
+	jp l0946h		;0005 - Continue with reset
 
 
 	;; Push HL onto parameter stack
@@ -48,6 +60,7 @@ l000ah:
 	ld (iy+000h),h		;000a
 l000dh:
 	jr l004bh		;000d
+
 	rst 38h			;000f
 
 	;; Pop from Parameter Stack into HL
@@ -59,16 +72,21 @@ l0010h:	ld l,(iy+000h)		;0010
 	
 	rst 38h			;0017
 
-	;; 
+	;; RST 18 - Push A onto character stack
 	push hl			;0018
 	push af			;0019
-	ld hl,0fc84h		;001a
+	ld hl,PSTACKC		;001a
 	jp l0201h		;001d
 
+
+	;; RST 20 - Pop from character stack into A
 l0020h:	push hl			;0020
-l0021h:	ld hl,0fc84h		;0021
+l0021h:	ld hl,PSTACKC		;0021
 	ld a,(hl)			;0024
 	jp l020bh		;0025
+
+
+
 	jp 0200ah		;0028
 	nop			;002b
 	nop			;002c
@@ -99,8 +117,7 @@ l0047h:
 	pop de			;0047
 	ret z			;0048
 	jr l0041h		;0049
-l004bh:
-	dec iy		;004b
+l004bh:	dec iy		;004b
 	ld (iy+000h),l		;004d
 
 l0050h:	ret			;0050 - Default destination for ???
@@ -375,20 +392,25 @@ l018bh:
 	pop hl			;01b0
 	call jump_to_hl		;01b1
 	jr l01cfh		;01b4
-l01b6h:
-	res 4,(hl)		;01b6
+
+l01b6h:	res 4,(hl)		;01b6
 	set 5,(hl)		;01b8
-	ex (sp),hl			;01ba
-	ld (0fc96h),sp		;01bb
-	ld sp,(0fc94h)		;01bf
+	ex (sp),hl		;01ba - Extract return address into HL
+
+	;; Switch from Stack 1 to Stack 0
+	ld (PSTACK1),sp		;01bb 
+	ld sp,(PSTACK0)		;01bf
+
 	call jump_to_hl		;01c3
-	ld sp,(0fc96h)		;01c6
+	
+	ld sp,(PSTACK1)		;01c6 - Switch back to Stack 1 (discard
+				;Stack 0 pointer)
+
 	pop hl			;01ca
 	res 5,(hl)		;01cb
-l01cdh:
-	set 4,(hl)		;01cd
-l01cfh:
-	pop ix		;01cf
+l01cdh:	set 4,(hl)		;01cd
+
+l01cfh:	pop ix		;01cf
 	pop bc			;01d1
 	pop de			;01d2
 	pop hl			;01d3
@@ -397,8 +419,8 @@ l01cfh:
 	pop hl			;01d6
 	res 7,(hl)		;01d7
 	jr l018bh		;01d9
-l01dbh:
-	pop hl			;01db
+
+l01dbh:	pop hl			;01db
 	ld hl,0fcach		;01dc
 	ld a,(hl)			;01df
 	bit 7,a		;01e0
@@ -423,25 +445,30 @@ l01fdh:
 l0200h:
 	ret			;0200
 
-l0201h:	ld a,(hl)			;0201
+l0201h:	ld a,(hl)		;0201
 	dec a			;0202
-	or 0c0h		;0203
-	ld (hl),a			;0205
+	or 0c0h			;0203
+	ld (hl),a		;0205
 	ld l,a			;0206
 	pop af			;0207
-	ld (hl),a			;0208
+	ld (hl),a		;0208
 	pop hl			;0209
+
 	ret			;020a
 
-
+	;; Continuation of RST 20 - pop from character stack into A
 l020bh:
-	ld l,a			;020b
-	inc a			;020c
-	or 0c0h		;020d
-	ld (0fc84h),a		;020f
-	ld a,(hl)			;0212
-	pop hl			;0213
+	ld l,a			; Move character-stack pointer
+				; into L to construct 16-bit address
+				; (high byte is always FCh)
+	inc a			;020c - Increase character stack pointer
+	or 0c0h			;020d - Wrap around from FF to C0
+	ld (PSTACKC),a		;020f - Store new pointer value
+	ld a,(hl)		;0212 - Retrieve value from stack
+	pop hl			;0213 - Done
+
 	ret			;0214
+	
 sub_0215h:
 	push hl			;0215
 	push de			;0216
@@ -985,18 +1012,18 @@ l0555h:
 	and 07fh		;0557
 	jr nz,l055dh		;0559
 	djnz l0555h		;055b
-l055dh:
-	pop hl			;055d
+
+l055dh:	pop hl			;055d
 	call sub_0574h		;055e
 	ld a,00dh		;0561
 	call sub_0581h		;0563
 	jr l056dh		;0566
-l0568h:
-	pop hl			;0568
+
+l0568h:	pop hl			;0568
 	inc b			;0569
 	call sub_0574h		;056a
-l056dh:
-	call sub_0277h		;056d
+
+l056dh:	call sub_0277h		;056d
 	pop bc			;0570
 	pop de			;0571
 	pop hl			;0572
@@ -1044,6 +1071,7 @@ sub_05b5h:
 	jp l08efh		;05b8
 
 
+	;; Switch machine stack
 sub_05bbh:
 	push hl			;05bb
 	push de			;05bc
@@ -1051,19 +1079,26 @@ sub_05bbh:
 	push ix		;05be
 
 	ld hl,0fcadh		;05c0
-	bit 5,(hl)		;05c3
-	jr nz,l05e5h		;05c5
-	set 5,(hl)		;05c7
-	bit 4,(hl)		;05c9
-	jr z,l05d9h		;05cb
-	res 4,(hl)		;05cd
-	ld (0fc96h),sp		;05cf
-	ld sp,(0fc94h)		;05d3
-	jr l05e3h		;05d7
+	bit 5,(hl)		;05c3 - Check if need to change stack
+	jr nz,l05e5h		;05c5 - Jump forward if not
 
+	set 5,(hl)		;05c7 - Confirm stack changed
+
+	;; Check which stack is in use and switch
+	bit 4,(hl)		;05c9
+	jr z,l05d9h		;05cb - Skip forward if Stack 0
+
+	;; Switch from Stack 1 to Stack 0
+	res 4,(hl)		;05cd
+	ld (PSTACK1),sp		;05cf
+	ld sp,(PSTACK0)		;05d3
+
+	jr l05e3h		;05d7 - Skip forward
+
+	;; Switch from Stack 0 to Stack 1
 l05d9h:	set 4,(hl)		;05d9
-	ld (0fc94h),sp		;05db
-	ld sp,(0fc96h)		;05df
+	ld (PSTACK0),sp		;05db
+	ld sp,(PSTACK1)		;05df
 
 l05e3h:	res 5,(hl)		;05e3
 
@@ -1073,16 +1108,23 @@ l05e5h:	pop ix			;05e5
 	pop hl			;05e9
 
 	ret			;05ea
-	
+
+	;; Startup routine
 sub_05ebh:
-	ld hl,0fcadh		;05eb
-	res 4,(hl)		;05ee
-	res 5,(hl)		;05f0
-	ld hl,l0a1bh		;05f2
-	ld (0fc3eh),hl		;05f5
-	ld hl,0fc36h		;05f8
-	ld (0fc96h),hl		;05fb
+	ld hl,0FCADh		;05eb
+	res 4,(hl)		;05ee - Using Stack 0
+	res 5,(hl)		;05f0 - Stack switch ???
+
+	ld hl,MAIN_LOOP		; Insert address of main loop at head (05f2)
+	ld (STACK1_BASE),hl	; of Stack 1 as return address
+
+	ld hl,STACK1_BASE-08	; Set pointer to fourth word on
+	ld (PSTACK1),hl		; machine stack 1. Will balance
+				; the first time that we switch to
+				; machine stack 1
+
 	ret			;05fe
+
 sub_05ffh:
 	cp 01eh		;05ff
 	jp z,l0493h		;0601
@@ -1106,13 +1148,15 @@ l061fh:
 	ret			;0620
 
 
+	;; Switch to Stack 1
 sub_0621h:
-	ld a,(0fcadh)		;0621
-	bit 4,a		;0624
-	ret nz			;0626
-	sbc a,a			;0627
-	call sub_05bbh		;0628
-	ret			;062b
+	ld a,(0fcadh)		; Check which machine stack is in use
+	bit 4,a		
+	ret nz			; Nothing to do if Stack 1
+	sbc a,a			;
+	call sub_05bbh		; Switch stack
+	
+	ret			; Done (062b)
 
 sub_062ch:
 	push hl			;062c
@@ -1127,9 +1171,9 @@ sub_0637h:
 	push hl			;0637
 	ld a,(hl)			;0638
 	ld h,000h		;0639
-	and 03fh		;063b
+	and 03fh		;063b (mask off lower six bits)
 	ld l,a			;063d
-	rst 8			;063e
+	rst 8			;063e - Push HL onto Param stack
 
 	jr z,l0650h		;063f
 	pop hl			;0641
@@ -1140,14 +1184,15 @@ sub_0637h:
 	ld l,a			;0646
 	jr nc,l064ah		;0647
 	inc h			;0649
-l064ah:
-	ld a,(hl)			;064a
+
+l064ah:	ld a,(hl)		;064a
 	rst 18h			;064b
 	dec hl			;064c
 	djnz l064ah		;064d
+
 	pop bc			;064f
-l0650h:
-	pop hl			;0650
+l0650h:	pop hl			;0650
+
 	ret			;0651
 
 
@@ -1176,6 +1221,7 @@ sub_0665h:
 	call sub_0652h		;0669
 	pop af			;066c
 	ret			;066d
+
 sub_066eh:
 	push hl			;066e
 	ld hl,l1d60h		;066f
@@ -1233,7 +1279,7 @@ sub_06a7h:
 	rst 10h			;06ab
 	rst 8			;06ac
 	ld a,l			;06ad
-	ld hl,(0fc84h)		;06ae
+	ld hl,(PSTACKC)		;06ae
 l06b1h:
 	and 03fh		;06b1
 	ld b,a			;06b3
@@ -1283,8 +1329,10 @@ sub_06f1h:
 	
 	ld hl,0fcbfh		;06f2
 	ld (hl),000h		;06f5
-l06f7h:	or a			;06f7
-	call sub_0621h		;06f8 - Do something with stack
+l06f7h:	or a			;06f7 - Clear carry?
+	
+	call sub_0621h		;06f8 - Switch to machine stack 1
+
 	and 07fh		;06fb
 	cp 01eh		;06fd
 	jr c,l0717h		;06ff
@@ -1581,14 +1629,16 @@ l08bbh:
 	ret			;08c1
 
 sub_08c2h:
-	ld hl,0fcadh		;08c2
+	ld hl,0fcadh		;08c2 - Flags
 	ld a,(hl)			;08c5
 	and 070h		;08c6
 	ld (hl),a			;08c8
+	
 	ld hl,0fca5h		;08c9
 	ld a,(hl)			;08cc
 	and 0c0h		;08cd
 	ld (hl),a			;08cf
+
 	ld hl,0fcbeh		;08d0
 	ld a,(hl)			;08d3
 	and 0fch		;08d4
@@ -1681,10 +1731,12 @@ sub_0934h:
 l0946h:	ld a,07fh		;0946
 l0948h:	in a,(0feh)		;0948 - Read keyboard 'Shift', 'z', ..., 'V'
 	rrca			;094a - Rotate 'shift key' into carry
-	jr nc,l0953h		;094b - Branch, if shift pressed
+	jr nc,l0953h		;094b - Branch, if shift pressed (to
+				; force cold restart)
 
-l094dh:	ld hl,0fc78h		;094d - Check system variable/ counter
-	inc (hl)		;0950
+l094dh:	ld hl,0fc78h		;094d - Check system variable (possibly
+	inc (hl)		;0950   indicates if warm restart (if
+				;       (FC78)=FF)
 	jr z,l099ah		;0951
 
 l0953h:	out (0fdh),a		;0953 - Disable NMI
@@ -1693,21 +1745,26 @@ l0953h:	out (0fdh),a		;0953 - Disable NMI
 	ld hl,040ffh		;0955 - Last byte of first page of RAM
 				;       in 1k/16k RAM configuration
 
+	;; Write test data (high byte of address) to end of each 256-byte page
 l0958h:	ld (hl),h		;0958
 	inc h			;0959
 	jr nz,l0958h		;095a
 
+	;; Attempt to read back (oddly, this routine expects
+	;; differences, based on mirroring of main RAM area)
 	ld h,040h		;095c
 l095eh:	ld a,(hl)		;095e
 	cp h			;095f
-	jr z,l0965h		;0960
+	jr z,l0965h		;0960 - If reads back same, means done
 	inc h			;0962
 	jr nz,l095eh		;0963
 
+	;; Calculate size of memory 
 l0965h:	cpl			;0965 - Calculate 10000h-LAST ADDR 
 	ld h,a			;0966   and store in HL
 	inc hl			;0967
 
+	;; Save current registers
 	exx			;0968
 
 	;; Zero RAM
@@ -1723,42 +1780,56 @@ l0970h:	ld (hl),a		;0970
 	ld de,0fc60h		;0977
 	ld bc,l0060h		;097a
 	ldir			;097d
+
+	;; Restore registers
 	exx			;097f
 
 	ld (0fc56h),hl		;0980 - Store top of memory
 
-	;; Check how much memory was found
+	;; Check how much memory was found and set system variables at
+	;; FC6E and FC76 accordingly.
 	ld a,0bfh		;0983
-	cp h			;0985
+	cp h			;0985 - H is 40 or 80 for 16k or 32k of RAM
 	jr nc,l0991h		;0986
-
-	;; Not sure what this does 
-	ld hl,0bd00h		;0988
+	
+	ld hl,0bd00h		;0988 - By default, these variables
+				;       contain FD00
 	ld (0fc6eh),hl		;098b
 	ld (0fc76h),hl		;098e
 
 l0991h:	call sub_09cah		;0991 - check if ROM/ RAM in 2000--3FFF
+
 	ld hl,l1d00h		;0994
 	call sub_0665h		;0997
 
-l099ah:	ld sp,0fb80h		;099a
-	ld hl,0fcc0h		;099d - FCC0h is start of character stack
-	ld (0fc84h),hl		;09a0 - Pointer to character stack?
+	;; ============================================================
+	;; Warm restart
+	;; ============================================================
+	;; *** Somewhere in here, we check integrity of system variables
+l099ah:	ld sp,STACK0_BASE	; Reset machine-stack 0
+
+	ld hl,STACKC_BASE	;099d - Reset character-stack pointer
+	ld (PSTACKC),hl		;09a0
+
 	ld hl,08080h		;09a3
 	ld (0fc7eh),hl		;09a6 - System variable
 
 l09a9h:	call sub_0934h		;09a9 - ???
-	call sub_05ebh		;09ac
-	call sub_0765h		;09af
-	call sub_08c2h		;09b2
+	call sub_05ebh		;09ac - Initialise some variables
+	call sub_0765h		;09af - Initialise some variables
+	call sub_08c2h		;09b2 - Set/ reset some flags
+
 	ld iy,(0fc90h)		;09b5 - Reset parameter stack
 
 	ld a,01eh		;09b9
 	ld i,a			;09bb
 	out (0feh),a		;09bd - Enable NMI
+
+	;; Check if system variables are corrupted (assumed if value at
+	;; FC40 is non-zero) ???
 	ld a,(0fc40h)		;09bf
-	or a			;09c2
-	jr nz,l0953h		;09c3
+	or a			;09c2 
+	jr nz,l0953h		;09c3 - Jump to cold restart
 
 	;; Initialisation, never completes
 l09c5h:	call sub_08d8h		;09c5
@@ -1767,13 +1838,13 @@ l09c5h:	call sub_08d8h		;09c5
 	;; Check memory from 2000h--3FFFh
 sub_09cah:
 	ld hl,02000h		;09ca
-	ld a,(hl)			;09cd
+	ld a,(hl)		;09cd
 	cpl			;09ce
-	ld (hl),a			;09cf
+	ld (hl),a		;09cf
 	cp (hl)			;09d0
 	cpl			;09d1
-	ld (hl),a			;09d2
-	jr nz,l0a0fh		;09d3 - Jump forward if not valid memory
+	ld (hl),a		;09d2
+	jr nz,l0a0fh		;09d3 - Jump forward if RAM
 	
 	push af			;09d5
 	ld hl,0fc57h		;09d6
@@ -1784,16 +1855,18 @@ sub_09cah:
 	ld hl,0fca5h		;09e0
 	set 4,(hl)		;09e3
 	pop af			;09e5
+
 	xor 0a5h		;09e6
 	jr z,l0a0ch		;09e8
 	dec a			;09ea
 	jr nz,l09f4h		;09eb
+
 	call sub_0744h		;09ed
-l09f0h:
-	ld hl,(02002h)		;09f0
+
+l09f0h:	ld hl,(02002h)		;09f0
 	jp (hl)			;09f3
-l09f4h:
-	ld hl,02000h		;09f4
+
+l09f4h:	ld hl,02000h		;09f4
 	ld (hl),0a5h		;09f7
 	ld hl,02010h		;09f9
 	ld (0fc8ah),hl		;09fc
@@ -1802,11 +1875,10 @@ l09f4h:
 	ld hl,l19b4h		;0a05
 	ld (02002h),hl		;0a08
 	ret			;0a0b
-l0a0ch:
-	jp sub_0744h		;0a0c
 
-l0a0fh:
-	xor 0a5h		;0a0f - %10100101
+l0a0ch:	jp sub_0744h		;0a0c
+
+l0a0fh:	xor 0a5h		;0a0f - %10100101
 sub_0a11h:
 	jp z,l0750h		;0a11
 	dec a			;0a14
@@ -1816,7 +1888,7 @@ sub_0a11h:
 	jr l09f0h		;0a19
 
 	;; Main loop
-l0a1bh:	call sub_0925h		;0a1b
+MAIN_LOOP:	call sub_0925h		;0a1b
 	call sub_0910h		;0a1e
 	call nc,sub_05ffh		;0a21
 	call sub_058ah		;0a24
@@ -1825,7 +1897,7 @@ l0a1bh:	call sub_0925h		;0a1b
 	ld hl,(0fc54h)		;0a2d
 	inc hl			;0a30
 	ld (0fc54h),hl		;0a31
-	jr l0a1bh		;0a34
+	jr MAIN_LOOP		;0a34
 
 sub_0a36h:
 	push hl			;0a36
@@ -2181,6 +2253,11 @@ sub_0c13h:
 	pop de			;0c20
 l0c21h:
 	ret			;0c21
+
+	;; Word check in https://github.com/monsonite/Z80_Forth/blob/master/h4th_source_2.asm
+	
+	;; Forth word ROT
+
 	inc bc			;0c22
 	ld d,d			;0c23
 	ld c,a			;0c24
@@ -2399,7 +2476,7 @@ l0d39h:
 	jr z,l0d60h		;0d50
 	push bc			;0d52
 	ld b,a			;0d53
-	ld hl,(0fc84h)		;0d54
+	ld hl,(PSTACKC)		;0d54
 	dec a			;0d57
 	add a,l			;0d58
 	ld l,a			;0d59
@@ -3626,7 +3703,7 @@ l13b6h: rst 10h			;13b6
 
 	call sub_13d2h		;13bd
 	call sub_0909h		;13c0
-	call z,sub_048dh		;13c3
+	call z,sub_048dh	;13c3
 	call sub_18fah		;13c6
 	call sub_1036h		;13c9
 	ld hl,0fc78h		;13cc
