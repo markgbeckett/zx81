@@ -9,13 +9,15 @@
 	;; FC56 - Amount of RAM (set during init of system variables)
 	;; FC5C - TIME - system clock (see Ch 15 of manual)
 	;; FC68 - PERiod - tic limit at which clock resets (see Ch 15 of manual)
-	;; FC6E - Set to BD00/ FD00 during initialisation, based on memory tes
+	;; FC6E - Pointer to DFILE - Set to BD00/ FD00 during
+	;;        initialisation, based on memory test
 	;; FC76 - Set to BD00/ FD00 during initialisation, based on memory test
-	;; FC78 - Some kind of counter (incremented during restart)
+	;; FC78 - Set to FF during restart, to indicate warm restart is
+	;;        possible
 	;; FC7C - Set to 0050 during restart
 	;; FC7E - Pointer to 8080
 	;; FC80 - Next video handling routine
-	;; FC82 - Particular video handling routine ???
+	;; FC82 - Particular video handling routine (0x57 or 0x71)
 	;; FC84 - Pointer to character stack
 	;; FC88 -
 	;; FC8A -
@@ -24,13 +26,18 @@
 	;; FC90 - Start of parameter stack
 	;; FC94 - PSTACK0: Pointer to machine-stack 0 (grows down from FB80)
 	;; FC96 - PSTACK1: Pointer to machine-stack 1 (FC3E)
+	;; FC9A...FC9D/ FC9E...FCA1/FCA2...FCA5 are 4-byte buffers
 	;; FCA5 - Flags (Bit 0 - ; Bit 6 - tested at 0937 ; Bit 7 - set at 1071
+	;; FCAB - CUR_KEY
+	;; FCAC - LAAT_KEY
 	;; FCAD - Flags (Bit 4 - Machine Stack in use; But 5 - stack changed)
+	;; FCBE - passed into main loop (context 0) as HL 
 	;; FCBF - Reset at start of main monitor loop
 
 	;; Memory map
 	;; 
 	;; FB80 - top of machine stack 0
+	;; FBC0 - PAD
 	;; FC3E - top of machine stack 1
 	;; FCC0--FCFF -- Character stack (wraps around)
 	;; FD00--FFFF - video RAM
@@ -38,16 +45,22 @@
 PSTACKC:	equ 0xFC84
 PSTACK0:	equ 0xFC94
 PSTACK1:	equ 0xFC96
+LAST_KEY:	equ 0xFCAC
 STACKC_BASE:	equ 0xFCC0
 STACK0_BASE:	equ 0xFB80
 STACK1_BASE:	equ 0xFC3E
+RAM_SIZE:	equ 0xFC56
+F_WARM_RESTART:	equ 0xFC78	; Indicates warm restart is possible
+NEXT_DISP_ROUTINE:	equ 0xFC80	
+PAD:		equ 0xFBC0		; Start of PAD
+
 	
 	org	00000h
 
 l0000h:
 	out (0fdh),a		;0000 - Disable NMI
 l0002h:
-	ld sp,STACK0_BASE		;0002 - Set stack pointer
+	ld sp,STACK0_BASE	;0002 - Reset stack pointer
 l0005h:
 	jp l0946h		;0005 - Continue with reset
 
@@ -100,23 +113,37 @@ l0021h:	ld hl,PSTACKC		;0021
 	nop			;0036
 	nop			;0037
 
-;; Maskable Interrupt
+	;; Maskable Interrupt (used to service display)
+	;;
+	;; On entry, HL points to display file
+
+	;; Check if have display all eight pixel rows for current screen row
 	dec c			;0038
-	jp nz,l0047h		;0039
-	pop hl			;003c
-	dec b			;003d
-	ret z			;003e
-	set 3,c		;003f
-l0041h:
-	ld r,a		;0041 - Seems to be DD
+	jp nz,l0047h		;0039 - Jump on if not
+
+	pop hl			;003c - Retrieve execution point in
+				;       display file
+
+	dec b			;003d - Check if more rows to display
+	ret z			;003e - Return if not
+
+	set 3,c			;003f - Set C=8 (pixel rows per character)
+
+	;; Execute next display pixel line
+l0041h:	ld r,a			;0041 - Seems to be DD
 	ei			;0043
 	nop			;0044 *** This is different ***
 	nop			;0045
-	jp (hl)			;0046
-l0047h:
-	pop de			;0047
-	ret z			;0048
+	jp (hl)			;0046 - Jump to display file
+
+	;; Next pixel row
+l0047h:	pop de			;0047 - Discard return address (will
+				;       rerun row of display file, using
+				;       address in HL)
+	ret z			;0048 - Timing paise, condition should
+				;       never be satisfied
 	jr l0041h		;0049
+	
 l004bh:	dec iy		;004b
 	ld (iy+000h),l		;004d
 
@@ -131,7 +158,7 @@ l0057h:
 	ld a,0ffh		;0057 - E4h in 60 Hz version
 	ex af,af'			;0059
 	ld hl,l0098h		;005a - Set routine for video handling ???
-	ld (0fc80h),hl		;005d
+	ld (NEXT_DISP_ROUTINE),hl		;005d
 l0060h:
 	pop hl			;0060
 	ret			;0061
@@ -154,146 +181,218 @@ jump_to_hl:
 	ret			;006b
 
 l006ch:	push hl			;006c 
-	ld hl,(0fc80h)		;006d - current video handling routine
+	ld hl,(NEXT_DISP_ROUTINE)	;006d - next video handling routine
 	jp (hl)			;0070
 
-	;; NMI service routine, called when counter hits zero
+	;; NMI service routine (run display file)
 l0071h:	ld a,04ah		;0071 - 23h on 60 Hz version
-	ex af,af'			;0073
+	ex af,af'		;0073
 	push af			;0074
 	push bc			;0075
 	push de			;0076
-	ld bc,l1809h		;0077
-	ld hl,l0098h		;007a - Set routine for video handling ???
-	ld (0fc80h),hl		;007d 
-	ld hl,(0fc6eh)		;0080
+	ld bc,l1809h		;0077 - 24 rows and 8 scan lines +1
+	ld hl,l0098h		;007a - Set routine for other video handler
+	ld (NEXT_DISP_ROUTINE),hl		;007d 
+	ld hl,(0fc6eh)		;0080 - Possibly start of display file?
 	ld a,0eah		;0083 - Set timer for display routine
-	halt			;0085 - Wait for interrupt
+	halt			;0085 - Wait for interrupt (addr 0x0038)
 
+	;; Arrives here, once DFILE has been executed
 l0086h:	out (0fdh),a		;0086 - Disable NMI : left marging timing now ???
 	call sub_0092h		;0088
 	out (0feh),a		;008b - Enable NMI
+	
 	pop de			;008d
 	pop bc			;008e
 	pop af			;008f
 	pop hl			;0090
+
 	ret			;0091
 
+	;; Set up display parameters, enable interrupts, jump to DFILE
 sub_0092h: 			; Looks like DISPLAY-5 at L02B5
-	ld r,a		;0092 - Is it F5?
+	ld r,a			;0092 - Is it F5?
 	ld a,0ddh		;0094
 	ei			;0096
-	halt			;0097
+	halt			;0097 - Returns once display file is complete
 
-	;; Video handling routine (for main part of screen)
+	;; Video handling routine (VSync and read keyboard)
 l0098h:	out (0fdh),a		;0098 - Disable NMI
-	in a,(0feh)		;009a
-	ld a,01eh		;009c 
-	ex af,af'			;009e
+	in a,(0feh)		;009a - Trigger VSync
+
+	ld a,01eh		;009c - Set counter for top margin *** TIMING **
+	ex af,af'		;009e
+
+	;; Set next display routine
 	ld hl,(0fc82h)		;009f
-	ld (0fc80h),hl		;00a2 - Set video handling routine
+	ld (NEXT_DISP_ROUTINE),hl	;00a2 - Set video handling routine
+
 	push bc			;00a5
 	push af			;00a6
 
 	;; Read keyboard
-	ld hl,l0000h		;00a7
-	ld bc,0fefeh		;00aa
-l00adh:	in a,(c)		;00ad
-	or 0e0h		;00af
-	cpl			;00b1
-	or a			;00b2
-	jr z,l00b7h		;00b3 - No key press???
-	set 0,l		;00b5
-l00b7h:	rrc l		;00b7
-	or h			;00b9
-	ld h,a			;00ba
-	rlc b		;00bb
-	jr c,l00adh		;00bd - Move on to next half row
+	ld hl,0x0000		;00a7 - Initialise buffer for key press
+	ld bc,0xFEFE		;00aa - I/O port for first half-row
+				;       (B,...,Shift). Single bit that
+				;       is reset will also be used as
+				;       flag to confirm when keyboard
+				;       reading is finished
+
+	;; Check keyboard one half row at a time, starting with FEFE ->
+	;; FDFE -> FBFE -> F7FE -> EFFE -> DFFE -> BFFE -> 7FFE
+l00adh:	in a,(c)		;00ad - Read keyboard
+
+	or %11100000		;00af - Mask off top three bits
+				;       (keyboard half-row only contains
+				;       five keys)
+	cpl			;00b1 - Complement, so any keys pressed
+				;       will be set
+
+	or a			;00b2 - Check if zero, meaning no
+	jr z,l00b7h		;00b3 - key pressed
+
+	set 0,l			;00b5 - L is used to confirm half-row in
+				;       which key is detected
+l00b7h:	rrc l			;00b7 - 8-bit rotation right (bit 0 also
+				;       copied into carry
+
+	or h			;00b9 - Save column value into H
+	ld h,a			;       (keeping any previously detected
+				;       key presses)
+
+	rlc b			;00bb - Next half-row 
+	jr c,l00adh		;00bd - Move on to next half row (unless
+				;       carry is reset, which means eight
+				;       half-rows have been scanned.,
+
+	;; At this point, HL contains column and half-row identity of
+	;; any key that has been pressed, respectively
+	;;  1 - 2 - 3 - 4 - 5 -> register L = 08 and H=offset (from 1)
+	;;  0 - 9 - 8 - 7 - 6 -> register L = 10 and H=offset (from 1)
+	;;  Q - W - E - R - T -> register L = 20 and H=offset (from 1)
+	;;  P - O - I - U - Y -> register L = 04 and H=offset (from 1)
+	;;  A - S - D - F - G -> register L = 02 and H=offset (from 1)
+	;; N/L- L - K - J - H -> register L = 40 and H=offset (from 1)
+	;; SHF- Z - X - C - V -> register L = 01 and H=offset (from 1)
+	;; SPC- . - M - N - B -> register L = 80 and H=offset (from 1)
+	;; 
+	;; H = 01, 02, 04, 08, 10 - based on position
+
+	;; Check for Shift (L(0)=1 and H(0)=1
+	ld a,l		;00bf - L=1, if shift half-row
+	and h		;00c0 - H=1, if shift half-row
+	rrca		;00c1 - Rotate bit 0 into carry
+
+	ld bc,l0800h	;00c2 - B accounts for eight possible,
+			;       half-rows; C is offset to character
+	jr nc,l00c9h	;00c5 - Skip forward if Shift not pressed
+	set 6,c		;00c7 - Add 64 to key value, if shifted
+
+	;; Normalise H and L on zero (also drops shift)
+l00c9h:	srl h		;00c9 - Shift column value right
+	srl l		;00cb - Shift row value right
+
+	;; Check for multiple key presses (not including shift, which
+	;; has been dealt with)
+	ld a,h		;00cd - Load column reference into A
+	neg		;00ce - 0-col/2
+	and h		;00d0
+	sub h		;00d1
+	jr nz,l00d9h	;00d2 - Skip forward if multiple keypresses (in
+			;same half-row)
 	
-	ld a,l			;00bf
-	and h			;00c0
-	rrca			;00c1
-	ld bc,l0800h		;00c2
-	jr nc,l00c9h		;00c5
-	set 6,c		;00c7
-l00c9h:	srl h		;00c9
-	srl l		;00cb
-	ld a,h			;00cd
-	neg		;00ce
-	and h			;00d0
-	sub h			;00d1
-	jr nz,l00d9h		;00d2
-	ld a,l			;00d4
+	ld a,l		;00d4 - Retrieve row value
 	neg		;00d5
-	and l			;00d7
-	sub l			;00d8
-l00d9h:
-	jr nz,l00f4h		;00d9
-l00dbh:
-	rlc l		;00db
-	jr nc,l00e0h		;00dd
-	add a,b			;00df
-l00e0h:
-	djnz l00dbh		;00e0
-	add a,c			;00e2
-	ld c,a			;00e3
-	ld b,005h		;00e4
-	ld l,008h		;00e6
-	xor a			;00e8
-l00e9h:
-	add a,l			;00e9
-	rrc h		;00ea
+	and l		;00d7
+	sub l		;00d8
+
+l00d9h:	jr nz,l00f4h	;00d9 - Skip forward if multiple keypresses
+
+	;; Turn half-row indicator into index of offset of bit
+l00dbh:	rlc l		;00db - Check next bit
+	jr nc,l00e0h	;00dd
+ 	add a,b		;00df - Set offset (will happen no more than
+			;       once and will add current value of
+			;       countdown)
+l00e0h:	djnz l00dbh	;00e0
+
+	add a,c		;00e2
+	ld c,a		;00e3 - C is half-row offset
+
+	ld b,005h	;00e4 - Five possible key positions
+	ld l,008h	;00e6 - Step size for each key position
+	xor a		;00e8 - Key position in half-row gives
+			;       8* offset (normalised on zero)
+	;; Now work out offset for key press (in half row)
+l00e9h:	add a,l			;00e9 
+	rrc h			;00ea
 	jr nc,l00f0h		;00ec
 	add a,c			;00ee
 	ld c,a			;00ef
-l00f0h:
-	djnz l00e9h		;00f0
-	jr l00fah		;00f2
-l00f4h:
-	ld b,022h		;00f4
-l00f6h:
-	djnz l00f6h		;00f6
-	set 7,c		;00f8
-l00fah:
-	ld hl,0fcabh		;00fa
+l00f0h:	djnz l00e9h		;00f0
+
+	;; At this point C contains offset for keypress
+	jr l00fah		;00f2 - Skip handling of multiple key
+				;       presses
+
+	;; Multiple key presses detected: implement pause to
+	;; resynchronise with main loop
+l00f4h:	ld b,022h		;00f4
+l00f6h:	djnz l00f6h		;00f6
+	set 7,c			;00f8 - Indicates multiple key presses
+
+	;; At this point C points to key press (bit 6 indicates if shift
+	;; if pressed, and bit 7 indicates multiple key presses)
+l00fah:	ld hl,0fcabh		;00fa
+
+	;; Check if no (real) keys pressed (that is, ignore Shift alone)
 	ld a,c			;00fd
-	and 0bfh		;00fe
-l0100h:
-	out (0ffh),a		;0100
-	out (0feh),a		;0102
-	jr nz,l0109h		;0104
-	ld (hl),a			;0106
+	and %10111111		;00fe - Mask off shift
+
+l0100h:	out (0ffh),a		;0100 - Turn on HSYNC generator
+	out (0feh),a		;0102 - Turn off VSYNC generator
+
+	jr nz,l0109h		;0104 - Jump forward if key other than
+				;       shift pressed
+
+	;; No real keys pressed, so set key-counter to zero and skip
+	;; forward
+	ld (hl),a		;0106
 	jr l0119h		;0107
-l0109h:
-	ld a,c			;0109
-	bit 7,(hl)		;010a
-	jr nz,l0119h		;010c
-	xor (hl)			;010e
-	jr z,l011eh		;010f
-	cp c			;0111
-	jr nz,l0117h		;0112
-	ld (hl),c			;0114
+
+	;; For real key presses, need to check if enough
+l0109h:	ld a,c			;0109
+	bit 7,(hl)		;010a - Check ???
+	jr nz,l0119h		;010c   Jump forward if so
+	xor (hl)		;010e - Check if same key pressed
+	jr z,l011eh		;010f   Jump forward if so
+	cp c			;0111 - Check if same key press???
+	jr nz,l0117h		;0112   Jump forward if not
+	ld (hl),c		;0114 - Store key press
 	jr l0119h		;0115
-l0117h:
-	set 7,(hl)		;0117
-l0119h:
-	dec hl			;0119
-	ld (hl),003h		;011a
+
+l0117h:	set 7,(hl)		;0117
+
+	;; Multiple key presses
+l0119h:	dec hl			;0119
+	ld (hl),003h		;011a - Set countdown
 	jr l012eh		;011c
 
+	;; Handle repeated key press
 l011eh:	dec hl			;011e
-	dec (hl)			;011f
-	ld a,(hl)			;0120
+	dec (hl)		;011f
+	ld a,(hl)		;0120
 	and 01fh		;0121
 	jr nz,l012eh		;0123
 	bit 5,(hl)		;0125
 	jr z,l012bh		;0127
-	ld (hl),024h		;0129
-l012bh:
-	inc hl			;012b
-	inc hl			;012c
-	ld (hl),c			;012d
+	ld (hl),024h		;0129 - Related to long Break 
 
+l012bh:	inc hl			;012b
+	inc hl			;012c
+	ld (hl),c		;012d - Store keypress
+
+	;; Handle multitasking
 l012eh:	ld hl,(0fc70h)		;012e
 	push hl			;0131
 	jr l0139h		;0132
@@ -303,12 +402,12 @@ l0136h:	pop ix		;0136
 	pop hl			;0138
 
 l0139h:	push hl			;0139
-	ld a,(hl)			;013a
+	ld a,(hl)		;013a
 	inc hl			;013b
-	ld h,(hl)			;013c
+	ld h,(hl)		;013c
 	ld l,a			;013d
 	xor a			;013e
-	ex (sp),hl			;013f
+	ex (sp),hl		;013f
 	cp h			;0140
 	jr z,l0178h		;0141
 	inc hl			;0143
@@ -326,7 +425,7 @@ l014fh:
 l0153h:
 	ld a,(ix+004h)		;0153
 	ld (ix+000h),a		;0156
-	inc ix		;0159
+	inc ix			;0159
 	djnz l0153h		;015b
 	inc c			;015d
 	jr z,l0136h		;015e
@@ -339,21 +438,22 @@ l016bh:
 	push hl			;016c
 	ld bc,l0400h		;016d
 l0170h:
-	inc (hl)			;0170
+	inc (hl)		;0170
 	jr nz,l0134h		;0171
+
 	inc hl			;0173
 	djnz l0170h		;0174
 	jr l014fh		;0176
-l0178h:
-	pop hl			;0178
-l0179h:
-	pop hl			;0179
+
+	
+l0178h:	pop hl			;0178
+l0179h:	pop hl			;0179
 	push hl			;017a
-	ld a,(hl)			;017b
+	ld a,(hl)		;017b
 	inc hl			;017c
-	ld h,(hl)			;017d
+	ld h,(hl)		;017d
 	ld l,a			;017e
-	ex (sp),hl			;017f
+	ex (sp),hl		;017f
 	ld a,l			;0180
 	add a,00ah		;0181
 	ld l,a			;0183
@@ -361,16 +461,17 @@ l0179h:
 	adc a,h			;0186
 	ld h,a			;0187
 	or a			;0188
-	jr z,l01dbh		;0189
+	jr z,l01dbh		;0189 - Move on to check for keypress
+	
 l018bh:
-	ld a,(hl)			;018b
-	bit 7,a		;018c
+	ld a,(hl)		;018b
+	bit 7,a			;018c
 	jr nz,l01dbh		;018e
-	bit 6,a		;0190
+	bit 6,a			;0190
 	jr nz,l0179h		;0192
 	or a			;0194
 	jr z,l0179h		;0195
-	dec (hl)			;0197
+	dec (hl)		;0197
 	set 7,(hl)		;0198
 	push hl			;019a
 	push de			;019b
@@ -420,31 +521,44 @@ l01cfh:	pop ix		;01cf
 	res 7,(hl)		;01d7
 	jr l018bh		;01d9
 
+	
 l01dbh:	pop hl			;01db
-	ld hl,0fcach		;01dc
-	ld a,(hl)			;01df
-	bit 7,a		;01e0
+
+	;; Interpret ket presses
+	ld hl,LAST_KEY		;01dc
+	ld a,(hl)		;01df
+
+	;; Check if have handled this key already and return, if so
+	bit 7,a			;01e0
 	jr nz,l01fdh		;01e2
+
+	;; Confirm now handled
 	set 7,(hl)		;01e4
 	push hl			;01e6
+
+	;; Retrieve ASCII character corresponding to keypress
 	ld hl,l1d37h+1		;01e7
 	add a,l			;01ea
 	ld l,a			;01eb
-	ld a,(hl)			;01ec
-	bit 7,a		;01ed
+	ld a,(hl)		;01ec
+
+	bit 7,a			;01ed
 	jp nz,l094dh		;01ef
 	ld hl,(0fca6h)		;01f2
 	call jump_to_hl		;01f5
+
 	pop hl			;01f8
+
 	jr nc,l01fdh		;01f9
 	res 7,(hl)		;01fb
-l01fdh:
-	pop af			;01fd
+
+l01fdh:	pop af			;01fd
 	pop bc			;01fe
 	pop hl			;01ff
-l0200h:
-	ret			;0200
 
+l0200h:	ret			;0200
+
+	
 l0201h:	ld a,(hl)		;0201
 	dec a			;0202
 	or 0c0h			;0203
@@ -1072,6 +1186,10 @@ sub_05b5h:
 
 
 	;; Switch machine stack
+	;;
+	;; This means that the routine will not return to the calling
+	;; program, but the equivalent calling routine from the
+	;; alternate context
 sub_05bbh:
 	push hl			;05bb
 	push de			;05bc
@@ -1118,7 +1236,7 @@ sub_05ebh:
 	ld hl,MAIN_LOOP		; Insert address of main loop at head (05f2)
 	ld (STACK1_BASE),hl	; of Stack 1 as return address
 
-	ld hl,STACK1_BASE-08	; Set pointer to fourth word on
+	ld hl,STACK1_BASE-8	; Set pointer to fourth word on
 	ld (PSTACK1),hl		; machine stack 1. Will balance
 				; the first time that we switch to
 				; machine stack 1
@@ -1136,7 +1254,7 @@ sub_05ffh:
 	bit 3,(hl)		;060e
 	set 3,(hl)		;0610
 	jr nz,l061eh		;0612
-	call sub_05bbh		;0614
+	call sub_05bbh		;0614 - Change execution context
 	res 3,(hl)		;0617
 	or a			;0619
 	bit 7,a		;061a
@@ -1646,7 +1764,7 @@ sub_08c2h:
 
 	ret			;08d7
 
-	;; Initialisation
+	;; Main loop (context 1)
 sub_08d8h:
 	call sub_06f1h		;08d8
 	rst 10h			;08db - Pop from stack into HL
@@ -1668,6 +1786,7 @@ l08efh:	call sub_0910h		;08ef
 	ret c			;08f2
 	call sub_05ffh		;08f3
 	jr l08efh		;08f6
+	
 sub_08f8h:
 	push hl			;08f8
 	push af			;08f9
@@ -1689,6 +1808,7 @@ sub_0909h:
 	inc hl			;090d
 	cp (hl)			;090e
 	ret			;090f
+
 sub_0910h:
 	call sub_0909h		;0910
 	scf			;0913
@@ -1728,16 +1848,17 @@ sub_0934h:
 	jp l106eh		;0943
 
 	;; Continuation of RST 00 routine
+
+	;;  Check if Shift key is pressed (to force cold restart)
 l0946h:	ld a,07fh		;0946
 l0948h:	in a,(0feh)		;0948 - Read keyboard 'Shift', 'z', ..., 'V'
 	rrca			;094a - Rotate 'shift key' into carry
 	jr nc,l0953h		;094b - Branch, if shift pressed (to
-				; force cold restart)
+				;       force cold restart)
 
-l094dh:	ld hl,0fc78h		;094d - Check system variable (possibly
-	inc (hl)		;0950   indicates if warm restart (if
-				;       (FC78)=FF)
-	jr z,l099ah		;0951
+l094dh:	ld hl,F_WARM_RESTART	;094d - Check if warm restart is
+	inc (hl)		;       possible (if (FC78)=FF)
+	jr z,l099ah		;0951 - Jump forward if warm restart
 
 l0953h:	out (0fdh),a		;0953 - Disable NMI
 
@@ -1784,7 +1905,7 @@ l0970h:	ld (hl),a		;0970
 	;; Restore registers
 	exx			;097f
 
-	ld (0fc56h),hl		;0980 - Store top of memory
+	ld (RAM_SIZE),hl	;0980 - Store RAM size
 
 	;; Check how much memory was found and set system variables at
 	;; FC6E and FC76 accordingly.
@@ -1806,7 +1927,7 @@ l0991h:	call sub_09cah		;0991 - check if ROM/ RAM in 2000--3FFF
 	;; Warm restart
 	;; ============================================================
 	;; *** Somewhere in here, we check integrity of system variables
-l099ah:	ld sp,STACK0_BASE	; Reset machine-stack 0
+l099ah:	ld sp,STACK0_BASE	; Reset machine-stack
 
 	ld hl,STACKC_BASE	;099d - Reset character-stack pointer
 	ld (PSTACKC),hl		;09a0
@@ -1823,18 +1944,23 @@ l09a9h:	call sub_0934h		;09a9 - ???
 
 	ld a,01eh		;09b9
 	ld i,a			;09bb
-	out (0feh),a		;09bd - Enable NMI
-
+	out (0feh),a		;09bd - Enable NMI, to start display
+				;       handling (Note AF' has not been
+				;       set). Initially,
+				;       NEXT_DISP_ROUTINE is set to be
+				;       0x0098
+	
 	;; Check if system variables are corrupted (assumed if value at
 	;; FC40 is non-zero) ???
 	ld a,(0fc40h)		;09bf
 	or a			;09c2 
-	jr nz,l0953h		;09c3 - Jump to cold restart
+	jr nz,l0953h		;09c3 - Jump to cold restart, if corrupt
 
-	;; Initialisation, never completes
+	;; Main loop (Context 0)
 l09c5h:	call sub_08d8h		;09c5
 	jr l09c5h		;09c8
 
+	
 	;; Check memory from 2000h--3FFFh
 sub_09cah:
 	ld hl,02000h		;09ca
@@ -1887,10 +2013,11 @@ sub_0a11h:
 	call l0750h		;0a16
 	jr l09f0h		;0a19
 
-	;; Main loop
-MAIN_LOOP:	call sub_0925h		;0a1b
+	;; Main loop (Context 1)
+MAIN_LOOP:
+	call sub_0925h		;0a1b
 	call sub_0910h		;0a1e
-	call nc,sub_05ffh		;0a21
+	call nc,sub_05ffh	;0a21 - Switch context
 	call sub_058ah		;0a24
 	ld hl,(0fc7ch)		;0a27
 	call jump_to_hl		;0a2a
@@ -3000,6 +3127,9 @@ l0fdeh:
 	pop hl			;0fde
 	rst 8			;0fdf
 	ret			;0fe0
+
+	;; Forth word TASK
+
 	inc b			;0fe1
 	ld d,h			;0fe2
 	ld b,c			;0fe3
@@ -3007,6 +3137,7 @@ l0fdeh:
 	ld c,e			;0fe5
 	ld c,b			;0fe6
 	nop			;0fe7
+
 	call sub_0866h		;0fe8
 	ld hl,(0fc88h)		;0feb
 	set 6,(hl)		;0fee
@@ -3210,7 +3341,7 @@ l10d7h:
 	ld c,a			;1123
 	ld b,e			;1124
 	ld c,e			;1125
-	db 11,00
+	db 0x11,0x00
 
 	ld hl,($FC98)		;1128
 	ld de,$000A
@@ -3706,7 +3837,9 @@ l13b6h: rst 10h			;13b6
 	call z,sub_048dh	;13c3
 	call sub_18fah		;13c6
 	call sub_1036h		;13c9
-	ld hl,0fc78h		;13cc
+
+	;; Set to indicate warm restart is possible
+	ld hl,F_WARM_RESTART	;13cc
 	ld (hl),0ffh		;13cf
 
 	ret			;13d1
@@ -4624,19 +4757,17 @@ l18c7h:
 	call sub_06e3h		;18d4
 	ld (0fc7ch),hl		;18d7
 	ret			;18da
-	inc bc			;18db
-	ld c,l			;18dc
-	ld b,l			;18dd
-	ld c,l			;18de
-	dec a			;18df
-	nop			;18e0
+
+	db 0x03, 0x4D, 0x45, 0x4D	; MEM
+	db 0x3D, 0x00
 	call sub_18e6h		;18e1
 	rst 8			;18e4
 	ret			;18e5
+
 sub_18e6h:
 	ld hl,(0fc8ah)		;18e6
 	ex de,hl			;18e9
-	ld hl,(0fc56h)		;18ea
+	ld hl,(RAM_SIZE)		;18ea
 	push iy		;18ed
 	or a			;18ef
 	sbc hl,de		;18f0
@@ -4646,6 +4777,7 @@ sub_18e6h:
 	ld hl,(0fc6ch)		;18f5
 	add hl,de			;18f8
 	ret			;18f9
+
 sub_18fah:
 	ld hl,0fca5h		;18fa
 	bit 3,(hl)		;18fd
@@ -4654,7 +4786,7 @@ sub_18fah:
 	ld de,0ffe0h		;1903
 	add hl,de			;1906
 	ex de,hl			;1907
-	ld hl,(0fc56h)		;1908
+	ld hl,(RAM_SIZE)		;1908
 	sbc hl,de		;190b
 	ret nc			;190d
 	ld hl,0fca5h		;190e
@@ -4885,15 +5017,15 @@ l1a53h:
 	call sub_1676h		;1a5e
 	ccf			;1a61
 	jr l1a50h		;1a62
-	inc bc			;1a64
-	ld d,b			;1a65
-	ld b,c			;1a66
-	ld b,h			;1a67
-	dec bc			;1a68
-	nop			;1a69
-	ld hl,0fbc0h		;1a6a
-	rst 8			;1a6d
+
+	db 0x03, 0x50, 0x41, 0x44 ; PAD
+	db 0x0b, 0x00
+
+	ld hl,PAD		;1a6a
+	rst 8			;1a6d - UPUSH
 	ret			;1a6e
+
+	
 	ld (bc),a			;1a6f
 	ld d,l			;1a70
 	inc hl			;1a71
@@ -5154,7 +5286,7 @@ l1ba1h:
 	push hl			;1bcf
 	rst 10h			;1bd0
 	ld a,l			;1bd1
-	ld hl,0fbc0h		;1bd2
+	ld hl,PAD		;1bd2
 	and 07fh		;1bd5
 	cp 060h		;1bd7
 	jr c,l1bddh		;1bd9
@@ -5197,7 +5329,7 @@ sub_1c09h:
 	out (0fbh),a		;1c0c
 	push de			;1c0e
 	push hl			;1c0f
-	ld hl,0fbc0h		;1c10
+	ld hl,PAD		;1c10
 	ld a,01fh		;1c13
 	sub (hl)			;1c15
 	jr c,l1c26h		;1c16
@@ -5400,6 +5532,8 @@ l1cc0h:
 l1d00h:
 	inc sp			;1d00
 	inc c			;1d01
+
+	;; ZX81-FORTH BY DAVID HUSBAND  COPYRIGHT (C) 1983
 	ld e,d			;1d02
 	ld e,b			;1d03
 	jr c,l1d37h		;1d04
@@ -5447,82 +5581,30 @@ l1d34h:
 	ld (bc),a			;1d34
 	dec c			;1d35
 	ld a,(bc)			;1d36
-l1d37h:
-	jr nz,l1d39h		;1d37
-l1d39h:
-	ld b,c			;1d39
-	ld d,c			;1d3a
-	ld sp,05030h		;1d3b
-	dec c			;1d3e
-	jr nz,l1d9bh		;1d3f
-	ld d,e			;1d41
-	ld d,a			;1d42
-	ld (04f39h),a		;1d43
-	ld c,h			;1d46
-	ld l,058h		;1d47
-	ld b,h			;1d49
-	ld b,l			;1d4a
-	inc sp			;1d4b
-	jr c,l1d97h		;1d4c
-	ld c,e			;1d4e
-	ld c,l			;1d4f
-l1d50h:
-	ld b,e			;1d50
-	ld b,(hl)			;1d51
-l1d52h:
-	ld d,d			;1d52
-	inc (hl)			;1d53
-	scf			;1d54
-l1d55h:
-	ld d,l			;1d55
-	ld c,d			;1d56
-	ld c,(hl)			;1d57
-	ld d,(hl)			;1d58
-	ld b,a			;1d59
-	ld d,h			;1d5a
-	dec (hl)			;1d5b
-	ld (hl),059h		;1d5c
-	ld c,b			;1d5e
-l1d5fh:
-	ld b,d			;1d5f
-l1d60h:
-	dec b			;1d60
-	jr nz,l1db2h		;1d61
-	ld c,e			;1d63
-l1d64h:
-	dec c			;1d64
-	ld a,(bc)			;1d65
-l1d66h:
-	rlca			;1d66
-	jr nz,l1daeh		;1d67
-	ld d,d			;1d69
-	ld d,d			;1d6a
-	ld c,a			;1d6b
-	ld d,d			;1d6c
-	jr nz,$+11		;1d6d
-	dec c			;1d6f
-	ld a,(bc)			;1d70
-	ld e,d			;1d71
-	ld e,b			;1d72
-	dec l			;1d73
-	ld e,d			;1d74
-	jr c,l1da7h		;1d75
-	jr nz,l1d79h		;1d77
-l1d79h:
-	inc c			;1d79
-	jr l1d9ah		;1d7a
-	dec de			;1d7c
-	ld (08001h),hl		;1d7d
-	ld a,(02125h)		;1d80
-	inc d			;1d83
-l1d84h:
-	inc e			;1d84
-	add hl,hl			;1d85
-	dec a			;1d86
-	inc l			;1d87
-	dec sp			;1d88
-	daa			;1d89
-	ld b,b			;1d8a
+
+	
+l1d37h: db 0x20
+	db 0x00
+l1d39h: db "A", "Q", "1", "0", "P", 0x0D," ", "Z"
+	db "S", "W", "2", "9", "O", "L", ".", "X"
+	db "D", "E", "3", "8", "I", "K", "M"
+l1d50h: db "C"
+	db "F"
+l1d52h: db "R", "4", "7"
+l1d55h: db "U", "J", "N", "V"
+	db "G", "T", "5", "6", "Y", "H"
+l1d5fh: db "B"
+l1d60h: db 0x05 		; First 40 keys
+
+	db " ", "O", "K"
+l1d64h:	db 0x0D, 0x0A
+l1d66h: db 0x07, " ", "E", "R", "R"
+	db "O", "R", " ", 0x09, 0x0D, 0x0A, "Z", "X"
+	db "-", "Z", "8", "0", " ", 0x00
+l1d79h: db 0x0C, 0x18, 0x1E, 0x1B, """, 0x01, 0x80, ":"
+	db "%", "!", 0x14 	; "
+l1d84h: db 0x1C, ")", "=", ",", 0x3B, "'", "@"
+
 	ld de,02809h		;1d8b
 	dec hl			;1d8e
 	ld a,03fh		;1d8f
