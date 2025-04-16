@@ -2,6 +2,44 @@
 ; command line: z80dasm -g 0 -a -l -o hforth.asm husband_forth.bin
 
 
+	;; Display mechanism
+	;;
+	;; As with Sinclair's BASIC ROM for the ZX81, much of the
+	;; processors time is spent producing a display. For Husband
+	;; Forth, this is done in four stages, as follows:
+	;;
+	;; 1 - A VSync signal is produced by a routine starting at
+	;;     0x0098--0x0100. The VSync is activated by reading from
+	;;     port 0xFE (any even port would do) and needs to be active
+	;;     for 400 micro-seconds, during which time the Z80 is
+	;;     available to do other work -- in this case, reading the
+	;;     keyboard (though there isn't enough time to analyse the
+	;;     keypress). The NEXT_DISPLAY_ROUTINE is set to content of
+	;;     0xFC82, which -- on startup -- is 0x0071
+	;;
+	;;     Step 1 is triggered at the end of Step 4 (the NMI
+	;;     routine, when finished, runs the NEXT_DISPLAY_ROUTINE)
+	;;     which is set to 0x0098
+	;; 
+	;; 2 - Next a number of blank lines are displayed for the
+	;;     top-border of the display (see code from 0x0100 to
+	;;     0x0200). During this phase, the NMI mechanism is turned
+	;;     on and the processor is interupted by an NMI signal every
+	;;     64 microseconds to check if the upper board is done. A
+	;;     counter in the A' register is initialised during Step 1
+	;;     to have the value 0x1E, counts down to zero, at which
+	;;     point the upper border is considered generated. Again,
+	;;     during the generation of the upper border (when not
+	;;     servicing the NMU signal), the Z80 is able to do other
+	;;     things -- in this case, servicing the multi-tasking queue
+	;;     mechanism and interpreting any key presses.
+	;; 
+	;; The system variable, NEXT_DISP_ROUTINE, is used to determine
+	;; which is the next display routine to run. It will either
+	;; point at 0x0098 or the content of 0xFC82 (either 0x0071 or
+	;; ???)
+	;; 
+
 	;; System variables
 	;;
 	;; FC40 - interrogated at end of restart
@@ -15,7 +53,8 @@
 	;; FC78 - Set to FF during restart, to indicate warm restart is
 	;;        possible
 	;; FC7C - Set to 0050 during restart
-	;; FC7E - Pointer to 8080
+	;; FC7E - Offset to most recently read entry in Keyboard Input Buffer
+	;; FC7F - Offset to most recently  written value in keyboard input buffer
 	;; FC80 - Next video handling routine
 	;; FC82 - Particular video handling routine (0x57 or 0x71)
 	;; FC84 - Pointer to character stack
@@ -37,6 +76,7 @@
 	;; Memory map
 	;; 
 	;; FB80 - top of machine stack 0
+	;; FB80--FBBF - Keyboard Input Buffer
 	;; FBC0 - PAD
 	;; FC3E - top of machine stack 1
 	;; FCC0--FCFF -- Character stack (wraps around)
@@ -184,7 +224,7 @@ l006ch:	push hl			;006c
 	ld hl,(NEXT_DISP_ROUTINE)	;006d - next video handling routine
 	jp (hl)			;0070
 
-	;; NMI service routine (run display file)
+	;; Display service routine (run display file)
 l0071h:	ld a,04ah		;0071 - 23h on 60 Hz version
 	ex af,af'		;0073
 	push af			;0074
@@ -349,8 +389,11 @@ l00fah:	ld hl,0fcabh		;00fa
 	ld a,c			;00fd
 	and %10111111		;00fe - Mask off shift
 
+	;; *** End of VSYNC generation phase of display routine ***
+	
 l0100h:	out (0ffh),a		;0100 - Turn on HSYNC generator
-	out (0feh),a		;0102 - Turn off VSYNC generator
+	out (0feh),a		;0102 - Turn off VSYNC generator and
+				;turn on NMI generator
 
 	jr nz,l0109h		;0104 - Jump forward if key other than
 				;       shift pressed
@@ -524,7 +567,7 @@ l01cfh:	pop ix		;01cf
 	
 l01dbh:	pop hl			;01db
 
-	;; Interpret ket presses
+	;; Interpret key presses
 	ld hl,LAST_KEY		;01dc
 	ld a,(hl)		;01df
 
@@ -624,27 +667,39 @@ sub_022dh:
 	ld h,a			;023e
 	pop af			;023f
 	ret			;0240
+
 sub_0241h:
-	push ix		;0241
+	push ix			;0241
 	push de			;0243
+
 	ld de,l0002h		;0244
 	add ix,de		;0247
-	ex de,hl			;0249
+	ex de,hl		;0249
 	ld hl,(0fc6eh)		;024a
-	ex de,hl			;024d
+	ex de,hl		;024d
 	call sub_022dh		;024e
-	add hl,de			;0251
+	add hl,de		;0251
 	pop de			;0252
-	pop ix		;0253
+	pop ix			;0253
+
 	ret			;0255
+
+	;; Retrieve current screen location into HL
 sub_0256h:
 	push de			;0256
-	call sub_0241h		;0257
-	ex de,hl			;025a
-	call sub_022dh		;025b
-	add hl,de			;025e
+
+	call sub_0241h		;0257 - Retrieve start of current screen
+				;       into HL?
+	ex de,hl		;025a - Store to DE
+	call sub_022dh		;025b - Retrieve offset to current
+				;       screen location
+	add hl,de		;025e - Compute address of current
+				;       screen location
+
 	pop de			;025f
+
 	ret			;0260
+
 sub_0261h:
 	ld bc,l0000h		;0261
 	ld a,(ix+004h)		;0264
@@ -662,12 +717,15 @@ sub_0261h:
 sub_0277h:
 	push af			;0277
 	push hl			;0278
+
 	call sub_0256h		;0279
 	ld a,(hl)		;027c
 	xor 080h		;027d
 	ld (hl),a		;027f
+
 	pop hl			;0280
 	pop af			;0281
+
 	ret			;0282
 
 	call sub_0261h		;0283
@@ -773,14 +831,16 @@ l0317h:
 	dec c			;031f
 	ld (ix+001h),c		;0320
 	ret			;0323
+
+
 sub_0324h:
 	push af			;0324
 	push hl			;0325
-	call sub_0256h		;0326
-	ld a,(hl)			;0329
-	and 03fh		;032a
+	call sub_0256h		;0326 - Find screen location
+	ld a,(hl)		;0329
+	and 03fh		;032a - Mask off bit 7
 	xor (ix+006h)		;032c
-	ld (hl),a			;032f
+	ld (hl),a		;032f
 	pop hl			;0330
 	pop af			;0331
 	ret			;0332
@@ -790,39 +850,46 @@ sub_0333h:
 	push hl			;0334
 	push de			;0335
 	push bc			;0336
+
 	call sub_0324h		;0337
 	and 07fh		;033a
-	cp 060h		;033c
+	cp 060h			;033c - Compare to "£" symbol
 	jr c,l0342h		;033e
 	add a,0e0h		;0340
-l0342h:
-	cp 020h		;0342
+
+l0342h:	cp 020h			;0342 - Check if Space or higher
 	jr nc,l0357h		;0344
-	ld hl,l1cc0h		;0346
-	add a,a			;0349
+	ld hl,l1cc0h		;0346 - Compute 1CC0+2*A, which is address
+	add a,a			;0349   of routine to handle keypress
 	add a,l			;034a
 	ld l,a			;034b
-	call sub_0365h		;034c
+	call sub_0365h		;034c - Call service routine
+
 l034fh:	call sub_0277h		;034f
+
 	pop bc			;0352
 	pop de			;0353
 	pop hl			;0354
 	pop af			;0355
+
 	ret			;0356
 
-l0357h:
-	add a,0e0h		;0357
+l0357h:	add a,0e0h		;0357
 	call sub_0256h		;0359
 	xor (ix+006h)		;035c
-	ld (hl),a			;035f
+	ld (hl),a		;035f - Write character to screen
+
 	call sub_02e3h		;0360
+
 	jr l034fh		;0363
+
 sub_0365h:
-	ld a,(hl)			;0365
+	ld a,(hl)		;0365
 	inc hl			;0366
-	ld h,(hl)			;0367
+	ld h,(hl)		;0367
 	ld l,a			;0368
 	jp (hl)			;0369
+
 sub_036ah:
 	push hl			;036a
 	push de			;036b
@@ -1003,11 +1070,13 @@ sub_048dh:
 	ld hl,(0fca6h)		;048f
 	jp (hl)			;0492
 
+	;; On entry, A = KIB
 l0493h:	push hl			;0493
 	ld hl,0fcbeh		;0494
-	cp 01fh		;0497
-	jr z,l04adh		;0499
-	bit 0,(hl)		;049b
+	cp 01fh			;0497
+	jr z,l04adh		;0499 - Jump forward if entry is 1F
+
+	bit 0,(hl)		;049b   or if (FCBE)(0) is reset
 	jr z,l04adh		;049d
 	push hl			;049f
 	push af			;04a0
@@ -1018,10 +1087,11 @@ l0493h:	push hl			;0493
 	call jump_to_hl		;04a8
 	pop af			;04ab
 	pop hl			;04ac
+
 l04adh:	bit 1,(hl)		;04ad
 	jr nz,l04bch		;04af
 	ld hl,0fcadh		;04b1
-	cp 01eh		;04b4
+	cp 01eh			;04b4 Check KIB entry
 	jr z,l04bfh		;04b6
 	bit 2,(hl)		;04b8
 	set 2,(hl)		;04ba
@@ -1037,6 +1107,7 @@ l04bfh:	push ix			;04bf
 l04cdh:
 	pop hl			;04cd
 	ret			;04ce
+	
 sub_04cfh:
 	push hl			;04cf
 	ld hl,0fcadh		;04d0
@@ -1243,21 +1314,25 @@ sub_05ebh:
 
 	ret			;05fe
 
+	;; Handle most recent Keyboard Input Buffer Entry
 sub_05ffh:
-	cp 01eh		;05ff
+	cp 01eh			;05ff
 	jp z,l0493h		;0601
-	set 7,a		;0604
-	push hl			;0606
+	set 7,a			;0604 
+	push hl			;0606 - Save KIB offset
+
+	;; Check which context is active and, unless FLAG 3 is set,
+	;; switch to Execution context
 	ld hl,0fcadh		;0607
 	bit 4,(hl)		;060a
-	jr z,l061eh		;060c
+	jr z,l061eh		;060c - Jump forward, if execution stack
 	bit 3,(hl)		;060e
 	set 3,(hl)		;0610
 	jr nz,l061eh		;0612
 	call sub_05bbh		;0614 - Change execution context
 	res 3,(hl)		;0617
 	or a			;0619
-	bit 7,a		;061a
+	bit 7,a			;061a
 	jr z,l061fh		;061c
 l061eh:
 	scf			;061e
@@ -1266,15 +1341,16 @@ l061fh:
 	ret			;0620
 
 
-	;; Switch to Stack 1
+	;; Switch to Stack 1 (Editor Stack)
 sub_0621h:
 	ld a,(0fcadh)		; Check which machine stack is in use
 	bit 4,a		
 	ret nz			; Nothing to do if Stack 1
-	sbc a,a			;
+	sbc a,a			; A = 0, if carry clear, otherwise A = 0xFF
 	call sub_05bbh		; Switch stack
 	
-	ret			; Done (062b)
+	ret			; 062b - Return once context has
+				; switched back to Execution Stack
 
 sub_062ch:
 	push hl			;062c
@@ -1447,15 +1523,18 @@ sub_06f1h:
 	
 	ld hl,0fcbfh		;06f2
 	ld (hl),000h		;06f5
-l06f7h:	or a			;06f7 - Clear carry?
+l06f7h:	or a			;06f7 - Clear carry
 	
-	call sub_0621h		;06f8 - Switch to machine stack 1
+	call sub_0621h		;06f8 - Switch to Editor Context -
+				;       return on keypress from editor
+				;       buffer
 
-	and 07fh		;06fb
-	cp 01eh		;06fd
+	;; At this point, A contains most recent entry in KIB + 0x80
+	and 07fh		;06fb - Mask off bit 7
+	cp 01eh			;06fd - Check if ??? and branch if less than
 	jr c,l0717h		;06ff
 	call l0493h		;0701
-	cp 020h		;0704
+	cp 020h			;0704
 	jr z,l070dh		;0706
 	call nc,sub_0737h		;0708
 	jr l06f7h		;070b
@@ -1764,7 +1843,7 @@ sub_08c2h:
 
 	ret			;08d7
 
-	;; Main loop (context 1)
+	;; Kernel of context 0 loop
 sub_08d8h:
 	call sub_06f1h		;08d8
 	rst 10h			;08db - Pop from stack into HL
@@ -1802,53 +1881,79 @@ sub_08f8h:
 	or a			;0906
 	pop hl			;0907
 	ret			;0908
+
+	;; Check if bytes in FC7E and FC7F are same (Z set, if so)
 sub_0909h:
 	ld hl,0fc7eh		;0909
-	ld a,(hl)			;090c
+	ld a,(hl)		;090c
 	inc hl			;090d
 	cp (hl)			;090e
 	ret			;090f
 
+	;;
+	;; Check if keyboard input buffer is non-empty and retrieve next
+	;; value if so
+	;;
+	;; If non-empty, carry reset and A = value
+	;; If empty, carry set
+	;;
+	;; Keyboard Input Buffer runs from FB80 to FBC0
 sub_0910h:
-	call sub_0909h		;0910
+	call sub_0909h		;0910 - Compare (FC7E) and (FC7F)
 	scf			;0913
-	ret z			;0914
-	dec hl			;0915
-	inc a			;0916
-	and 0bfh		;0917
-	ld (hl),a			;0919
+	ret z			;0914 - Done if (FC7E) = (FC7F) (carry set)
+
+	dec hl			;0915 - Otherwise incremement (FC7E) and
+	inc a			;0916   zero bit 6
+	and %10111111		;0917 - Buffer wraps around at 0xC0 back
+				;       to 0x80
+	ld (hl),a		;0919
+
+	;; Retrieve value from FB00+(FC7E)
 	ld l,a			;091a
-	dec h			;091b
-	ld a,(hl)			;091c
+	dec h			;091b - Resets carry?
+	ld a,(hl)		;091c
+
 	ret			;091d
+
 sub_091eh:
 	add a,090h		;091e
 	daa			;0920
 	adc a,040h		;0921
 	daa			;0923
 	ret			;0924
+
+
 sub_0925h:
-	ld hl,(0fc90h)		;0925
-	push iy		;0928
-l092ah:
-	pop de			;092a
-	or a			;092b
+	ld hl,(0fc90h)		;0925 - Retrieve address of top of
+				;       parameter stack
+	push iy			;0928 - Load current parameter stack location 
+l092ah:	pop de			;092a   into DE
+
+	or a			;092b - Subtract DE from HL 
 	sbc hl,de		;092c
-	ret nc			;092e
-	ld a,053h		;092f
+	ret nc			;092e - Return if DE <= HL -- that is,
+				;       not a stack underflow
+
+	ld a,053h		;092f - Deal with stack underflow
 	jp l0878h		;0931
 
 sub_0934h:
 	ld hl,0fca5h		;0934
 	bit 6,(hl)		;0937
 	ret nz			;0939
-	ld hl,l0050h		;093a
-	ld (0fc7ch),hl		;093d
+
+	ld hl,l0050h		;093a - Points to RET statement 
+	ld (0fc7ch),hl		;093d - Store for later use in
+				;       jump_to_hl at $0A27
+
 	call 01128h		;0940
 	jp l106eh		;0943
 
-	;; Continuation of RST 00 routine
-
+	;; 
+	;; Continuation of RST 0x00 routine
+	;;
+	
 	;;  Check if Shift key is pressed (to force cold restart)
 l0946h:	ld a,07fh		;0946
 l0948h:	in a,(0feh)		;0948 - Read keyboard 'Shift', 'z', ..., 'V'
@@ -1956,10 +2061,11 @@ l09a9h:	call sub_0934h		;09a9 - ???
 	or a			;09c2 
 	jr nz,l0953h		;09c3 - Jump to cold restart, if corrupt
 
-	;; Main loop (Context 0)
+	;; Main loop (Context 0 - Execution mode)
 l09c5h:	call sub_08d8h		;09c5
 	jr l09c5h		;09c8
 
+	
 	
 	;; Check memory from 2000h--3FFFh
 sub_09cah:
@@ -2013,14 +2119,18 @@ sub_0a11h:
 	call l0750h		;0a16
 	jr l09f0h		;0a19
 
-	;; Main loop (Context 1)
+	;; Main loop (Context 1 - System Editor)
 MAIN_LOOP:
-	call sub_0925h		;0a1b
+	call sub_0925h		;0a1b - Check for Parameter Stack underflow
 	call sub_0910h		;0a1e
-	call nc,sub_05ffh	;0a21 - Switch context
+	call nc,sub_05ffh	;0a21 - Switch context, if new entry in
+				;       keyboard buffer (and if FLAG(3)
+				;       is set)
 	call sub_058ah		;0a24
+
 	ld hl,(0fc7ch)		;0a27
 	call jump_to_hl		;0a2a
+
 	ld hl,(0fc54h)		;0a2d
 	inc hl			;0a30
 	ld (0fc54h),hl		;0a31
@@ -5468,6 +5578,8 @@ l1ca8h:
 	nop			;1cbd
 	nop			;1cbe
 	nop			;1cbf
+
+	;; Jump table of service routines for keypresses
 l1cc0h:
 	ld d,b			;1cc0
 	nop			;1cc1
@@ -5527,8 +5639,7 @@ l1cc0h:
 	inc bc			;1cfb
 	ld d,l			;1cfc
 	inc b			;1cfd
-	ld a,h			;1cfe
-	inc b			;1cff
+	dw 0x047C 		; KIB = 1F
 l1d00h:
 	inc sp			;1d00
 	inc c			;1d01
