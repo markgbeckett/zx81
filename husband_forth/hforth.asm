@@ -68,8 +68,26 @@
 	;; FC9A...FC9D/ FC9E...FCA1/FCA2...FCA5 are 4-byte buffers
 	;; FCA5 - Flags (Bit 0 - ; Bit 6 - tested at 0937 ; Bit 7 - set at 1071
 	;; FCAB - CUR_KEY
-	;; FCAC - LAAT_KEY
+	;; FCAC - LAST_KEY
 	;; FCAD - Flags (Bit 4 - Machine Stack in use; But 5 - stack changed)
+	;; FCAE - Screen info (editor)
+	;;        0 - current col value
+	;;        1 - current row value
+	;;        2 - leftmost column (window)
+	;;        3 - top-most row (window)
+	;;        4 - rightmost column (window)
+	;;        5 - bottommost row (window)
+	;;        6 - XOR'ed with character before displaying ???
+	;;        7 - blank character for screen
+	;; FCB6 - Screen info (console)
+	;;        0 - current col value
+	;;        1 - current row value
+	;;        2 - leftmost column (window)
+	;;        3 - top-most row (window)
+	;;        4 - rightmost column (window)
+	;;        5 - bottommost row (window)
+	;;        6 - XOR'ed with character before displaying ???
+	;;        7 - blank character for screen
 	;; FCBE - passed into main loop (context 0) as HL 
 	;; FCBF - Reset at start of main monitor loop
 
@@ -86,27 +104,30 @@ PSTACKC:	equ 0xFC84
 PSTACK0:	equ 0xFC94
 PSTACK1:	equ 0xFC96
 LAST_KEY:	equ 0xFCAC
-STACKC_BASE:	equ 0xFCC0
 STACK0_BASE:	equ 0xFB80
+PAD:		equ 0xFBC0		; Start of PAD
+STACKC_BASE:	equ 0xFCC0
 STACK1_BASE:	equ 0xFC3E
 RAM_SIZE:	equ 0xFC56
 F_WARM_RESTART:	equ 0xFC78	; Indicates warm restart is possible
 NEXT_DISP_ROUTINE:	equ 0xFC80	
-PAD:		equ 0xFBC0		; Start of PAD
-
+SCR_INFO_ED:	equ 0xFCAE
+SCR_INFO_CO:	equ 0xFCB6
+KIB_R_OFFSET:	equ 0fc7eh
+KIB_W_OFFSET:	equ 0fc7fh
 	
 	org	00000h
 
-l0000h:
-	out (0fdh),a		;0000 - Disable NMI
-l0002h:
-	ld sp,STACK0_BASE	;0002 - Reset stack pointer
-l0005h:
-	jp l0946h		;0005 - Continue with reset
+	;;
+	;; RST 00 routine (cold or warm restart)
+	;; 
+l0000h:	out (0fdh),a		;0000 - Disable NMI
+l0002h:	ld sp,STACK0_BASE	;0002 - Reset stack pointer
+l0005h:	jp l0946h		;0005 - Continue with reset
 
 
 	;; Push HL onto parameter stack
-	;;IY points to parameter stack
+	;; IY points to parameter stack
 sub_0008h:
 	dec iy		;0008
 l000ah:
@@ -146,6 +167,7 @@ l0021h:	ld hl,PSTACKC		;0021
 	nop			;002d
 	nop			;002e
 	nop			;002f
+
 	jp 0200dh		;0030
 	nop			;0033
 	nop			;0034
@@ -183,25 +205,30 @@ l0047h:	pop de			;0047 - Discard return address (will
 	ret z			;0048 - Timing paise, condition should
 				;       never be satisfied
 	jr l0041h		;0049
-	
-l004bh:	dec iy		;004b
+
+	;; Continuation of PUSH_HL restart routine (RST 08)
+l004bh:	dec iy			;004b
 	ld (iy+000h),l		;004d
 
-l0050h:	ret			;0050 - Default destination for ???
+l0050h:	ret			;0050 - also used for null routine (just
+				;       RET)
 
-	;; Continuation of RST 10h
+	;; Continuation of POP_HL routine (RST 10)
 l0051h:	ld h,(iy+000h)		;0051
-	inc iy		;0054
+	inc iy			;0054
+	
 	ret			;0056
 
-l0057h:
-	ld a,0ffh		;0057 - E4h in 60 Hz version
+	;; Routine to transition between display modes
+l0057h:	ld a,0ffh		;0057 - E4h in 60 Hz version
 	ex af,af'			;0059
 	ld hl,l0098h		;005a - Set routine for video handling ???
-	ld (NEXT_DISP_ROUTINE),hl		;005d
-l0060h:
-	pop hl			;0060
+	ld (NEXT_DISP_ROUTINE),hl	;005d
+
+l0060h:	pop hl			;0060
+
 	ret			;0061
+
 	nop			;0062
 	nop			;0063
 l0064h:
@@ -222,6 +249,7 @@ jump_to_hl:
 
 l006ch:	push hl			;006c 
 	ld hl,(NEXT_DISP_ROUTINE)	;006d - next video handling routine
+
 	jp (hl)			;0070
 
 	;; Display service routine (run display file)
@@ -564,7 +592,6 @@ l01cfh:	pop ix		;01cf
 	res 7,(hl)		;01d7
 	jr l018bh		;01d9
 
-	
 l01dbh:	pop hl			;01db
 
 	;; Interpret key presses
@@ -601,7 +628,8 @@ l01fdh:	pop af			;01fd
 
 l0200h:	ret			;0200
 
-	
+
+	;; Continuation of PUSHC_A (rst 18)
 l0201h:	ld a,(hl)		;0201
 	dec a			;0202
 	or 0c0h			;0203
@@ -613,9 +641,8 @@ l0201h:	ld a,(hl)		;0201
 
 	ret			;020a
 
-	;; Continuation of RST 20 - pop from character stack into A
-l020bh:
-	ld l,a			; Move character-stack pointer
+	;; Continuation of POPC_A (RST 20)
+l020bh:	ld l,a			; Move character-stack pointer
 				; into L to construct 16-bit address
 				; (high byte is always FCh)
 	inc a			;020c - Increase character stack pointer
@@ -625,100 +652,169 @@ l020bh:
 	pop hl			;0213 - Done
 
 	ret			;0214
-	
-sub_0215h:
+
+	;; Move current row up by one row (part of screen-scroll)
+	;;
+	;; On entry:
+	;;   B - screen width
+	;;   C - current row
+	;;   DE - display width
+	;;   HL - pointer to destination row
+	;;
+	;; On exit:
+	;;   A  - corrupted
+SCR_ROW_SCROLL:
 	push hl			;0215
 	push de			;0216
 	push bc			;0217
-	ex de,hl			;0218
-	add hl,de			;0219
-l021ah:
-	ld a,(hl)			;021a
-	ld (de),a			;021b
+
+	;; Set HL to point to source row and DE to point to destination
+	;; row
+	ex de,hl		;0218
+	add hl,de		;0219
+
+	;; Copy current character to row above
+l021ah:	ld a,(hl)		;021a 
+	ld (de),a		;021b
+
+	;; Advance to next source and destination position
 	inc de			;021c
 	inc hl			;021d
-	djnz l021ah		;021e
+
+	djnz l021ah		;021e - Repeat if more characters
+
+	;; Retrieve previous registers
 	pop bc			;0220
 	pop de			;0221
 	pop hl			;0222
+
 	ret			;0223
-sub_0224h:
+
+	;; Blank row of screen
+	;;
+	;; On entry:
+	;;   A  - blank character to use
+	;;   HL - pointer to location in screen buffer
+	;;   B  - row length
+	;;
+	;; On exit:
+	;;   All registers preserved
+SCR_BLANK_ROW:
 	push hl			;0224
 	push bc			;0225
-l0226h:
-	ld (hl),a			;0226
+
+l0226h:	ld (hl),a		;0226
 	inc hl			;0227
 	djnz l0226h		;0228
+
 	pop bc			;022a
 	pop hl			;022b
+
 	ret			;022c
+
+	;; Retrieve offset of cursor location into current screen
+	;;
+	;; On entry:
+	;;   IX - pointer to coordinates of current location
+	;;
+	;; On exit:
+	;;   HL - offset
 sub_022dh:
-	push af			;022d
-	ld a,(ix+001h)		;022e
-	rrca			;0231
-	rrca			;0232
+	push af			;022d - Save A
+
+	ld a,(ix+001h)		;022e - Retrieve row coordinate and
+	rrca			;0231   multiply by 32 (equiv of five
+	rrca			;0232   rotate-left operations)
 	rrca			;0233
-	ld h,a			;0234
+	ld h,a			;0234 - Store row offset
+
+	;; Work out column offset
 	and 0e0h		;0235
 	or (ix+000h)		;0237
 	ld l,a			;023a
+
+	;; Normalise high-byte of address
 	ld a,h			;023b
 	and 003h		;023c
 	ld h,a			;023e
-	pop af			;023f
-	ret			;0240
+	
+	pop af			;023f - Restore A
+	
+	ret			;0240 - Done
 
 sub_0241h:
 	push ix			;0241
 	push de			;0243
 
+	;; Update IX to point to current-location information for screen
 	ld de,l0002h		;0244
 	add ix,de		;0247
+
+	;; Retrieve address of current screen into DE (preserving HL)
 	ex de,hl		;0249
 	ld hl,(0fc6eh)		;024a
 	ex de,hl		;024d
-	call sub_022dh		;024e
-	add hl,de		;0251
-	pop de			;0252
+
+	call sub_022dh		;024e - Retrieve offset into current screen
+	
+	add hl,de		;0251 - Work out address
+	
+	pop de			;0252 - Restore registers
 	pop ix			;0253
 
 	ret			;0255
 
 	;; Retrieve current screen location into HL
-sub_0256h:
-	push de			;0256
+GET_SCR_POSN:
+	push de			;0256 - Save DE
 
 	call sub_0241h		;0257 - Retrieve start of current screen
 				;       into HL?
-	ex de,hl		;025a - Store to DE
+	ex de,hl		;025a - Move to DE
 	call sub_022dh		;025b - Retrieve offset to current
-				;       screen location
+				;       screen location into HL
 	add hl,de		;025e - Compute address of current
 				;       screen location
 
-	pop de			;025f
+	pop de			;025f - Restore DE
 
-	ret			;0260
+	ret			;0260 - Done
 
-sub_0261h:
-	ld bc,l0000h		;0261
-	ld a,(ix+004h)		;0264
-	sub (ix+002h)		;0267
-	ret c			;026a
-	ld b,a			;026b
-	ld a,(ix+005h)		;026c
-	sub (ix+003h)		;026f
-	ret c			;0272
-	ld c,a			;0273
-	inc b			;0274
-	inc c			;0275
+	;; Retrieve screen dimensions
+	;;
+	;; On entry:
+	;;   IX - pointer to screen information
+	;; 
+	;; On exit:
+	;;   BC - screen width and height or CF set if negative
+	;;        dimensions
+	;;   A  - corrupted
+GET_SCR_SIZE:
+	ld bc,l0000h		;0261 - Required adjustment (to screen
+				;       location)
+	ld a,(ix+004h)		;0264 - Retrieve rightmost column
+	sub (ix+002h)		;0267 - Subtract leftmost column
+	ret c			;026a - Return if negative
+	
+	ld b,a			;026b - Save screen width
+	
+	ld a,(ix+005h)		;026c - Retrieve bottom-most row
+	sub (ix+003h)		;026f - Subtract top-most row
+	ret c			;0272 - Return if negative
+
+	ld c,a			;0273 - Save screen height
+
+	inc b			;0274 - Adjust to give actual height
+	inc c			;0275 - Adjust to give actual width
+
 	ret			;0276
 
+	;; Retrieve and invert character at cursor location
 sub_0277h:
 	push af			;0277
 	push hl			;0278
 
-	call sub_0256h		;0279
+	call GET_SCR_POSN		;0279
 	ld a,(hl)		;027c
 	xor 080h		;027d
 	ld (hl),a		;027f
@@ -728,87 +824,118 @@ sub_0277h:
 
 	ret			;0282
 
-	call sub_0261h		;0283
-	ret c			;0286
+	call GET_SCR_SIZE	;0283
+	ret c			;0286 - Return if zero screen
+	
 	call sub_0241h		;0287
+
 	ld de,l0020h		;028a
-	ld a,(ix+007h)		;028d
+	ld a,(ix+007h)		;028d - Retrieve blank character for screen
 l0290h:
-	call sub_0224h		;0290
-	add hl,de			;0293
+	call SCR_BLANK_ROW	;0290
+	add hl,de		;0293
 	dec c			;0294
 	jr nz,l0290h		;0295
-	call sub_029fh		;0297
-	ld (ix+001h),000h		;029a
+	call CR			;0297
+	ld (ix+001h),000h	;029a
 	ret			;029e
-sub_029fh:
+
+	;; Carriage return (no line feed)
+CR:
 	ld (ix+000h),000h		;029f
 	ret			;02a3
+
+	;; Deal with cursor moving off bottom of screen
 sub_02a4h:
 	push hl			;02a4
 	push de			;02a5
 	push bc			;02a6
-	call sub_0261h		;02a7
-	jr c,l02c2h		;02aa
+
+	call GET_SCR_SIZE	;02a7 - Retrieve screen size into BC
+	jr c,l02c2h		;02aa - Done if screen is negative sized
 	call sub_0241h		;02ac
-	ld de,l0020h		;02af
-l02b2h:
-	dec c			;02b2
-	jr z,l02bch		;02b3
-l02b5h:
-	call sub_0215h		;02b5
-	add hl,de			;02b8
-	dec c			;02b9
+
+	ld de,l0020h		;02af - Set DE to width of display
+
+	;; Scroll screen
+l02b2h:	dec c			;02b2 - Rows to scroll is screen height-1
+	jr z,l02bch		;02b3 - Jump forward if only one row on
+				;       screen
+
+	;; Move current row up by one
+l02b5h:	call SCR_ROW_SCROLL	;02b5
+
+	;; Advance to next row
+	add hl,de		;02b8
+
+	dec c			;02b9 - Repeat if more rows to scroll
 	jr nz,l02b5h		;02ba
-l02bch:
-	ld a,(ix+007h)		;02bc
-	call sub_0224h		;02bf
-l02c2h:
-	pop bc			;02c2
+
+l02bch:	ld a,(ix+007h)		;02bc
+	call SCR_BLANK_ROW	;02bf
+
+l02c2h:	pop bc			;02c2
 	pop de			;02c3
 	pop hl			;02c4
+
 	ret			;02c5
+
 	push hl			;02c6
 	push de			;02c7
 	push bc			;02c8
-l02c9h:
-	call sub_0261h		;02c9
-	jr c,l02dfh		;02cc
-	ld a,(ix+001h)		;02ce
-	inc a			;02d1
-	cp c			;02d2
-	jr c,l02dch		;02d3
-	dec c			;02d5
+
+	;; Advance cursor to next row
+l02c9h:	call GET_SCR_SIZE	;02c9
+	jr c,l02dfh		;02cc - Skip forward if negative-sized screen
+
+	ld a,(ix+001h)		;02ce - Return current row
+	inc a			;02d1 - Advance to next row
+	cp c			;02d2 - Compare to screen height
+	jr c,l02dch		;02d3 - Jump forward if not off bottom
+				;       of screen
+
+	dec c			;02d5 - Set A to be last but one row
 	ld a,c			;02d6
+
 	push af			;02d7
+
 	call sub_02a4h		;02d8
+
 	pop af			;02db
-l02dch:
-	ld (ix+001h),a		;02dc
-l02dfh:
-	pop bc			;02df
+
+l02dch:	ld (ix+001h),a		;02dc - Store new current row
+
+l02dfh:	pop bc			;02df
 	pop de			;02e0
 	pop hl			;02e1
+
 	ret			;02e2
+
 sub_02e3h:
 	push hl			;02e3
 	push de			;02e4
 	push bc			;02e5
-	call sub_0261h		;02e6
-	jr c,l02fbh		;02e9
-	ld a,(ix+000h)		;02eb
-	inc a			;02ee
-	cp b			;02ef
-	jr c,l02f8h		;02f0
-	call sub_029fh		;02f2
-	jp l02c9h		;02f5
-l02f8h:
-	ld (ix+000h),a		;02f8
-l02fbh:
-	pop bc			;02fb
+
+	call GET_SCR_SIZE	;02e6
+	jr c,l02fbh		;02e9 - Done if zero-size screen
+	
+	ld a,(ix+000h)		;02eb - Get current column 
+	inc a			;02ee   Advance right
+	cp b			;02ef - Compare to screen width
+	jr c,l02f8h		;02f0 - Jump forward if not past end of screen
+	
+	call CR			;02f2 - Reset current column
+
+	jp l02c9h		;02f5 - Advance to next row and done
+
+l02f8h:	ld (ix+000h),a		;02f8 - Store current column and done
+
+l02fbh:	pop bc			;02fb
 	pop de			;02fc
 	pop hl			;02fd
+
 	ret			;02fe
+
 sub_02ffh:
 	ld a,(ix+001h)		;02ff
 	or a			;0302
@@ -821,28 +948,36 @@ sub_02ffh:
 	jr nz,l0317h		;030d
 	call sub_02ffh		;030f
 	nop			;0312
-	call sub_0261h		;0313
+	call GET_SCR_SIZE		;0313
 	ret c			;0316
-l0317h:
-	dec b			;0317
+
+l0317h:	dec b			;0317
 	ld (ix+000h),b		;0318
 	ret			;031b
-	call sub_0261h		;031c
+	call GET_SCR_SIZE		;031c
 	dec c			;031f
 	ld (ix+001h),c		;0320
 	ret			;0323
 
-
+	;;
+	;; Invert character at current cursor location
+	;; 
 sub_0324h:
 	push af			;0324
 	push hl			;0325
-	call sub_0256h		;0326 - Find screen location
-	ld a,(hl)		;0329
-	and 03fh		;032a - Mask off bit 7
-	xor (ix+006h)		;032c
-	ld (hl),a		;032f
+
+	call GET_SCR_POSN	;0326 - Find screen location
+
+	ld a,(hl)		;0329 - Retrieve character
+
+	and 03fh		;032a - Mask off bits 7 and 6
+	xor (ix+006h)		;032c - Invert with ???
+
+	ld (hl),a		;032f - Replace character
+
 	pop hl			;0330
 	pop af			;0331
+
 	ret			;0332
 
 sub_0333h:
@@ -851,14 +986,20 @@ sub_0333h:
 	push de			;0335
 	push bc			;0336
 
-	call sub_0324h		;0337
-	and 07fh		;033a
-	cp 060h			;033c - Compare to "£" symbol
-	jr c,l0342h		;033e
-	add a,0e0h		;0340
+	call sub_0324h		;0337 - Invert character at current
+				;	screen location
 
-l0342h:	cp 020h			;0342 - Check if Space or higher
-	jr nc,l0357h		;0344
+	and 07fh		;033a - Mask off Bit 7
+	cp 060h			;033c - Is it < "£" symbol
+	jr c,l0342h		;033e   Jump forward, if so
+
+	add a,0e0h		;0340 - Values in 0x00 -- 0x5F are
+				;       shifted to 0xE0 -- 0x3F
+
+l0342h:	cp 020h			;0342 - Is it >= " " (printable ASCII char)
+	jr nc,l0357h		;0344 - Jump forward if so
+
+	;; Special character
 	ld hl,l1cc0h		;0346 - Compute 1CC0+2*A, which is address
 	add a,a			;0349   of routine to handle keypress
 	add a,l			;034a
@@ -874,14 +1015,17 @@ l034fh:	call sub_0277h		;034f
 
 	ret			;0356
 
+	;; Handle printable character
 l0357h:	add a,0e0h		;0357
-	call sub_0256h		;0359
-	xor (ix+006h)		;035c
+	call GET_SCR_POSN	;0359 - Get current screen location
+				;       (into HL)
+	xor (ix+006h)		;035c - ???
+
 	ld (hl),a		;035f - Write character to screen
 
 	call sub_02e3h		;0360
 
-	jr l034fh		;0363
+	jr l034fh		;0363 - Done
 
 sub_0365h:
 	ld a,(hl)		;0365
@@ -915,8 +1059,8 @@ l0381h:
 	pop de			;0382
 	pop hl			;0383
 	ret			;0384
-	call sub_0256h		;0385
-	call sub_0261h		;0388
+	call GET_SCR_POSN		;0385
+	call GET_SCR_SIZE		;0388
 	ld a,b			;038b
 	ld b,000h		;038c
 	sub (ix+000h)		;038e
@@ -953,7 +1097,7 @@ sub_03bdh:
 	push hl			;03bd
 	push de			;03be
 	push bc			;03bf
-	call sub_0261h		;03c0
+	call GET_SCR_SIZE		;03c0
 	ld a,(ix+003h)		;03c3
 	push af			;03c6
 	ld a,(ix+005h)		;03c7
@@ -971,50 +1115,51 @@ sub_03dah:
 	call sub_03bdh		;03e4
 	pop af			;03e7
 	ld (ix+003h),a		;03e8
-	jp sub_029fh		;03eb
+	jp CR		;03eb
 sub_03eeh:
 	call sub_03b5h		;03ee
 	ret z			;03f1
-	call sub_029fh		;03f2
-	call sub_0256h		;03f5
+	call CR		;03f2
+	call GET_SCR_POSN	;03f5
 	push hl			;03f8
 	ld hl,(0fc6eh)		;03f9
 	ld de,l0200h		;03fc
-	add hl,de			;03ff
-l0400h:
-	ex de,hl			;0400
+	add hl,de		;03ff
+
+l0400h:	ex de,hl		;0400
 	pop hl			;0401
-	call sub_0261h		;0402
+	call GET_SCR_SIZE		;0402
 	ld c,b			;0405
 	ld b,000h		;0406
 	call sub_036ah		;0408
-	ex de,hl			;040b
+	ex de,hl		;040b
 	ld b,c			;040c
 	call sub_0411h		;040d
 	ret			;0410
+
 sub_0411h:
 	push hl			;0411
 	push bc			;0412
-l0413h:
-	ld a,(hl)			;0413
+
+l0413h:	ld a,(hl)		;0413
 	xor 080h		;0414
-	ld (hl),a			;0416
+	ld (hl),a		;0416
 	inc hl			;0417
 	djnz l0413h		;0418
 	pop bc			;041a
 	pop hl			;041b
 	ret			;041c
-l041dh:
-	call sub_03b5h		;041d
+
+l041dh:	call sub_03b5h		;041d
 	ret z			;0420
-	call sub_0261h		;0421
+	call GET_SCR_SIZE		;0421
 	ld hl,(0fc6eh)		;0424
 	ld de,l0200h		;0427
 	add hl,de			;042a
 	call sub_0411h		;042b
 	ex de,hl			;042e
-	call sub_029fh		;042f
-	call sub_0256h		;0432
+	call CR		;042f
+	call GET_SCR_POSN		;0432
 	ex de,hl			;0435
 	ld c,b			;0436
 	ld b,000h		;0437
@@ -1045,67 +1190,91 @@ l041dh:
 	ld a,00ch		;046e
 	call sub_04cfh		;0470
 	call sub_0333h		;0473
-l0476h:
-	pop hl			;0476
+
+l0476h:	pop hl			;0476
+
 	ret			;0477
-l0478h:
-	res 0,(hl)		;0478
+
+l0478h:	res 0,(hl)		;0478
 	pop hl			;047a
+
 	ret			;047b
 
-
 	push hl			;047c
+
 	ld hl,0fcadh		;047d
 	bit 7,(hl)		;0480
 	set 7,(hl)		;0482
 	jr z,l048bh		;0484
 	res 7,(hl)		;0486
 	call sub_0277h		;0488
-l048bh:
-	pop hl			;048b
+
+l048bh:	pop hl			;048b
+
 	ret			;048c
 
 sub_048dh:
 	ld a,01fh		;048d
 	ld hl,(0fca6h)		;048f
+
 	jp (hl)			;0492
 
-	;; On entry, A = KIB
-l0493h:	push hl			;0493
+
+	;; Possibly, print character
+
+	;; On entry, A = character to print
+l0493h:	push hl			;0493 - Save HL
+	
 	ld hl,0fcbeh		;0494
-	cp 01fh			;0497
-	jr z,l04adh		;0499 - Jump forward if entry is 1F
+	cp 0x1F			;0497 - Check for Character 1F (which is
+				;       periodically inserted into KIB,
+				;       during periods of intactivity)
+	jr z,l04adh		;0499 - Jump forward if so
 
 	bit 0,(hl)		;049b   or if (FCBE)(0) is reset
 	jr z,l04adh		;049d
+
 	push hl			;049f
 	push af			;04a0
 	ld l,a			;04a1
 	ld h,000h		;04a2
-	rst 8			;04a4
+	rst 8			;04a4 - Push HL onto Parameter stack
+
 	ld hl,(0fc74h)		;04a5
 	call jump_to_hl		;04a8
+
 	pop af			;04ab
 	pop hl			;04ac
 
-l04adh:	bit 1,(hl)		;04ad
-	jr nz,l04bch		;04af
+	;; Handle character 0x1F or (FCBE)(0) being reset
+l04adh:	bit 1,(hl)		;04ad - HL = FCBE
+	jr nz,l04bch		;04af - Set carry flag and done
+
 	ld hl,0fcadh		;04b1
-	cp 01eh			;04b4 Check KIB entry
+	
+	cp 01eh			;04b4 Check for character 0x1E
 	jr z,l04bfh		;04b6
+
 	bit 2,(hl)		;04b8
 	set 2,(hl)		;04ba
+
 l04bch:	scf			;04bc
+
 	jr nz,l04cdh		;04bd
 
+	;; Check screen info ???
 l04bfh:	push ix			;04bf
-	ld ix,0fcb6h		;04c1
+
+	ld ix,SCR_INFO_CO	;04c1
 	call sub_0333h		;04c5
+
 	pop ix			;04c8
-	or a			;04ca
+
+	or a			;04ca - Reset CF
 	res 2,(hl)		;04cb
-l04cdh:
-	pop hl			;04cd
+
+l04cdh:	pop hl			;04cd - Restore HL
+
 	ret			;04ce
 	
 sub_04cfh:
@@ -1116,16 +1285,16 @@ sub_04cfh:
 	jr nz,l04e0h		;04d6
 	ld hl,(0fca8h)		;04d8
 	call jump_to_hl		;04db
-l04deh:
-	pop hl			;04de
+
+l04deh:	pop hl			;04de
 	ret			;04df
-l04e0h:
-	bit 1,(hl)		;04e0
+
+l04e0h:	bit 1,(hl)		;04e0
 	set 1,(hl)		;04e2
 	jr nz,l04deh		;04e4
-	push ix		;04e6
-	ld ix,0fcaeh		;04e8
-	cp 020h		;04ec
+	push ix			;04e6
+	ld ix,SCR_INFO_ED	;04e8
+	cp 020h			;04ec
 	jr c,l04fah		;04ee
 	call sub_0511h		;04f0
 l04f3h:
@@ -1152,8 +1321,8 @@ sub_0511h:
 	push bc			;0513
 	push af			;0514
 	call sub_0324h		;0515
-	call sub_0256h		;0518
-	call sub_0261h		;051b
+	call GET_SCR_POSN		;0518
+	call GET_SCR_SIZE		;051b
 	ld a,b			;051e
 	ld b,000h		;051f
 	sub (ix+000h)		;0521
@@ -1177,9 +1346,9 @@ sub_0539h:
 	push de			;053a
 	push bc			;053b
 	call sub_0324h		;053c
-	call sub_029fh		;053f
-	call sub_0256h		;0542
-	call sub_0261h		;0545
+	call CR			;053f
+	call GET_SCR_POSN	;0542
+	call GET_SCR_SIZE	;0545
 	dec b			;0548
 	push hl			;0549
 	ld a,b			;054a
@@ -1361,57 +1530,78 @@ sub_062ch:
 	ret			;0636
 
 
+	;; Push string onto character stack (in reverse order)
+	;;
+	;; On entry:
+	;;   HL - pointer to countable string
+	;;
+	;; On exit:
+	;;   Length of string on parameter stack
+	;;   String (reversed) on character stack
+	;;   AF - corrupted
 sub_0637h:
-	push hl			;0637
-	ld a,(hl)			;0638
-	ld h,000h		;0639
-	and 03fh		;063b (mask off lower six bits)
+	push hl			;0637 - Save address of string
+	ld a,(hl)		;0638 - Retrieve string length and limit
+	ld h,000h		;0639   to 63 bytes maximum
+	and 03fh		;063b 
 	ld l,a			;063d
-	rst 8			;063e - Push HL onto Param stack
+	
+	rst 8			;063e - Push length onto Param stack
 
-	jr z,l0650h		;063f
-	pop hl			;0641
+	jr z,l0650h		;063f - Jump forward if zero-length string
+
+	pop hl			;0641 - Retrieve string address
 	push hl			;0642
-	push bc			;0643
-	ld b,a			;0644
-	add a,l			;0645
-	ld l,a			;0646
-	jr nc,l064ah		;0647
+
+	push bc			;0643 - Save BC
+	ld b,a			;0644 - Set B to length of string
+
+	add a,l			;0645 - Set HL to point to end of string
+	ld l,a			;0646   taking accoutn of potential carry-over
+	jr nc,l064ah		;0647   from low byte to high
 	inc h			;0649
 
-l064ah:	ld a,(hl)		;064a
-	rst 18h			;064b
-	dec hl			;064c
-	djnz l064ah		;064d
+l064ah:	ld a,(hl)		;064a - Retrieve next character
+	rst 18h			;064b - Push A onto character stack
+	dec hl			;064c - Decrement pointer and repeate,
+	djnz l064ah		;064d   if necessary
 
-	pop bc			;064f
+	pop bc			;064f - Restore registers
 l0650h:	pop hl			;0650
 
-	ret			;0651
+	ret			;0651 - Done
 
-
+	;; Print string (from character stack, based on length on
+	;; parameter stack)
 sub_0652h:
-	push af			;0652
+	push af			;0652 - Save registers
 	push hl			;0653
-	rst 10h			;0654
-	ld a,l			;0655
-	and 03fh		;0656
-	jr z,l0662h		;0658
-	ld l,a			;065a
-l065bh:
-	rst 20h			;065b
-	call l0493h		;065c
-	dec l			;065f
-	jr nz,l065bh		;0660
-l0662h:
-	pop hl			;0662
+	
+	rst 10h			;0654 - Retrieve string length from
+				;       parameter stack into HL
+	ld a,l			;0655 - Max length of string is 63 characters
+	and 03fh		;0656   (assumes H is zero)
+
+	jr z,l0662h		;0658 - Jump if empty string
+
+	ld l,a			;065a - HL is length of string
+
+l065bh:	rst 20h			;065b - Retrieve next character from
+				;       Character Stack into A
+	call l0493h		;065c - GOT THIS FAR
+
+	dec l			;065f - Decrement counter and repeat,
+	jr nz,l065bh		;0660   if necessary
+
+l0662h:	pop hl			;0662 - Restore registers
 	pop af			;0663
-	ret			;0664
+
+	ret			;0664 - Done
 
 
 sub_0665h:
-	push af			;0665
-	call sub_0637h		;0666
+	push af			;0665 - Save error code
+	call sub_0637h		;0666 - Push string onto character stack
 	call sub_0652h		;0669
 	pop af			;066c
 	ret			;066d
@@ -1495,6 +1685,8 @@ l06c5h:
 	pop de			;06c6
 	pop hl			;06c7
 	ret			;06c8
+
+	;; Routine to handle user error (Part 2)
 sub_06c9h:
 	push hl			;06c9
 	ld hl,l1d66h		;06ca
@@ -1503,13 +1695,17 @@ sub_06c9h:
 	ld a,020h		;06d3
 	call l0493h		;06d5
 	pop hl			;06d8
+
 	ret			;06d9
+
 sub_06dah:
 	push hl			;06da
-	ld hl,l1d34h		;06db
+	ld hl,l1d34h		;06db - Message 02, 0D, 0A
 	call sub_0665h		;06de
 	pop hl			;06e1
 	ret			;06e2
+
+	
 sub_06e3h:
 	call sub_0782h		;06e3
 	ld a,055h		;06e6
@@ -1758,13 +1954,20 @@ l0848h:
 	ld h,(hl)			;084a
 	ld l,a			;084b
 	ret			;084c
+
+
+	;; Routine to handle user error (Part 1)
 sub_084dh:
-	push af			;084d
+	push af			;084d - Save error code
 	call sub_06dah		;084e
 	call 00d48h		;0851
 	call sub_0652h		;0854
-	pop af			;0857
+
+	pop af			;0857 - Retrieve error code
+	
 	jp sub_06c9h		;0858
+	
+
 sub_085bh:
 	call sub_0782h		;085b
 	ret c			;085e
@@ -1781,9 +1984,17 @@ sub_0866h:
 	call sub_0774h		;0871
 	ld (0fc88h),hl		;0874
 	ret			;0877
-l0878h:
-	call sub_084dh		;0878
+
+	;; Handle user error
+	;;
+	;; On entry:
+	;;   A - error code
+	;;
+	;; On exit:
+	;;   
+l0878h:	call sub_084dh		;0878
 	jp l099ah		;087b
+
 l087eh:
 	call sub_07d3h		;087e
 l0881h:
@@ -1865,56 +2076,110 @@ l08efh:	call sub_0910h		;08ef
 	ret c			;08f2
 	call sub_05ffh		;08f3
 	jr l08efh		;08f6
-	
+
+	;; ================================================================
+	;; Routines to handle Keyboard Input Buffer, which is a circular
+	;; buffer, with capacity for 64 key presses, stored in
+	;; FB80,...FBBF. Two offset pointers, KIB_R_OFFSET and
+	;; KIB_W_OFFSET, track most recent buffer read and buffer write,
+	;; respectively. Because offset pointers are stored in system
+	;; variables with addresses of FCXX and because the pointer
+	;; contents is typically accessed via HL, it is possible to
+	;; change from an offset pointer to an address simply by
+	;; decrementing H and depositing offset into L. For example:
+	;;
+	;;   ld hl,(KIB_R_OFFSET)
+	;;   la a,(hl)
+	;;   dec h
+	;;   ld a,l
+	;;
+	;; This trick is when both writing to KIB and reading from it.
+	;; 
+	;; ================================================================
+		
+	;; ================================================================
+	;; Write to KIB
+	;;
+	;; On entry:
+	;;   A - character to write
+	;;
+	;; On exit:
+	;;   Carry reset to indicate success
+	;; ================================================================
 sub_08f8h:
-	push hl			;08f8
-	push af			;08f9
-	ld hl,0fc7fh		;08fa
-	ld a,(hl)			;08fd
-	inc a			;08fe
-	and 0bfh		;08ff
-	ld (hl),a			;0901
+	push hl			;08f8 - Save register
+	push af			;08f9 - Save key value
+
+	ld hl,KIB_W_OFFSET	;08fa - Retrieve offset to current write
+	ld a,(hl)		;08fd   location in KIB
+
+	inc a			;08fe - Advance to next location in
+	and %10111111		;08ff   buffer, wrapping around if
+				;       necessary
+	ld (hl),a		;0901 - Save new offset
+
+	;; Compute address of new write location in KIB
 	ld l,a			;0902
 	dec h			;0903
+
 	pop af			;0904
-	ld (hl),a			;0905
-	or a			;0906
+
+	ld (hl),a		;0905 - Write value
+	or a			;0906 - Clear carry
+
 	pop hl			;0907
+
 	ret			;0908
 
-	;; Check if bytes in FC7E and FC7F are same (Z set, if so)
+	;; ================================================================
+	;; Check if unread keypresses in Keyboard Input Buffer
+	;;
+	;; On entry:
+	;;
+	;; On exit:
+	;;   Z -  reset ifnew data, set otherwise
+	;;   HL - KIB_W_OFFSET
+	;;   A -  current read offset in buffer
+	;;
+	;; ================================================================
 sub_0909h:
-	ld hl,0fc7eh		;0909
-	ld a,(hl)		;090c
-	inc hl			;090d
-	cp (hl)			;090e
+	ld hl,KIB_R_OFFSET	;0909 - Retrieve read-offset pointer
+	ld a,(hl)		;090c 
+	inc hl			;090d - Advance to write-offset pointer
+	cp (hl)			;090e - Compare, setting Z accordingly
+
 	ret			;090f
 
+	;; ================================================================
+	;; Retrieve next (i.e., to be processed) value from KIB.
 	;;
-	;; Check if keyboard input buffer is non-empty and retrieve next
-	;; value if so
+	;; On entry:
 	;;
-	;; If non-empty, carry reset and A = value
-	;; If empty, carry set
+	;; On exit:
+	;;   CF - reset if value read, set otherwise
+	;;   A  - value read
 	;;
-	;; Keyboard Input Buffer runs from FB80 to FBC0
+	;; ================================================================
 sub_0910h:
 	call sub_0909h		;0910 - Compare (FC7E) and (FC7F)
+
+	;; At this point, HL points to KIB_W_OFFSET and A contains
+	;; content of KIB_R_OFFSET
 	scf			;0913
 	ret z			;0914 - Done if (FC7E) = (FC7F) (carry set)
 
-	dec hl			;0915 - Otherwise incremement (FC7E) and
-	inc a			;0916   zero bit 6
-	and %10111111		;0917 - Buffer wraps around at 0xC0 back
-				;       to 0x80
-	ld (hl),a		;0919
+	dec hl			;0915 - HL points to KIB_R_OFFSET
+	inc a			;0916 - A set to offset of next byte in
+	and %10111111		;0917   buffer (wrapping, if necessary)
+	
+	ld (hl),a		;0919 - Store new read offset
 
-	;; Retrieve value from FB00+(FC7E)
+	;; Retrieve value from Keyboard Input Buffer
 	ld l,a			;091a
-	dec h			;091b - Resets carry?
+	dec h			;091b 
 	ld a,(hl)		;091c
 
-	ret			;091d
+	ret			;091d - Done
 
 sub_091eh:
 	add a,090h		;091e
@@ -1924,6 +2189,16 @@ sub_091eh:
 	ret			;0924
 
 
+	;; ================================================================
+	;; Check for parameter stack underflow
+	;;
+	;; On entry:
+	;;   IY - current top of Parameter stack (as per usual)
+	;; 
+	;; On exit:
+	;;   CF - reset, if no underflow
+	;;   ERR - underflow
+	;; ================================================================
 sub_0925h:
 	ld hl,(0fc90h)		;0925 - Retrieve address of top of
 				;       parameter stack
@@ -1937,6 +2212,7 @@ l092ah:	pop de			;092a   into DE
 
 	ld a,053h		;092f - Deal with stack underflow
 	jp l0878h		;0931
+
 
 sub_0934h:
 	ld hl,0fca5h		;0934
@@ -2037,8 +2313,9 @@ l099ah:	ld sp,STACK0_BASE	; Reset machine-stack
 	ld hl,STACKC_BASE	;099d - Reset character-stack pointer
 	ld (PSTACKC),hl		;09a0
 
-	ld hl,08080h		;09a3
-	ld (0fc7eh),hl		;09a6 - System variable
+	;; Initialise KIB (32-byte circular buffer at FB80--FCBF
+	ld hl,08080h		;09a3 - Initial offset for both
+	ld (KIB_R_OFFSET),hl	;09a6   last-read and lastwrite offset
 
 l09a9h:	call sub_0934h		;09a9 - ???
 	call sub_05ebh		;09ac - Initialise some variables
@@ -3733,15 +4010,15 @@ sub_12c3h:
 	ex de,hl			;12c9
 	add hl,bc			;12ca
 	ld b,c			;12cb
-l12cch:
-	dec hl			;12cc
+
+l12cch:	dec hl			;12cc
 	dec de			;12cd
 	ld a,(de)			;12ce
 	cp (hl)			;12cf
 	jr nz,l12d4h		;12d0
 	djnz l12cch		;12d2
-l12d4h:
-	pop de			;12d4
+
+l12d4h:	pop de			;12d4
 	pop hl			;12d5
 	ret			;12d6
 
@@ -3751,8 +4028,7 @@ sub_12d7h:
 	push de			;12d8
 	push bc			;12d9
 	ld b,004h		;12da
-l12dch:
-	ld a,(de)			;12dc
+l12dch:	ld a,(de)			;12dc
 	adc a,(hl)			;12dd
 	ld (hl),a			;12de
 	inc hl			;12df
@@ -3928,16 +4204,16 @@ l1397h:
 	inc b			;13ac
 	ld c,l			;13ad
 	ld c,a			;13ae
-	ld d,(hl)			;13af
+	ld d,(hl)		;13af
 	ld b,l			;13b0
 	ld b,e			;13b1
 	nop			;13b2
 	rst 10h			;13b3
-	add hl,hl			;13b4
+	add hl,hl		;13b4
 	push hl			;13b5
 
 l13b6h: rst 10h			;13b6
-	ex de,hl			;13b7
+	ex de,hl		;13b7
 	rst 10h			;13b8
 	pop bc			;13b9
 	jp sub_036ah		;13ba
@@ -3950,7 +4226,7 @@ l13b6h: rst 10h			;13b6
 
 	;; Set to indicate warm restart is possible
 	ld hl,F_WARM_RESTART	;13cc
-	ld (hl),0ffh		;13cf
+	ld (hl),0xFF		;13cf
 
 	ret			;13d1
 
@@ -3993,11 +4269,11 @@ sub_13d2h:
 	rst 10h			;140e
 	ld h,a			;140f
 	call sub_07c4h		;1410
-	ex de,hl			;1413
+	ex de,hl		;1413
 	call sub_07c4h		;1414
 	pop hl			;1417
 	jp sub_07c4h		;1418
-	ld (bc),a			;141b
+	ld (bc),a		;141b
 	ld l,043h		;141c
 	ld de,0d700h		;141e
 	push hl			;1421
@@ -4005,11 +4281,11 @@ sub_13d2h:
 	rst 10h			;1424
 	ld a,l			;1425
 	call sub_0333h		;1426
-	pop ix		;1429
+	pop ix			;1429
 	ret			;142b
-	ld (bc),a			;142c
+	ld (bc),a		;142c
 	ld l,057h		;142d
-	ld a,(de)			;142f
+	ld a,(de)		;142f
 	nop			;1430
 	rst 10h			;1431
 	push hl			;1432
@@ -4019,37 +4295,37 @@ sub_13d2h:
 	and 03fh		;1437
 	jr z,l1443h		;1439
 	ld l,a			;143b
-l143ch:
-	rst 20h			;143c
+
+l143ch:	rst 20h			;143c
 	call sub_0333h		;143d
 	dec l			;1440
 	jr nz,l143ch		;1441
-l1443h:
-	pop ix		;1443
+
+l1443h:	pop ix			;1443
 	ret			;1445
 	ld bc,00723h		;1446
 	nop			;1449
 	jp sub_0ad3h		;144a
-	ld (bc),a			;144d
+	ld (bc),a		;144d
 	ld b,h			;144e
 	inc hl			;144f
-	ex af,af'			;1450
+	ex af,af'		;1450
 	nop			;1451
 	jp sub_0a96h		;1452
-	ld (bc),a			;1455
+	ld (bc),a		;1455
 	ld b,l			;1456
 	ld b,h			;1457
-	ld a,(bc)			;1458
+	ld a,(bc)		;1458
 	nop			;1459
-	ld hl,0fcaeh		;145a
+	ld hl,SCR_INFO_ED	;145a
 	rst 8			;145d
 	ret			;145e
-	ld (bc),a			;145f
+	ld (bc),a		;145f
 	ld b,e			;1460
 	ld c,a			;1461
 	ld a,(bc)			;1462
 	nop			;1463
-	ld hl,0fcb6h		;1464
+	ld hl,SCR_INFO_CO	;1464
 	rst 8			;1467
 	ret			;1468
 	ld (bc),a			;1469
@@ -4620,24 +4896,21 @@ l1777h:
 	ld hl,(0fc8eh)		;1777
 	set 7,(hl)		;177a
 	ret			;177c
-	rlca			;177d
-	ld c,c			;177e
-	ld c,(hl)			;177f
-	ld d,h			;1780
-	ld b,l			;1781
-	ld b,a			;1782
-	ld b,l			;1783
-	ld d,d			;1784
-	jr c,l1787h		;1785
-l1787h:
-	call sub_0866h		;1787
+
+	;; Forth word INTEGER
+	db 0x07, 0x49, 0x4E, 0x54, 0x45, 0x47, 0x45, 0x52
+	db 0x38, 0x00
+
+l1787h:	call sub_0866h		;1787
 	ld hl,l1797h		;178a
 	call sub_07d3h		;178d
 	rst 10h			;1790
 	call sub_07c4h		;1791
 	jp l1777h		;1794
-l1797h:
-	ld hl,0fca5h		;1797
+
+	
+	;; Jump here from definition of BASE
+l1797h:	ld hl,0fca5h		;1797 - FLAGs
 	bit 5,(hl)		;179a
 	res 5,(hl)		;179c
 	pop hl			;179e
@@ -4646,11 +4919,13 @@ l1797h:
 	call sub_07b9h		;17a3
 	ld a,022h		;17a6
 	jp l07d5h		;17a8
-l17abh:
-	ld a,02ah		;17ab
+
+l17abh:	ld a,02ah		;17ab
 	call l07d5h		;17ad
 	ld a,0cfh		;17b0
 	jp sub_07b9h		;17b2
+
+
 	add a,d			;17b5
 	ld d,h			;17b6
 	ld c,a			;17b7
@@ -4664,7 +4939,7 @@ l17abh:
 	ld b,l			;17c2
 	ld b,a			;17c3
 	ld c,c			;17c4
-	ld c,(hl)			;17c5
+	ld c,(hl)		;17c5
 	rrca			;17c6
 	nop			;17c7
 	ld hl,(0fc8ah)		;17c8
@@ -4675,7 +4950,7 @@ l17abh:
 	ld b,a			;17d1
 	ld b,c			;17d2
 	ld c,c			;17d3
-	ld c,(hl)			;17d4
+	ld c,(hl)		;17d4
 	rrca			;17d5
 	nop			;17d6
 	pop hl			;17d7
@@ -4836,15 +5111,16 @@ l186bh:
 	ld (hl),a			;18ad
 l18aeh:
 	ret			;18ae
-	add a,h			;18af
-	ld b,d			;18b0
-	ld b,c			;18b1
-	ld d,e			;18b2
-	ld b,l			;18b3
-	ld c,000h		;18b4
+
+	;; FORTH word BASE 
+	db 0x84, 0x42, 0x41, 0x53, 0x45
+	db 0x0E, 0x00
+	
 	ld hl,0fc86h		;18b6
 	push hl			;18b9
 	jp l1797h		;18ba
+
+
 	rlca			;18bd
 	ld b,h			;18be
 	ld b,l			;18bf
