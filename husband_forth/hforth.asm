@@ -961,15 +961,22 @@ l0317h:	dec b			;0317
 
 	;;
 	;; Invert character at current cursor location
-	;; 
+	;;
+	;; On entry:
+	;;   IX - screen info
+	;;
+	;; On exit:
+	;;   A  - (new) character code at current screen location
+	;;   All other registers preserved
 sub_0324h:
 	push af			;0324
 	push hl			;0325
 
-	call GET_SCR_POSN	;0326 - Find screen location
+	call GET_SCR_POSN	;0326 - Retrieve screen location into HL
 
 	ld a,(hl)		;0329 - Retrieve character
 
+	;; Manipulate character
 	and 03fh		;032a - Mask off bits 7 and 6
 	xor (ix+006h)		;032c - Invert with ???
 
@@ -993,13 +1000,19 @@ sub_0333h:
 	cp 060h			;033c - Is it < "£" symbol
 	jr c,l0342h		;033e   Jump forward, if so
 
-	add a,0e0h		;0340 - Values in 0x00 -- 0x5F are
-				;       shifted to 0xE0 -- 0x3F
+	add a,0e0h		;0340 - Values in 0x60 -- 0x7F are
+				;       shifted to 0x40 -- 0x5F (note
+				;       that Bit 7 of code already
+				;       masked off). This effectively
+				;       maps lower-case characters and
+				;       less common ASCII symbols into
+				;       upper-case letters and more
+				;       common symbols.
 
 l0342h:	cp 020h			;0342 - Is it >= " " (printable ASCII char)
 	jr nc,l0357h		;0344 - Jump forward if so
 
-	;; Special character
+	;; Special character (0--1F)
 	ld hl,l1cc0h		;0346 - Compute 1CC0+2*A, which is address
 	add a,a			;0349   of routine to handle keypress
 	add a,l			;034a
@@ -1015,7 +1028,8 @@ l034fh:	call sub_0277h		;034f
 
 	ret			;0356
 
-	;; Handle printable character
+	;; Handle printable character (20--5F, with codes 60--7F shifted
+	;; down to 40--5F)
 l0357h:	add a,0e0h		;0357
 	call GET_SCR_POSN	;0359 - Get current screen location
 				;       (into HL)
@@ -5855,69 +5869,45 @@ l1ca8h:
 	nop			;1cbe
 	nop			;1cbf
 
-	;; Jump table of service routines for keypresses
-l1cc0h:
-	ld d,b			;1cc0
-	nop			;1cc1
-	sub a			;1cc2
-	ld (bc),a			;1cc3
-	ld d,b			;1cc4
-	nop			;1cc5
-	ld d,b			;1cc6
-	nop			;1cc7
-	ld d,b			;1cc8
-	nop			;1cc9
-	ld d,b			;1cca
-	nop			;1ccb
-	ld d,b			;1ccc
-	nop			;1ccd
-	ld d,b			;1cce
-	nop			;1ccf
-	ex af,af'			;1cd0
-	inc bc			;1cd1
-	ex (sp),hl			;1cd2
-	ld (bc),a			;1cd3
-	add a,002h		;1cd4
-	rst 38h			;1cd6
-	ld (bc),a			;1cd7
-	add a,e			;1cd8
-	ld (bc),a			;1cd9
-	sbc a,a			;1cda
-	ld (bc),a			;1cdb
-	ld d,b			;1cdc
-	nop			;1cdd
-	ld d,b			;1cde
-	nop			;1cdf
-	ld d,b			;1ce0
-	nop			;1ce1
-	xor 003h		;1ce2
-	dec e			;1ce4
-	inc b			;1ce5
-	ld b,c			;1ce6
-	inc b			;1ce7
-	ld c,e			;1ce8
-	inc b			;1ce9
-	ld d,b			;1cea
-	nop			;1ceb
-	ld d,b			;1cec
-	nop			;1ced
-	ld d,b			;1cee
-	nop			;1cef
-	ld d,b			;1cf0
-	nop			;1cf1
-	ld d,b			;1cf2
-	nop			;1cf3
-	and e			;1cf4
-	inc bc			;1cf5
-	add a,l			;1cf6
-	inc bc			;1cf7
-	jp c,0bd03h		;1cf8
-	inc bc			;1cfb
-	ld d,l			;1cfc
-	inc b			;1cfd
-	dw 0x047C 		; KIB = 1F
-l1d00h:
-	inc sp			;1d00
+	;; Jump table of 32 service routines, corresponding to special
+	;; key presses
+l1cc0h:	dw 0x0050		; 00 - No action, RET
+	dw 0x0297
+	dw 0x0050		; 02 - No action, RET
+	dw 0x0050		; 03 - No action, RET
+	dw 0x0050		; 04 - No action, RET
+	dw 0x0050		; 05 - No action, RET
+	dw 0x0050		; 06 - No action, RET
+	dw 0x0050		; 07 - No action, RET
+
+	dw 0x0308
+	dw 0x02E3
+	dw 0x02C6
+	dw 0x02FF
+	dw 0x0283
+	dw 0x029F
+	dw 0x0050		; No action, RET
+	dw 0x0050		; No action, RET
+
+	dw 0x0050		; No action, RET
+	dw 0x03EE
+	dw 0x041D
+	dw 0x0441
+	dw 0x044B
+	dw 0x0050		; No action, RET
+	dw 0x0050		; No action, RET
+	dw 0x0050		; No action, RET
+	
+	dw 0x0050		; No action, RET
+	dw 0x0050		; No action, RET
+	dw 0x03A3
+	dw 0x0385
+	dw 0x03DA
+	dw 0x03BD
+	dw 0x0455
+	dw 0x047C
+
+l1d00h:	inc sp			;1d00
 	inc c			;1d01
 
 	;; ZX81-FORTH BY DAVID HUSBAND  COPYRIGHT (C) 1983
@@ -5987,32 +5977,28 @@ l1d60h: db 0x05 		; First 40 keys
 l1d64h:	db 0x0D, 0x0A
 l1d66h: db 0x07, " ", "E", "R", "R"
 	db "O", "R", " ", 0x09, 0x0D, 0x0A, "Z", "X"
-	db "-", "Z", "8", "0", " ", 0x00
-l1d79h: db 0x0C, 0x18, 0x1E, 0x1B, """, 0x01, 0x80, ":"
-	db "%", "!", 0x14 	; "
-l1d84h: db 0x1C, ")", "=", ",", 0x3B, "'", "@"
+	db "-", "Z", "8", "0", " "
 
-	ld de,02809h		;1d8b
-	dec hl			;1d8e
-	ld a,03fh		;1d8f
-	ld e,h			;1d91
-	ld e,e			;1d92
-	ld a,(de)			;1d93
-	dec bc			;1d94
-	inc h			;1d95
-	dec l			;1d96
-l1d97h:
-	inc a			;1d97
-	cpl			;1d98
-	ld e,(hl)			;1d99
-l1d9ah:
-	ld e,a			;1d9a
-l1d9bh:
-	ex af,af'			;1d9b
-	ld a,(bc)			;1d9c
-	ld e,l			;1d9d
-	inc hl			;1d9e
-	ld hl,(l0000h)		;1d9f
+	;; Shifted versions of keys
+	db 0x00
+l1d79h: db 0x0C, 0x18, 0x1E, 0x1B, 0x22, 0x01, 0x80, ":" ; A, Q, 1, 0,
+							 ; P, Enter,
+							 ; Space, Z
+	db "%", "!", 0x14	 	; S, W, 2 (Fetch PAD)
+l1d84h: db 0x1C, ")", "=", ",", 0x3B 	; 9 (Graphics), O, L, ., X
+	db "'", "@"			; D, E (STEP)
+
+	db 0x11, 0x09, "(", "+", ">", "?", 0x5C,  "[" ; 3 (Put PAD), 8
+						      ; (Right), I, K,
+						      ; M, C, F, R
+	db 0x1A, 0x0B, 0x24, 0x2D; 4 (Del Line), 7 (Up), U, J
+l1d97h: db  "<", "/", "^"	 ;  N, V, G
+l1d9ah:	db "_"			 ; T
+l1d9bh:	db 0x08			 ; 5 (Left)
+	db 0x0A			; 6 (Right)
+	db "]", "#", "*"	; Y, H, B
+
+	db 0x00, 0x00
 
 	;; Copy of system variables 1DA0--1E00
 	nop			;1da2
