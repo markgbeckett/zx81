@@ -69,7 +69,10 @@
 	;; FCA5 - Flags (Bit 0 - ; Bit 6 - tested at 0937 ; Bit 7 - set at 1071
 	;; FCAB - CUR_KEY
 	;; FCAC - LAST_KEY
-	;; FCAD - Flags (Bit 4 - Machine Stack in use; But 5 - stack changed)
+
+	;; FCAD - Flags (Bit 0 - Execution / Editor mode; Bit 4 -
+	;;        Machine Stack in use; But 5 - stack changed)
+
 	;; FCAE - Screen info (editor)
 	;;        0 - current col value
 	;;        1 - current row value
@@ -104,6 +107,7 @@ PSTACKC:	equ 0xFC84
 PSTACK0:	equ 0xFC94
 PSTACK1:	equ 0xFC96
 LAST_KEY:	equ 0xFCAC
+FLAGS:		equ 0xFCAD
 STACK0_BASE:	equ 0xFB80
 PAD:		equ 0xFBC0		; Start of PAD
 STACKC_BASE:	equ 0xFCC0
@@ -558,7 +562,7 @@ l018bh:
 	ld h,(hl)			;01a6
 	ld l,a			;01a7
 	push hl			;01a8
-	ld hl,0fcadh		;01a9
+	ld hl,FLAGS		;01a9
 	bit 4,(hl)		;01ac
 	jr nz,l01b6h		;01ae
 	pop hl			;01b0
@@ -1106,7 +1110,7 @@ l03a3h:
 	ret			;03b4
 sub_03b5h:
 	push hl			;03b5
-	ld hl,0fcadh		;03b6
+	ld hl,FLAGS		;03b6
 	bit 0,(hl)		;03b9
 	pop hl			;03bb
 	ret			;03bc
@@ -1193,7 +1197,7 @@ l041dh:	call sub_03b5h		;041d
 	call sub_03dah		;044f
 	jp l041dh		;0452
 	push hl			;0455
-	ld hl,0fcadh		;0456
+	ld hl,FLAGS		;0456
 	bit 0,(hl)		;0459
 	jr nz,l0478h		;045b
 	set 0,(hl)		;045d
@@ -1219,7 +1223,7 @@ l0478h:	res 0,(hl)		;0478
 
 	push hl			;047c
 
-	ld hl,0fcadh		;047d
+	ld hl,FLAGS		;047d
 	bit 7,(hl)		;0480
 	set 7,(hl)		;0482
 	jr z,l048bh		;0484
@@ -1267,7 +1271,7 @@ l0493h:	push hl			;0493 - Save HL
 l04adh:	bit 1,(hl)		;04ad - HL = FCBE
 	jr nz,l04bch		;04af - Set carry flag and done
 
-	ld hl,0fcadh		;04b1
+	ld hl,FLAGS		;04b1
 	
 	cp 01eh			;04b4 Check for character 0x1E
 	jr z,l04bfh		;04b6
@@ -1295,44 +1299,49 @@ l04cdh:	pop hl			;04cd - Restore HL
 	ret			;04ce
 
 	;; Handle keypress?
+	;; On entry, A contains ASCII code of key press
 sub_04cfh:
 	push hl			;04cf
-	ld hl,0fcadh		;04d0
+	ld hl,FLAGS		;04d0 - Check entry mode
 	bit 0,(hl)		;04d3
 	scf			;04d5
-	jr nz,l04e0h		;04d6
-	ld hl,(0fca8h)		;04d8
+	jr nz,l04e0h		;04d6 - Jump forward if editing mode
+	ld hl,(0fca8h)		;04d8 - Likely 0x08f8 - Add to keyboard
+				;       input buffer
 	call jump_to_hl		;04db
 
 l04deh:	pop hl			;04de
 	ret			;04df
 
+	;; Handle keypress in edit mode
 l04e0h:	bit 1,(hl)		;04e0
 	set 1,(hl)		;04e2
 	jr nz,l04deh		;04e4
 	push ix			;04e6
 	ld ix,SCR_INFO_ED	;04e8
-	cp 020h			;04ec
-	jr c,l04fah		;04ee
+	cp 020h			;04ec - Check for printable character
+	jr c,l04fah		;04ee   and jump forward if not
 	call sub_0511h		;04f0
-l04f3h:
-	res 1,(hl)		;04f3
-	pop ix		;04f5
+
+l04f3h:	res 1,(hl)		;04f3
+	pop ix			;04f5
 	or a			;04f7
 	jr l04deh		;04f8
-l04fah:
-	cp 00dh		;04fa
-	jr nz,l0508h		;04fc
+
+	;; Handle non-printable key presses
+l04fah:	cp 00dh			;04fa - Check for Enter
+	jr nz,l0508h		;04fc   and jump forward if not
 	call sub_0333h		;04fe
 	ld a,00ah		;0501
-l0503h:
-	call sub_0333h		;0503
+
+l0503h:	call sub_0333h		;0503
 	jr l04f3h		;0506
-l0508h:
-	cp 018h		;0508
-	jr nz,l0503h		;050a
+
+l0508h:	cp 018h			;0508 - Check for Shift-Q (Compile Line)
+	jr nz,l0503h		;050a   and jump if not
 	call sub_0539h		;050c
 	jr l04f3h		;050f
+
 sub_0511h:
 	push hl			;0511
 	push de			;0512
@@ -1351,14 +1360,18 @@ sub_0511h:
 	pop de			;0529
 	inc de			;052a
 	call sub_036ah		;052b
-l052eh:
-	call sub_0277h		;052e
+l052eh:	call sub_0277h		;052e
 	pop af			;0531
 	call sub_0333h		;0532
+
 	pop bc			;0535
 	pop de			;0536
 	pop hl			;0537
+
 	ret			;0538
+
+
+	;; Compile line (editor mode)
 sub_0539h:
 	push hl			;0539
 	push de			;053a
@@ -1454,7 +1467,7 @@ sub_05bbh:
 	push bc			;05bd
 	push ix		;05be
 
-	ld hl,0fcadh		;05c0
+	ld hl,FLAGS		;05c0
 	bit 5,(hl)		;05c3 - Check if need to change stack
 	jr nz,l05e5h		;05c5 - Jump forward if not
 
@@ -1487,7 +1500,7 @@ l05e5h:	pop ix			;05e5
 
 	;; Startup routine
 sub_05ebh:
-	ld hl,0FCADh		;05eb
+	ld hl,FLAGS		;05eb
 	res 4,(hl)		;05ee - Using Stack 0
 	res 5,(hl)		;05f0 - Stack switch ???
 
@@ -1510,7 +1523,7 @@ sub_05ffh:
 
 	;; Check which context is active and, unless FLAG 3 is set,
 	;; switch to Execution context
-	ld hl,0fcadh		;0607
+	ld hl,FLAGS		;0607
 	bit 4,(hl)		;060a
 	jr z,l061eh		;060c - Jump forward, if execution stack
 	bit 3,(hl)		;060e
@@ -1530,7 +1543,7 @@ l061fh:
 
 	;; Switch to Stack 1 (Editor Stack)
 sub_0621h:
-	ld a,(0fcadh)		; Check which machine stack is in use
+	ld a,(FLAGS)		; Check which machine stack is in use
 	bit 4,a		
 	ret nz			; Nothing to do if Stack 1
 	sbc a,a			; A = 0, if carry clear, otherwise A = 0xFF
@@ -2055,7 +2068,7 @@ l08bbh:
 	ret			;08c1
 
 sub_08c2h:
-	ld hl,0fcadh		;08c2 - Flags
+	ld hl,FLAGS		;08c2 - Flags
 	ld a,(hl)			;08c5
 	and 070h		;08c6
 	ld (hl),a			;08c8
@@ -4537,7 +4550,7 @@ sub_155ch:
 	ld b,l			;156e
 	sub a			;156f
 	nop			;1570
-	ld hl,0fcadh		;1571
+	ld hl,FLAGS		;1571
 	bit 6,(hl)		;1574
 	ret z			;1576
 	rst 10h			;1577
@@ -4643,7 +4656,7 @@ sub_15fah:
 	ld b,h			;1604
 	ld d,h			;1605
 	nop			;1606
-	ld hl,0fcadh		;1607
+	ld hl,FLAGS		;1607
 	bit 6,(hl)		;160a
 	ret z			;160c
 	rst 10h			;160d
@@ -5118,7 +5131,7 @@ l186bh:
 	ld b,(hl)			;189c
 	ld b,(hl)			;189d
 	ld d,000h		;189e
-	ld hl,0fcadh		;18a0
+	ld hl,FLAGS		;18a0
 	res 6,(hl)		;18a3
 	ld l,0b9h		;18a5
 	ld a,(hl)			;18a7
@@ -5875,7 +5888,7 @@ l1ca8h:
 	;; Jump table of 32 service routines, corresponding to special
 	;; key presses
 l1cc0h:	dw 0x0050		; 00 - No action, RET
-	dw 0x0297
+	dw 0x0297		; 01 - Home
 	dw 0x0050		; 02 - No action, RET
 	dw 0x0050		; 03 - No action, RET
 	dw 0x0050		; 04 - No action, RET
@@ -5883,32 +5896,32 @@ l1cc0h:	dw 0x0050		; 00 - No action, RET
 	dw 0x0050		; 06 - No action, RET
 	dw 0x0050		; 07 - No action, RET
 
-	dw 0x0308
-	dw 0x02E3
-	dw 0x02C6
-	dw 0x02FF
-	dw 0x0283
-	dw 0x029F
-	dw 0x0050		; No action, RET
-	dw 0x0050		; No action, RET
+	dw 0x0308		; 08 - Left
+	dw 0x02E3		; 09 - Right
+	dw 0x02C6		; 0A - Down
+	dw 0x02FF		; 0B - Up
+	dw 0x0283		; 0C - Clear screen
+	dw 0x029F		; 0D
+	dw 0x0050		; 0E - No action, RET
+	dw 0x0050		; 0F - No action, RET
 
-	dw 0x0050		; No action, RET
-	dw 0x03EE
-	dw 0x041D
-	dw 0x0441
-	dw 0x044B
-	dw 0x0050		; No action, RET
-	dw 0x0050		; No action, RET
-	dw 0x0050		; No action, RET
+	dw 0x0050		; 10 - No action, RET
+	dw 0x03EE		; 11 - Put PAD
+	dw 0x041D		; 12 -
+	dw 0x0441		; 13 -
+	dw 0x044B		; 14 - Fetch PAD
+	dw 0x0050		; 15 - No action, RET
+	dw 0x0050		; 16 - No action, RET
+	dw 0x0050		; 17 - No action, RET
 	
-	dw 0x0050		; No action, RET
-	dw 0x0050		; No action, RET
-	dw 0x03A3
-	dw 0x0385
-	dw 0x03DA
-	dw 0x03BD
-	dw 0x0455
-	dw 0x047C
+	dw 0x0050		; 18 - No action, RET
+	dw 0x0050		; 19 - No action, RET
+	dw 0x03A3		; 1A - Delete line
+	dw 0x0385		; 1B - Rubout
+	dw 0x03DA		; 1C - Graphics mode
+	dw 0x03BD		; 1D - 
+	dw 0x0455		; 1E - Edit
+	dw 0x047C		; 1F -
 
 l1d00h:	inc sp			;1d00
 	inc c			;1d01
@@ -5999,7 +6012,7 @@ l1d84h: db 0x1C, ")", "=", ",", 0x3B 	; 9 (Graphics), O, L, ., X
 l1d97h: db  "<", "/", "^"	 ;  N, V, G
 l1d9ah:	db "_"			 ; T
 l1d9bh:	db 0x08			 ; 5 (Left)
-	db 0x0A			; 6 (Right)
+	db 0x0A			; 6 (Down)
 	db "]", "#", "*"	; Y, H, B
 
 	db 0x00, 0x00
