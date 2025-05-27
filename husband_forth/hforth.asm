@@ -607,14 +607,17 @@ l01dbh:	pop hl			;01db
 	push hl			;01e6
 
 	;; Retrieve ASCII character corresponding to keypress
-	ld hl,l1d37h+1		;01e7
+	ld hl,KEY_CODES		;01e7 - Compute offset
 	add a,l			;01ea
 	ld l,a			;01eb
-	ld a,(hl)		;01ec
+	ld a,(hl)		;01ec - Retrieve code
 
+	;; Check if Shift-Space pressed
 	bit 7,a			;01ed
-	jp nz,l094dh		;01ef
-	ld hl,(0fca6h)		;01f2
+	jp nz,l094dh		;01ef - Warm restart
+
+	ld hl,(0fca6h)		;01f2 - $04CF for Execution Context/
+				;       Editor Context
 	call jump_to_hl		;01f5
 
 	pop hl			;01f8
@@ -1290,7 +1293,8 @@ l04bfh:	push ix			;04bf
 l04cdh:	pop hl			;04cd - Restore HL
 
 	ret			;04ce
-	
+
+	;; Handle keypress?
 sub_04cfh:
 	push hl			;04cf
 	ld hl,0fcadh		;04d0
@@ -2251,6 +2255,7 @@ l0948h:	in a,(0feh)		;0948 - Read keyboard 'Shift', 'z', ..., 'V'
 	jr nc,l0953h		;094b - Branch, if shift pressed (to
 				;       force cold restart)
 
+	
 l094dh:	ld hl,F_WARM_RESTART	;094d - Check if warm restart is
 	inc (hl)		;       possible (if (FC78)=FF)
 	jr z,l099ah		;0951 - Jump forward if warm restart
@@ -2355,8 +2360,6 @@ l09a9h:	call sub_0934h		;09a9 - ???
 	;; Main loop (Context 0 - Execution mode)
 l09c5h:	call sub_08d8h		;09c5
 	jr l09c5h		;09c8
-
-	
 	
 	;; Check memory from 2000h--3FFFh
 sub_09cah:
@@ -5961,6 +5964,7 @@ l1d34h:
 
 	
 l1d37h: db 0x20
+KEY_CODES:
 	db 0x00
 l1d39h: db "A", "Q", "1", "0", "P", 0x0D," ", "Z"
 	db "S", "W", "2", "9", "O", "L", ".", "X"
@@ -5981,9 +5985,9 @@ l1d66h: db 0x07, " ", "E", "R", "R"
 
 	;; Shifted versions of keys
 	db 0x00
-l1d79h: db 0x0C, 0x18, 0x1E, 0x1B, 0x22, 0x01, 0x80, ":" ; A, Q, 1, 0,
-							 ; P, Enter,
-							 ; Space, Z
+l1d79h: db 0x0C, 0x18, 0x1E, 0x1B 	; A (CLS), Q (Compile), 1
+					; (Edit), 0 (Rubout)
+	db 0x22, 0x01, 0x80, ":"	; P, Enter, Space, Z
 	db "%", "!", 0x14	 	; S, W, 2 (Fetch PAD)
 l1d84h: db 0x1C, ")", "=", ",", 0x3B 	; 9 (Graphics), O, L, ., X
 	db "'", "@"			; D, E (STEP)
