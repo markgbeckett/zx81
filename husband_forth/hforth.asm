@@ -119,7 +119,8 @@ SCR_INFO_ED:	equ 0xFCAE
 SCR_INFO_CO:	equ 0xFCB6
 KIB_R_OFFSET:	equ 0fc7eh
 KIB_W_OFFSET:	equ 0fc7fh
-	
+
+
 	org	00000h
 
 	;;
@@ -226,7 +227,7 @@ l0051h:	ld h,(iy+000h)		;0051
 	;; Routine to transition between display modes
 l0057h:	ld a,0ffh		;0057 - E4h in 60 Hz version
 	ex af,af'			;0059
-	ld hl,l0098h		;005a - Set routine for video handling ???
+	ld hl,DISP_BORDER		;005a - Set routine for video handling ???
 	ld (NEXT_DISP_ROUTINE),hl	;005d
 
 l0060h:	pop hl			;0060
@@ -263,7 +264,7 @@ l0071h:	ld a,04ah		;0071 - 23h on 60 Hz version
 	push bc			;0075
 	push de			;0076
 	ld bc,l1809h		;0077 - 24 rows and 8 scan lines +1
-	ld hl,l0098h		;007a - Set routine for other video handler
+	ld hl,DISP_BORDER	;007a - Set routine for other video handler
 	ld (NEXT_DISP_ROUTINE),hl		;007d 
 	ld hl,(0fc6eh)		;0080 - Possibly start of display file?
 	ld a,0eah		;0083 - Set timer for display routine
@@ -289,7 +290,8 @@ sub_0092h: 			; Looks like DISPLAY-5 at L02B5
 	halt			;0097 - Returns once display file is complete
 
 	;; Video handling routine (VSync and read keyboard)
-l0098h:	out (0fdh),a		;0098 - Disable NMI
+DISP_BORDER:
+	out (0fdh),a		;0098 - Disable NMI
 	in a,(0feh)		;009a - Trigger VSync
 
 	ld a,01eh		;009c - Set counter for top margin *** TIMING **
@@ -1570,14 +1572,15 @@ sub_062ch:
 	;;   Length of string on parameter stack
 	;;   String (reversed) on character stack
 	;;   AF - corrupted
-sub_0637h:
+PUSH_STRING:
 	push hl			;0637 - Save address of string
+
 	ld a,(hl)		;0638 - Retrieve string length and limit
 	ld h,000h		;0639   to 63 bytes maximum
 	and 03fh		;063b 
 	ld l,a			;063d
 	
-	rst 8			;063e - Push length onto Param stack
+	rst 8			;063e - Push length (that is, HL) onto Param stack
 
 	jr z,l0650h		;063f - Jump forward if zero-length string
 
@@ -1587,14 +1590,16 @@ sub_0637h:
 	push bc			;0643 - Save BC
 	ld b,a			;0644 - Set B to length of string
 
+	;;  Find address of last character of string
 	add a,l			;0645 - Set HL to point to end of string
-	ld l,a			;0646   taking accoutn of potential carry-over
+	ld l,a			;0646   taking account of potential carry-over
 	jr nc,l064ah		;0647   from low byte to high
 	inc h			;0649
 
+	;;  Push string onto stack in reverse order, so can be pop'ed in right order
 l064ah:	ld a,(hl)		;064a - Retrieve next character
 	rst 18h			;064b - Push A onto character stack
-	dec hl			;064c - Decrement pointer and repeate,
+	dec hl			;064c - Decrement pointer and repeat,
 	djnz l064ah		;064d   if necessary
 
 	pop bc			;064f - Restore registers
@@ -1604,7 +1609,7 @@ l0650h:	pop hl			;0650
 
 	;; Print string (from character stack, based on length on
 	;; parameter stack)
-sub_0652h:
+PRINT_STRING:
 	push af			;0652 - Save registers
 	push hl			;0653
 	
@@ -1630,19 +1635,30 @@ l0662h:	pop hl			;0662 - Restore registers
 	ret			;0664 - Done
 
 
-sub_0665h:
-	push af			;0665 - Save error code
-	call sub_0637h		;0666 - Push string onto character stack
-	call sub_0652h		;0669
+	;; Print String pointed to by HL register (via character stack)
+	;;
+	;; On entry:
+	;;  HL - address of string
+	;;
+	;; On exit:
+	;; 
+PRINT_STR_HL:
+	push af			;0665 - Save A
+
+	call PUSH_STRING	;0666 - Push string onto character stack
+	call PRINT_STRING	;0669
+
 	pop af			;066c
+
 	ret			;066d
 
 sub_066eh:
 	push hl			;066e
 	ld hl,l1d60h		;066f
-	call sub_0665h		;0672
+	call PRINT_STR_HL		;0672
 	pop hl			;0675
-	ret			;0676
+	ret
+				;0676
 sub_0677h:
 	and 07fh		;0677
 	cp 060h		;0679
@@ -1721,7 +1737,7 @@ l06c5h:
 sub_06c9h:
 	push hl			;06c9
 	ld hl,l1d66h		;06ca
-	call sub_0665h		;06cd
+	call PRINT_STR_HL		;06cd
 	call l0493h		;06d0
 	ld a,020h		;06d3
 	call l0493h		;06d5
@@ -1732,7 +1748,7 @@ sub_06c9h:
 sub_06dah:
 	push hl			;06da
 	ld hl,l1d34h		;06db - Message 02, 0D, 0A
-	call sub_0665h		;06de
+	call PRINT_STR_HL	;06de
 	pop hl			;06e1
 	ret			;06e2
 
@@ -1770,7 +1786,7 @@ l070dh:
 	or a			;070e
 	jr z,l06f7h		;070f
 l0711h:
-	call sub_0637h		;0711
+	call PUSH_STRING		;0711
 	pop hl			;0714
 	or a			;0715
 	ret			;0716
@@ -1930,7 +1946,7 @@ sub_07eah:
 	call jump_to_hl		;07f3
 	jr nc,l0803h		;07f6
 	call sub_06dah		;07f8
-	call sub_0652h		;07fb
+	call PRINT_STRING		;07fb
 	ld a,055h		;07fe
 l0800h:
 	call sub_06c9h		;0800
@@ -1992,7 +2008,7 @@ sub_084dh:
 	push af			;084d - Save error code
 	call sub_06dah		;084e
 	call 00d48h		;0851
-	call sub_0652h		;0854
+	call PRINT_STRING		;0854
 
 	pop af			;0857 - Retrieve error code
 	
@@ -2267,12 +2283,12 @@ l0948h:	in a,(0feh)		;0948 - Read keyboard 'Shift', 'z', ..., 'V'
 	rrca			;094a - Rotate 'shift key' into carry
 	jr nc,l0953h		;094b - Branch, if shift pressed (to
 				;       force cold restart)
-
 	
 l094dh:	ld hl,F_WARM_RESTART	;094d - Check if warm restart is
 	inc (hl)		;       possible (if (FC78)=FF)
 	jr z,l099ah		;0951 - Jump forward if warm restart
 
+	;; Continuation of cold-restart routine
 l0953h:	out (0fdh),a		;0953 - Disable NMI
 
 	;; Check how much memory there is
@@ -2281,8 +2297,8 @@ l0953h:	out (0fdh),a		;0953 - Disable NMI
 
 	;; Write test data (high byte of address) to end of each 256-byte page
 l0958h:	ld (hl),h		;0958
-	inc h			;0959
-	jr nz,l0958h		;095a
+	inc h			;0959 - Move to next page
+	jr nz,l0958h		;095a - Repeat if address did not overflow 
 
 	;; Attempt to read back (oddly, this routine expects
 	;; differences, based on mirroring of main RAM area)
@@ -2322,9 +2338,10 @@ l0970h:	ld (hl),a		;0970
 
 	;; Check how much memory was found and set system variables at
 	;; FC6E and FC76 accordingly.
-	ld a,0bfh		;0983
-	cp h			;0985 - H is 40 or 80 for 16k or 32k of RAM
-	jr nc,l0991h		;0986
+	ld a,0xBF		;0983
+	cp h			;0985 - H is 40 or 80 for 16k or 32k of RAM, respectively
+	jr nc,l0991h		;0986 - If H >= C0, then default values
+				;       are okay
 	
 	ld hl,0bd00h		;0988 - By default, these variables
 				;       contain FD00
@@ -2333,8 +2350,9 @@ l0970h:	ld (hl),a		;0970
 
 l0991h:	call sub_09cah		;0991 - check if ROM/ RAM in 2000--3FFF
 
-	ld hl,l1d00h		;0994
-	call sub_0665h		;0997
+	;; Display copyright message
+	ld hl,COPYRIGHT_MSG	;0994
+	call PRINT_STR_HL	;0997
 
 	;; ============================================================
 	;; Warm restart
@@ -3276,13 +3294,13 @@ l0e6dh:
 	nop			;0e7a
 l0e7bh:
 	call sub_0ad3h		;0e7b
-	jp sub_0652h		;0e7e
+	jp PRINT_STRING		;0e7e
 	ld (bc),a			;0e81
 	ld b,h			;0e82
 	ld l,00bh		;0e83
 	nop			;0e85
 	call sub_0a96h		;0e86
-	jp sub_0652h		;0e89
+	jp PRINT_STRING		;0e89
 	ld bc,l0e49h		;0e8c
 	nop			;0e8f
 	pop de			;0e90
@@ -4364,7 +4382,7 @@ l1443h:	pop ix			;1443
 	add hl,bc			;146c
 	nop			;146d
 	rst 10h			;146e
-	jp sub_0637h		;146f
+	jp PUSH_STRING		;146f
 	inc bc			;1472
 	ld b,e			;1473
 	ld a,04eh		;1474
@@ -4426,7 +4444,7 @@ sub_14b3h:
 l14beh:
 	call sub_14b3h		;14be
 	push de			;14c1
-	jp sub_0637h		;14c2
+	jp PUSH_STRING		;14c2
 sub_14c5h:
 	call sub_0621h		;14c5
 	and 07fh		;14c8
@@ -4441,7 +4459,7 @@ sub_14c5h:
 	jp nz,0b3cdh		;14db
 	inc d			;14de
 	push de			;14df
-	jp sub_0665h		;14e0
+	jp PRINT_STR_HL		;14e0
 	add a,(hl)			;14e3
 	ld b,c			;14e4
 	ld b,d			;14e5
@@ -4460,7 +4478,7 @@ l14f1h:
 	or h			;14f8
 	pop hl			;14f9
 	ret z			;14fa
-	call sub_0665h		;14fb
+	call PRINT_STR_HL		;14fb
 	jp l099ah		;14fe
 sub_1501h:
 	push af			;1501
@@ -4880,10 +4898,10 @@ l16d5h:
 	ld hl,(0fc88h)		;173a
 	ld de,sub_0008h		;173d
 l1740h:
-	call sub_0637h		;1740
+	call PUSH_STRING	;1740
 	call sub_1758h		;1743
 	call sub_0795h		;1746
-	call sub_0652h		;1749
+	call PRINT_STRING		;1749
 	xor a			;174c
 	cp h			;174d
 	jr nz,l1740h		;174e
@@ -5368,7 +5386,7 @@ l19f0h:
 	dec c			;19fd
 	nop			;19fe
 	ld hl,01d6eh		;19ff
-	jp sub_0665h		;1a02
+	jp PRINT_STR_HL		;1a02
 	ld (bc),a			;1a05
 	ld d,l			;1a06
 	ld hl,(l000dh+1)		;1a07
@@ -5459,7 +5477,7 @@ l1a74h:
 	ld l,00bh		;1a81
 	nop			;1a83
 	call l1a74h		;1a84
-	jp sub_0652h		;1a87
+	jp PRINT_STRING		;1a87
 	ld (bc),a			;1a8a
 	ld b,h			;1a8b
 	dec a			;1a8c
@@ -5851,7 +5869,7 @@ l1c85h:
 	ld c,(hl)			;1c93
 	add hl,bc			;1c94
 	nop			;1c95
-	jp sub_0652h		;1c96
+	jp PRINT_STRING		;1c96
 	ld (bc),a			;1c99
 	ld b,h			;1c9a
 	ld a,00ah		;1c9b
@@ -5923,58 +5941,16 @@ l1cc0h:	dw 0x0050		; 00 - No action, RET
 	dw 0x0455		; 1E - Edit
 	dw 0x047C		; 1F -
 
-l1d00h:	inc sp			;1d00
-	inc c			;1d01
-
 	;; ZX81-FORTH BY DAVID HUSBAND  COPYRIGHT (C) 1983
-	ld e,d			;1d02
-	ld e,b			;1d03
-	jr c,l1d37h		;1d04
-	dec l			;1d06
-	ld b,(hl)			;1d07
-	ld c,a			;1d08
-	ld d,d			;1d09
-	ld d,h			;1d0a
-	ld c,b			;1d0b
-	jr nz,l1d50h		;1d0c
-	ld e,c			;1d0e
-	jr nz,l1d55h		;1d0f
-	ld b,c			;1d11
-	ld d,(hl)			;1d12
-	ld c,c			;1d13
-	ld b,h			;1d14
-	jr nz,l1d5fh		;1d15
-	ld d,l			;1d17
-	ld d,e			;1d18
-	ld b,d			;1d19
-	ld b,c			;1d1a
-	ld c,(hl)			;1d1b
-	ld b,h			;1d1c
-	dec c			;1d1d
-	ld a,(bc)			;1d1e
-	ld b,e			;1d1f
-	ld c,a			;1d20
-	ld d,b			;1d21
-	ld e,c			;1d22
-	ld d,d			;1d23
-	ld c,c			;1d24
-	ld b,a			;1d25
-	ld c,b			;1d26
-	ld d,h			;1d27
-	jr nz,l1d52h		;1d28
-	ld b,e			;1d2a
-	add hl,hl			;1d2b
-	jr nz,l1d5fh		;1d2c
-	add hl,sp			;1d2e
-	jr c,l1d64h		;1d2f
-	dec c			;1d31
-	ld a,(bc)			;1d32
-	ld a,(bc)			;1d33
-l1d34h:
-	ld (bc),a			;1d34
-	dec c			;1d35
-	ld a,(bc)			;1d36
+COPYRIGHT_MSG:
+	db 0x33, 0x0C
+	dm "ZX81-FORTH BY DAVID HUSBAND"
+	db 0x0D, 0x0A
+	dm "COPYRIGHT (C) 1983"
+	db 0x0D, 0x0A, 0x0A
+	
 
+l1d34h:	db 0x02, 0x0D, 0x0A
 	
 l1d37h: db 0x20
 KEY_CODES:
@@ -6045,9 +6021,8 @@ l1db2h:
 	nop			;1dbd
 	add a,b			;1dbe
 	add a,b			;1dbf
-	sbc a,b			;1dc0
-	nop			;1dc1
-	ld (hl),c			;1dc2
+	dw DISP_BORDER		; Initial display routine to call (points 
+	ld (hl),c		;1dc2
 	nop			;1dc3
 	ret nz			;1dc4
 	call m,l000ah		;1dc5
