@@ -819,11 +819,11 @@ GET_SCR_SIZE:
 	ret			;0276
 
 	;; Retrieve and invert character at cursor location
-sub_0277h:
+INVERT_CUR_CHAR:
 	push af			;0277
 	push hl			;0278
 
-	call GET_SCR_POSN		;0279
+	call GET_SCR_POSN	;0279
 	ld a,(hl)		;027c
 	xor 080h		;027d
 	ld (hl),a		;027f
@@ -987,7 +987,7 @@ sub_0324h:
 
 	;; Manipulate character
 	and 03fh		;032a - Mask off bits 7 and 6
-	xor (ix+006h)		;032c - Invert with ???
+	xor (ix+006h)		;032c - Invert with 0x00
 
 	ld (hl),a		;032f - Replace character
 
@@ -996,6 +996,7 @@ sub_0324h:
 
 	ret			;0332
 
+	;; GOT THIS FAR (SAT 7th JUNE)
 sub_0333h:
 	push af			;0333
 	push hl			;0334
@@ -1026,9 +1027,9 @@ l0342h:	cp 020h			;0342 - Is it >= " " (printable ASCII char)
 	add a,a			;0349   of routine to handle keypress
 	add a,l			;034a
 	ld l,a			;034b
-	call sub_0365h		;034c - Call service routine
+	call sub_0365h		;034c - Call service routine 
 
-l034fh:	call sub_0277h		;034f
+l034fh:	call INVERT_CUR_CHAR		;034f
 
 	pop bc			;0352
 	pop de			;0353
@@ -1223,6 +1224,8 @@ l0478h:	res 0,(hl)		;0478
 
 	ret			;047b
 
+	;; Handle special character 0x1F
+	;;  Flip Bit 7 of FLAGS
 	push hl			;047c
 
 	ld hl,FLAGS		;047d
@@ -1230,7 +1233,7 @@ l0478h:	res 0,(hl)		;0478
 	set 7,(hl)		;0482
 	jr z,l048bh		;0484
 	res 7,(hl)		;0486
-	call sub_0277h		;0488
+	call INVERT_CUR_CHAR		;0488
 
 l048bh:	pop hl			;048b
 
@@ -1259,9 +1262,11 @@ l0493h:	push hl			;0493 - Save HL
 
 	push hl			;049f
 	push af			;04a0
+
+	;; Push character ASCII code onto Parameter stacl
 	ld l,a			;04a1
 	ld h,000h		;04a2
-	rst 8			;04a4 - Push HL onto Parameter stack
+	rst 8			;04a4
 
 	ld hl,(0fc74h)		;04a5
 	call jump_to_hl		;04a8
@@ -1269,8 +1274,9 @@ l0493h:	push hl			;0493 - Save HL
 	pop af			;04ab
 	pop hl			;04ac
 
-	;; Handle character 0x1F or (FCBE)(0) being reset
-l04adh:	bit 1,(hl)		;04ad - HL = FCBE
+	;; Handle character 0x1F or (FCBE)(0) being reset At this point,
+	;; HL points to a routine, and A is character being handled
+l04adh:	bit 1,(hl)		;04ad - HL = FCBE / (FC74)
 	jr nz,l04bch		;04af - Set carry flag and done
 
 	ld hl,FLAGS		;04b1
@@ -1362,7 +1368,7 @@ sub_0511h:
 	pop de			;0529
 	inc de			;052a
 	call sub_036ah		;052b
-l052eh:	call sub_0277h		;052e
+l052eh:	call INVERT_CUR_CHAR		;052e
 	pop af			;0531
 	call sub_0333h		;0532
 
@@ -1410,7 +1416,7 @@ l0568h:	pop hl			;0568
 	inc b			;0569
 	call sub_0574h		;056a
 
-l056dh:	call sub_0277h		;056d
+l056dh:	call INVERT_CUR_CHAR	;056d
 	pop bc			;0570
 	pop de			;0571
 	pop hl			;0572
@@ -1618,7 +1624,7 @@ PRINT_STRING:
 	ld a,l			;0655 - Max length of string is 63 characters
 	and 03fh		;0656   (assumes H is zero)
 
-	jr z,l0662h		;0658 - Jump if empty string
+	jr z,l0662h		;0658 - Exit routine, if empty string
 
 	ld l,a			;065a - HL is length of string
 
@@ -5939,7 +5945,7 @@ l1cc0h:	dw 0x0050		; 00 - No action, RET
 	dw 0x03DA		; 1C - Graphics mode
 	dw 0x03BD		; 1D - 
 	dw 0x0455		; 1E - Edit
-	dw 0x047C		; 1F -
+	dw 0x047C		; 1F - ? Flashing cursor
 
 	;; ZX81-FORTH BY DAVID HUSBAND  COPYRIGHT (C) 1983
 COPYRIGHT_MSG:
@@ -6079,6 +6085,8 @@ l1db2h:
 	nop			;1dfd
 	nop			;1dfe
 	rrca			;1dff
+
+	
 	nop			;1e00
 	nop			;1e01
 	nop			;1e02
