@@ -63,15 +63,19 @@
 	;; FC8C - Init value of FC88
 	;; FC8E - Init value of FC8A
 	;; FC90 - Start of parameter stack
-	;; FC94 - PSTACK0: Pointer to machine-stack 0 (grows down from FB80)
-	;; FC96 - PSTACK1: Pointer to machine-stack 1 (FC3E)
+	;; FC94 - MSTACK0: Pointer to machine-stack 0 (grows down from FB80)
+	;; FC96 - MSTACK1: Pointer to machine-stack 1 (FC3E)
 	;; FC9A...FC9D/ FC9E...FCA1/FCA2...FCA5 are 4-byte buffers
 	;; FCA5 - Flags (Bit 0 - ; Bit 6 - tested at 0937 ; Bit 7 - set at 1071
 	;; FCAB - CUR_KEY
 	;; FCAC - LAST_KEY
 
-	;; FCAD - Flags (Bit 0 - Execution / Editor mode; Bit 4 -
-	;;        Machine Stack in use; But 5 - stack changed)
+	;; FCAD - FLAGS(Bit 0 ; Bit 4 -
+	;;        0 - Execution / Editor mode
+	;;        1 - 
+	;;        2 - Set when handling KIB
+	;;        4 - Machine stack in use (0/1)
+	;;        5 - Switch machine stack lock
 
 	;; FCAE - Screen info (editor)
 	;;        0 - current col value
@@ -83,15 +87,17 @@
 	;;        6 - XOR'ed with character before displaying ???
 	;;        7 - blank character for screen
 	;; FCB6 - Screen info (console)
-	;;        0 - current col value
-	;;        1 - current row value
-	;;        2 - leftmost column (window)
-	;;        3 - top-most row (window)
-	;;        4 - rightmost column (window)
-	;;        5 - bottommost row (window)
-	;;        6 - XOR'ed with character before displaying ???
-	;;        7 - blank character for screen
-	;; FCBE - passed into main loop (context 0) as HL 
+	;;        +0 - current col value
+	;;        +1 - current row value
+	;;        +2 - leftmost column (window)
+	;;        +3 - top-most row (window)
+	;;        +4 - rightmost column (window)
+	;;        +5 - bottommost row (window)
+	;;        +6 - XOR'ed with character before displaying ???
+	;;        +7 - blank character for screen
+	;; FCBE - FLAGS2 , passed into main loop (context 0) as HL
+	;;        0 - printer disabled/ enabled
+
 	;; FCBF - Reset at start of main monitor loop
 
 	;; Memory map
@@ -103,13 +109,16 @@
 	;; FCC0--FCFF -- Character stack (wraps around)
 	;; FD00--FFFF - video RAM
 
+PRINT_DRVR:	equ 0xFC74
 PSTACKC:	equ 0xFC84
-PSTACK0:	equ 0xFC94
-PSTACK1:	equ 0xFC96
+PSTACK_BASE:	equ 0xFc90
+MSTACK0:	equ 0xFC94
+MSTACK1:	equ 0xFC96
 LAST_KEY:	equ 0xFCAC
 FLAGS:		equ 0xFCAD
 STACK0_BASE:	equ 0xFB80
 PAD:		equ 0xFBC0		; Start of PAD
+FLAGS2:		equ 0xFCBE		; Further flags
 STACKC_BASE:	equ 0xFCC0
 STACK1_BASE:	equ 0xFC3E
 RAM_SIZE:	equ 0xFC56
@@ -120,13 +129,12 @@ SCR_INFO_CO:	equ 0xFCB6
 KIB_R_OFFSET:	equ 0fc7eh
 KIB_W_OFFSET:	equ 0fc7fh
 
-
 	org	00000h
 
 	;;
 	;; RST 00 routine (cold or warm restart)
 	;; 
-l0000h:	out (0fdh),a		;0000 - Disable NMI
+l0000h:	out (0xFD),a		;0000 - Disable NMI
 l0002h:	ld sp,STACK0_BASE	;0002 - Reset stack pointer
 l0005h:	jp l0946h		;0005 - Continue with reset
 
@@ -576,12 +584,12 @@ l01b6h:	res 4,(hl)		;01b6
 	ex (sp),hl		;01ba - Extract return address into HL
 
 	;; Switch from Stack 1 to Stack 0
-	ld (PSTACK1),sp		;01bb 
-	ld sp,(PSTACK0)		;01bf
+	ld (MSTACK1),sp		;01bb 
+	ld sp,(MSTACK0)		;01bf
 
 	call jump_to_hl		;01c3
 	
-	ld sp,(PSTACK1)		;01c6 - Switch back to Stack 1 (discard
+	ld sp,(MSTACK1)		;01c6 - Switch back to Stack 1 (discard
 				;Stack 0 pointer)
 
 	pop hl			;01ca
@@ -840,8 +848,8 @@ INVERT_CUR_CHAR:
 
 	ld de,l0020h		;028a
 	ld a,(ix+007h)		;028d - Retrieve blank character for screen
-l0290h:
-	call SCR_BLANK_ROW	;0290
+
+l0290h:	call SCR_BLANK_ROW	;0290
 	add hl,de		;0293
 	dec c			;0294
 	jr nz,l0290h		;0295
@@ -855,7 +863,7 @@ CR:
 	ret			;02a3
 
 	;; Deal with cursor moving off bottom of screen
-sub_02a4h:
+SCROLL_SCRN:
 	push hl			;02a4
 	push de			;02a5
 	push bc			;02a6
@@ -889,6 +897,7 @@ l02c2h:	pop bc			;02c2
 
 	ret			;02c5
 
+	
 	push hl			;02c6
 	push de			;02c7
 	push bc			;02c8
@@ -897,7 +906,7 @@ l02c2h:	pop bc			;02c2
 l02c9h:	call GET_SCR_SIZE	;02c9
 	jr c,l02dfh		;02cc - Skip forward if negative-sized screen
 
-	ld a,(ix+001h)		;02ce - Return current row
+	ld a,(ix+001h)		;02ce - Retrieve current row
 	inc a			;02d1 - Advance to next row
 	cp c			;02d2 - Compare to screen height
 	jr c,l02dch		;02d3 - Jump forward if not off bottom
@@ -908,7 +917,7 @@ l02c9h:	call GET_SCR_SIZE	;02c9
 
 	push af			;02d7
 
-	call sub_02a4h		;02d8
+	call SCROLL_SCRN		;02d8 - Scroll screen
 
 	pop af			;02db
 
@@ -986,7 +995,7 @@ sub_0324h:
 	ld a,(hl)		;0329 - Retrieve character
 
 	;; Manipulate character
-	and 03fh		;032a - Mask off bits 7 and 6
+	and %00111111		;032a - Mask off bits 7 and 6
 	xor (ix+006h)		;032c - Invert with 0x00
 
 	ld (hl),a		;032f - Replace character
@@ -996,28 +1005,31 @@ sub_0324h:
 
 	ret			;0332
 
-	;; GOT THIS FAR (SAT 7th JUNE)
-sub_0333h:
+	;; Print character to screen
+	;;
+	;; Handles both printable and non-printable characters
+SCR_PR_CHR:
 	push af			;0333
 	push hl			;0334
 	push de			;0335
 	push bc			;0336
 
-	call sub_0324h		;0337 - Invert character at current
-				;	screen location
+	call sub_0324h		;0337 - (Un-)invert character at current
+				;	screen location (as cursor
+				;	highlight will move on
 
 	and 07fh		;033a - Mask off Bit 7
 	cp 060h			;033c - Is it < "£" symbol
 	jr c,l0342h		;033e   Jump forward, if so
 
-	add a,0e0h		;0340 - Values in 0x60 -- 0x7F are
-				;       shifted to 0x40 -- 0x5F (note
-				;       that Bit 7 of code already
-				;       masked off). This effectively
-				;       maps lower-case characters and
-				;       less common ASCII symbols into
-				;       upper-case letters and more
-				;       common symbols.
+	add a,0e0h		;0340 - Values in 0x60 -- 0x7F (i.e., £,
+				;       a, b, ..., z, ... are shifted to
+				;       0x40 -- 0x5F (note that Bit 7 of
+				;       code already masked off). This
+				;       effectively maps lower-case
+				;       characters and less common ASCII
+				;       symbols into upper-case letters
+				;       and more common symbols.
 
 l0342h:	cp 020h			;0342 - Is it >= " " (printable ASCII char)
 	jr nc,l0357h		;0344 - Jump forward if so
@@ -1029,7 +1041,7 @@ l0342h:	cp 020h			;0342 - Is it >= " " (printable ASCII char)
 	ld l,a			;034b
 	call sub_0365h		;034c - Call service routine 
 
-l034fh:	call INVERT_CUR_CHAR		;034f
+l034fh:	call INVERT_CUR_CHAR	;034f - Reinstate cursor inversion
 
 	pop bc			;0352
 	pop de			;0353
@@ -1040,10 +1052,10 @@ l034fh:	call INVERT_CUR_CHAR		;034f
 
 	;; Handle printable character (20--5F, with codes 60--7F shifted
 	;; down to 40--5F)
-l0357h:	add a,0e0h		;0357
+l0357h:	add a,0e0h		;0357 - Shift character code to 00--3F
 	call GET_SCR_POSN	;0359 - Get current screen location
 				;       (into HL)
-	xor (ix+006h)		;035c - ???
+	xor (ix+006h)		;035c - Apply cursor mask
 
 	ld (hl),a		;035f - Write character to screen
 
@@ -1107,7 +1119,7 @@ l03a3h:
 	push af			;03a6
 	add a,(ix+001h)		;03a7
 	ld (ix+003h),a		;03aa
-	call sub_02a4h		;03ad
+	call SCROLL_SCRN	;03ad
 	pop af			;03b0
 	ld (ix+003h),a		;03b1
 	ret			;03b4
@@ -1213,7 +1225,7 @@ l041dh:	call sub_03b5h		;041d
 	call sub_04cfh		;046b
 	ld a,00ch		;046e
 	call sub_04cfh		;0470
-	call sub_0333h		;0473
+	call SCR_PR_CHR		;0473
 
 l0476h:	pop hl			;0476
 
@@ -1247,65 +1259,83 @@ sub_048dh:
 
 
 	;; Possibly, print character
-
-	;; On entry, A = character to print
-l0493h:	push hl			;0493 - Save HL
+	;; 
+	;; On entry:
+	;;   A = character to print
+	;;
+	;; On exit:
+	;;   CF - reset = success ; set = nothing printed
+PRINT_A:
+	push hl			;0493 - Save HL
 	
-	ld hl,0fcbeh		;0494
-	cp 0x1F			;0497 - Check for Character 1F (which is
-				;       periodically inserted into KIB,
-				;       during periods of intactivity)
-	jr z,l04adh		;0499 - Jump forward if so
+	ld hl,FLAGS2		;0494
 
-	bit 0,(hl)		;049b   or if (FCBE)(0) is reset
-	jr z,l04adh		;049d
+	;; Check for special case of cursor flash (which is periodically
+	;; inserted into KIB, during periods of inactivity). Skip over
+	;; printer check, if so, as not needed.
+	cp 0x1F			; 
+	jr z,PA_CONT		; Jump forward if so, as not for
+				; printer
 
+	;; Check if printer is enabled, and jump forward if not
+	bit 0,(hl)		;049b 
+	jr z,PA_CONT		;049d
+
+	;; Send current character to printer
 	push hl			;049f
 	push af			;04a0
 
-	;; Push character ASCII code onto Parameter stacl
+	;; Push character ASCII code onto Parameter stack
 	ld l,a			;04a1
 	ld h,000h		;04a2
 	rst 8			;04a4
 
-	ld hl,(0fc74h)		;04a5
+	;; Send to printer
+	ld hl,(PRINT_DRVR)	;04a5
 	call jump_to_hl		;04a8
 
 	pop af			;04ab
 	pop hl			;04ac
 
-	;; Handle character 0x1F or (FCBE)(0) being reset At this point,
-	;; HL points to a routine, and A is character being handled
-l04adh:	bit 1,(hl)		;04ad - HL = FCBE / (FC74)
+	;; Skip screen printing, if FLAGS2(0)=1 or (FLAGS(2)=1 and not
+	;; handling cursor flash).
+
+	;; Handle character 0x1F or (FCBE)(0) being reset. At this point,
+	;; HL points to FLAGS2 and A is character being handled
+PA_CONT:
+	bit 1,(hl)		;04ad - HL = FLAGS2
 	jr nz,l04bch		;04af - Set carry flag and done
 
 	ld hl,FLAGS		;04b1
 	
-	cp 01eh			;04b4 Check for character 0x1E
-	jr z,l04bfh		;04b6
+	cp 0x1E			;04b4 Check for EDIT (character 0x1E)
+	jr z,PR_PRINT_A		;04b6 Jump forward, if so
 
-	bit 2,(hl)		;04b8
+	bit 2,(hl)		;04b8 - HL points to FLAGS
 	set 2,(hl)		;04ba
 
 l04bch:	scf			;04bc
 
-	jr nz,l04cdh		;04bd
+	jr nz,PA_DONE		;04bd
 
-	;; Check screen info ???
-l04bfh:	push ix			;04bf
+	;; Print character to current screen
+PR_PRINT_A:
+	push ix			;04bf
 
-	ld ix,SCR_INFO_CO	;04c1
-	call sub_0333h		;04c5
+	ld ix,SCR_INFO_CO	;04c1 - Retrieve info for command window
+	call SCR_PR_CHR		;04c5
 
 	pop ix			;04c8
 
-	or a			;04ca - Reset CF
+	or a			;04ca - CCF and FLAGS(2)=0
 	res 2,(hl)		;04cb
 
-l04cdh:	pop hl			;04cd - Restore HL
+PA_DONE:
+	pop hl			;04cd - Restore HL
 
 	ret			;04ce
 
+	
 	;; Handle keypress?
 	;; On entry, A contains ASCII code of key press
 sub_04cfh:
@@ -1314,17 +1344,20 @@ sub_04cfh:
 	bit 0,(hl)		;04d3
 	scf			;04d5
 	jr nz,l04e0h		;04d6 - Jump forward if editing mode
+
 	ld hl,(0fca8h)		;04d8 - Likely 0x08f8 - Add to keyboard
-				;       input buffer
+				;       input buffer ???
 	call jump_to_hl		;04db
 
 l04deh:	pop hl			;04de
+	
 	ret			;04df
 
 	;; Handle keypress in edit mode
-l04e0h:	bit 1,(hl)		;04e0
+l04e0h:	bit 1,(hl)		;04e0 - Check FLAGS(1)
 	set 1,(hl)		;04e2
 	jr nz,l04deh		;04e4
+	
 	push ix			;04e6
 	ld ix,SCR_INFO_ED	;04e8
 	cp 020h			;04ec - Check for printable character
@@ -1334,21 +1367,23 @@ l04e0h:	bit 1,(hl)		;04e0
 l04f3h:	res 1,(hl)		;04f3
 	pop ix			;04f5
 	or a			;04f7
-	jr l04deh		;04f8
+	jr l04deh		;04f8 - Done
 
-	;; Handle non-printable key presses
-l04fah:	cp 00dh			;04fa - Check for Enter
+	;; Handle control characters in EDIT mode
+l04fah:	cp 0x0D			;04fa - Check for Enter
 	jr nz,l0508h		;04fc   and jump forward if not
-	call sub_0333h		;04fe
+	call SCR_PR_CHR		;04fe
 	ld a,00ah		;0501
 
-l0503h:	call sub_0333h		;0503
+l0503h:	call SCR_PR_CHR		;0503
 	jr l04f3h		;0506
 
 l0508h:	cp 018h			;0508 - Check for Shift-Q (Compile Line)
 	jr nz,l0503h		;050a   and jump if not
+
 	call sub_0539h		;050c
-	jr l04f3h		;050f
+
+	jr l04f3h		;050f - Done
 
 sub_0511h:
 	push hl			;0511
@@ -1370,7 +1405,7 @@ sub_0511h:
 	call sub_036ah		;052b
 l052eh:	call INVERT_CUR_CHAR		;052e
 	pop af			;0531
-	call sub_0333h		;0532
+	call SCR_PR_CHR		;0532
 
 	pop bc			;0535
 	pop de			;0536
@@ -1379,7 +1414,7 @@ l052eh:	call INVERT_CUR_CHAR		;052e
 	ret			;0538
 
 
-	;; Compile line (editor mode)
+	;; Shift-Q -- Compile line (editor mode)
 sub_0539h:
 	push hl			;0539
 	push de			;053a
@@ -1466,40 +1501,64 @@ sub_05b5h:
 
 	;; Switch machine stack
 	;;
-	;; This means that the routine will not return to the calling
-	;; program, but the equivalent calling routine from the
-	;; alternate context
-sub_05bbh:
+	;; Husband Forth operates with two interoperating main loops (or
+	;; contexts), each with their own stack. This routine switches
+	;; between the two stacks.
+	;; 
+	;; NOTE: This means that the routine will not return to the
+	;; calling program, but the equivalent calling routine from the
+	;; alternate context. It will return to the calling routine only
+	;; if the context is switched again
+	;;
+	;; On entry:
+	;;   FLAGS - confirms reflects machine-stack status
+	;; 
+	;; On exit:
+	;;   All registers preserved (though not flags)	
+SWITCH_MSTACK:
+	;; Save registers
 	push hl			;05bb
 	push de			;05bc
 	push bc			;05bd
-	push ix		;05be
+	push ix			;05be
 
+	;; Stack change is controlled by two flags:
+	;; - FLAGS(4) confirms which stack is currently in use
+	;; - FLAGS(5) is used to lock out stack change (e.g., when
+	;;   changing the stack to prevent inconsistent state)
 	ld hl,FLAGS		;05c0
-	bit 5,(hl)		;05c3 - Check if need to change stack
-	jr nz,l05e5h		;05c5 - Jump forward if not
 
-	set 5,(hl)		;05c7 - Confirm stack changed
+	;; Check if stack change is locked out and exit, if so
+	bit 5,(hl)		;05c3
+	jr nz,SMS_EXIT		;05c5
+
+	;; Enable stack-change lock, in case an NMI or interrupt leads
+	;; to another stack change
+	set 5,(hl)		;05c7
 
 	;; Check which stack is in use and switch
 	bit 4,(hl)		;05c9
-	jr z,l05d9h		;05cb - Skip forward if Stack 0
+	jr z,SMS_01		;05cb - skip forward if Stack 0
 
 	;; Switch from Stack 1 to Stack 0
-	res 4,(hl)		;05cd
-	ld (PSTACK1),sp		;05cf
-	ld sp,(PSTACK0)		;05d3
+	res 4,(hl)		;05cd - confirm switch to Stack 0
+	ld (MSTACK1),sp		;05cf - Save Stack 1 pointer and switch
+	ld sp,(MSTACK0)		;05d3   in Stack 0 pointer
 
-	jr l05e3h		;05d7 - Skip forward
+	jr SMS_DONE		;05d7 - Skip forward
 
 	;; Switch from Stack 0 to Stack 1
-l05d9h:	set 4,(hl)		;05d9
-	ld (PSTACK0),sp		;05db
-	ld sp,(PSTACK1)		;05df
+SMS_01:	set 4,(hl)		;05d9 - confirm switch to Stack 1
+	ld (MSTACK0),sp		;05db - Save Stack 0 pointer and switch
+	ld sp,(MSTACK1)		;05df   in Stack 1 pointer
 
-l05e3h:	res 5,(hl)		;05e3
+	;; Remove stack-change lock
+SMS_DONE:
+	res 5,(hl)		;05e3
 
-l05e5h:	pop ix			;05e5
+	;; Restore registers and done
+SMS_EXIT:
+	pop ix			;05e5
 	pop bc			;05e7
 	pop de			;05e8
 	pop hl			;05e9
@@ -1510,22 +1569,23 @@ l05e5h:	pop ix			;05e5
 sub_05ebh:
 	ld hl,FLAGS		;05eb
 	res 4,(hl)		;05ee - Using Stack 0
-	res 5,(hl)		;05f0 - Stack switch ???
+	res 5,(hl)		;05f0 - Stack switch not in progress
 
-	ld hl,MAIN_LOOP		; Insert address of main loop at head (05f2)
+	ld hl,C1_MAIN_LOOP	; Insert address of main loop at
+				; head (05f2)
 	ld (STACK1_BASE),hl	; of Stack 1 as return address
 
 	ld hl,STACK1_BASE-8	; Set pointer to fourth word on
-	ld (PSTACK1),hl		; machine stack 1. Will balance
+	ld (MSTACK1),hl		; machine stack 1. Will balance
 				; the first time that we switch to
 				; machine stack 1
 
 	ret			;05fe
 
 	;; Handle most recent Keyboard Input Buffer Entry
-sub_05ffh:
+PARSE_KIB_ENTRY:
 	cp 01eh			;05ff
-	jp z,l0493h		;0601
+	jp z,PRINT_A		;0601
 	set 7,a			;0604 
 	push hl			;0606 - Save KIB offset
 
@@ -1537,7 +1597,7 @@ sub_05ffh:
 	bit 3,(hl)		;060e
 	set 3,(hl)		;0610
 	jr nz,l061eh		;0612
-	call sub_05bbh		;0614 - Change execution context
+	call SWITCH_MSTACK	;0614 - Change execution context
 	res 3,(hl)		;0617
 	or a			;0619
 	bit 7,a			;061a
@@ -1546,16 +1606,27 @@ l061eh:
 	scf			;061e
 l061fh:
 	pop hl			;061f
+
 	ret			;0620
 
 
-	;; Switch to Stack 1 (Editor Stack)
-sub_0621h:
-	ld a,(FLAGS)		; Check which machine stack is in use
+	;; Switch to Stack 1
+	;;
+	;; On entry:
+	;;   Carry significant ???
+	;;
+	;; On exit:
+	;;   Depends on what happens in Stack 1 context
+SWITCH_TO_MSTACK1:
+	ld a,(FLAGS)		; Check which machine stack is active
 	bit 4,a		
-	ret nz			; Nothing to do if Stack 1
+
+	ret nz			; Nothing to do if Stack 1 active
+
+	;; Know Stack 0 is active
 	sbc a,a			; A = 0, if carry clear, otherwise A = 0xFF
-	call sub_05bbh		; Switch stack
+
+	call SWITCH_MSTACK	; Switch stack
 	
 	ret			; 062b - Return once context has
 				; switched back to Execution Stack
@@ -1630,7 +1701,7 @@ PRINT_STRING:
 
 l065bh:	rst 20h			;065b - Retrieve next character from
 				;       Character Stack into A
-	call l0493h		;065c - GOT THIS FAR
+	call PRINT_A		;065c - GOT THIS FAR
 
 	dec l			;065f - Decrement counter and repeat,
 	jr nz,l065bh		;0660   if necessary
@@ -1744,9 +1815,9 @@ sub_06c9h:
 	push hl			;06c9
 	ld hl,l1d66h		;06ca
 	call PRINT_STR_HL		;06cd
-	call l0493h		;06d0
+	call PRINT_A		;06d0
 	ld a,020h		;06d3
-	call l0493h		;06d5
+	call PRINT_A		;06d5
 	pop hl			;06d8
 
 	ret			;06d9
@@ -1758,7 +1829,8 @@ sub_06dah:
 	pop hl			;06e1
 	ret			;06e2
 
-	
+
+	;; Possibly, parse word (number) from input buffer into HL
 sub_06e3h:
 	call sub_0782h		;06e3
 	ld a,055h		;06e6
@@ -1772,33 +1844,38 @@ sub_06f1h:
 	
 	ld hl,0fcbfh		;06f2
 	ld (hl),000h		;06f5
-l06f7h:	or a			;06f7 - Clear carry
-	
-	call sub_0621h		;06f8 - Switch to Editor Context -
-				;       return on keypress from editor
-				;       buffer
+
+l06f7h:	or a			;06f7 - Clear carry for next subroutine
+	call SWITCH_TO_MSTACK1	;06f8 - Activate Context 1
 
 	;; At this point, A contains most recent entry in KIB + 0x80
 	and 07fh		;06fb - Mask off bit 7
-	cp 01eh			;06fd - Check if ??? and branch if less than
-	jr c,l0717h		;06ff
-	call l0493h		;0701
-	cp 020h			;0704
+
+	cp 01eh			; Check if control character (other than
+	jr c,l0717h		; EDIT (1E) or FLASH (1F): branch if so
+
+	call PRINT_A		;0701 - Print character ???
+
+	cp 020h			;0704 - Check for SPACE ???
 	jr z,l070dh		;0706
-	call nc,sub_0737h		;0708
+	
+	call nc,sub_0737h	;0708
 	jr l06f7h		;070b
-l070dh:
-	ld a,(hl)			;070d
+
+l070dh:	ld a,(hl)		;070d
 	or a			;070e
 	jr z,l06f7h		;070f
-l0711h:
-	call PUSH_STRING		;0711
+
+l0711h:	call PUSH_STRING	;0711
+
 	pop hl			;0714
-	or a			;0715
+
+	or a			;0715 - Reset carry
+
 	ret			;0716
 
-l0717h:
-	cp 00dh		;0717
+	
+l0717h:	cp 00dh		;0717
 	jr nz,l0720h		;0719
 	call sub_062ch		;071b
 	jr l0711h		;071e
@@ -1808,7 +1885,7 @@ l0720h:
 	call sub_0737h		;0724
 	ld a,02eh		;0727
 l0729h:
-	call l0493h		;0729
+	call PRINT_A		;0729
 	jr l06f7h		;072c
 l072eh:
 	ld a,(hl)			;072e
@@ -2100,15 +2177,15 @@ sub_08c2h:
 	and 0c0h		;08cd
 	ld (hl),a			;08cf
 
-	ld hl,0fcbeh		;08d0
+	ld hl,FLAGS2		;08d0
 	ld a,(hl)			;08d3
 	and 0fch		;08d4
 	ld (hl),a			;08d6
 
 	ret			;08d7
 
-	;; Kernel of context 0 loop
-sub_08d8h:
+	;; Kernel of context 0 loop (???)
+C0_KERNEL:
 	call sub_06f1h		;08d8
 	rst 10h			;08db - Pop from stack into HL
 
@@ -2125,9 +2202,10 @@ l08e4h:	ld hl,0fca5h		;08e4
 	call nz,sub_066eh	;08eb
 	ret			;08ee
 
-l08efh:	call sub_0910h		;08ef
+	;;	
+l08efh:	call READ_FROM_KIB	;08ef
 	ret c			;08f2
-	call sub_05ffh		;08f3
+	call PARSE_KIB_ENTRY	;08f3
 	jr l08efh		;08f6
 
 	;; ================================================================
@@ -2195,7 +2273,7 @@ sub_08f8h:
 	;;   A -  current read offset in buffer
 	;;
 	;; ================================================================
-sub_0909h:
+CHECK_KIB:
 	ld hl,KIB_R_OFFSET	;0909 - Retrieve read-offset pointer
 	ld a,(hl)		;090c 
 	inc hl			;090d - Advance to write-offset pointer
@@ -2211,10 +2289,11 @@ sub_0909h:
 	;; On exit:
 	;;   CF - reset if value read, set otherwise
 	;;   A  - value read
-	;;
+	;;   HL - corrupted
 	;; ================================================================
-sub_0910h:
-	call sub_0909h		;0910 - Compare (FC7E) and (FC7F)
+READ_FROM_KIB:
+	call CHECK_KIB		;0910 - Compare KIB read-offset to
+				;write-offset, setting zero according
 
 	;; At this point, HL points to KIB_W_OFFSET and A contains
 	;; content of KIB_R_OFFSET
@@ -2234,6 +2313,7 @@ sub_0910h:
 
 	ret			;091d - Done
 
+	
 sub_091eh:
 	add a,090h		;091e
 	daa			;0920
@@ -2249,17 +2329,19 @@ sub_091eh:
 	;;   IY - current top of Parameter stack (as per usual)
 	;; 
 	;; On exit:
+	;;   DE, HL - corrupted
 	;;   CF - reset, if no underflow
 	;;   ERR - underflow
 	;; ================================================================
-sub_0925h:
-	ld hl,(0fc90h)		;0925 - Retrieve address of top of
+CHECK_PSTACK:
+	ld hl,(PSTACK_BASE)	;0925 - Retrieve address of top of
 				;       parameter stack
 	push iy			;0928 - Load current parameter stack location 
 l092ah:	pop de			;092a   into DE
 
 	or a			;092b - Subtract DE from HL 
 	sbc hl,de		;092c
+
 	ret nc			;092e - Return if DE <= HL -- that is,
 				;       not a stack underflow
 
@@ -2355,7 +2437,9 @@ l0970h:	ld (hl),a		;0970
 	ld (0fc76h),hl		;098e
 
 l0991h:	call sub_09cah		;0991 - check if ROM/ RAM in 2000--3FFF
-
+	;; im 1
+	;; db 0x00
+	
 	;; Display copyright message
 	ld hl,COPYRIGHT_MSG	;0994
 	call PRINT_STR_HL	;0997
@@ -2364,39 +2448,43 @@ l0991h:	call sub_09cah		;0991 - check if ROM/ RAM in 2000--3FFF
 	;; Warm restart
 	;; ============================================================
 	;; *** Somewhere in here, we check integrity of system variables
-l099ah:	ld sp,STACK0_BASE	; Reset machine-stack
+l099ah:	ld sp,STACK0_BASE	; Reset machine-stack (possibly
+				; redundant, as stack is reset as part
+				; of RST 00h ???)
 
 	ld hl,STACKC_BASE	;099d - Reset character-stack pointer
 	ld (PSTACKC),hl		;09a0
 
-	;; Initialise KIB (32-byte circular buffer at FB80--FCBF
+	;; Initialise KIB (32-byte circular buffer at FB80--FBBF
 	ld hl,08080h		;09a3 - Initial offset for both
 	ld (KIB_R_OFFSET),hl	;09a6   last-read and lastwrite offset
 
 l09a9h:	call sub_0934h		;09a9 - ???
-	call sub_05ebh		;09ac - Initialise some variables
+	call sub_05ebh		;09ac - Initialise two machine stacks
 	call sub_0765h		;09af - Initialise some variables
 	call sub_08c2h		;09b2 - Set/ reset some flags
 
-	ld iy,(0fc90h)		;09b5 - Reset parameter stack
+	ld iy,(PSTACK_BASE)	;09b5 - Reset parameter stack
 
-	ld a,01eh		;09b9
+	ld a,01eh		;09b9 - Not sure if this is necessary
 	ld i,a			;09bb
 	out (0feh),a		;09bd - Enable NMI, to start display
-				;       handling (Note AF' has not been
+				;       handling (Note AF' (used to
+				;       count NMI signals) has not been
 				;       set). Initially,
 				;       NEXT_DISP_ROUTINE is set to be
 				;       0x0098
 	
 	;; Check if system variables are corrupted (assumed if value at
-	;; FC40 is non-zero) ???
+	;; FC40 is non-zero, as is zeroed as part of cold restart)
 	ld a,(0fc40h)		;09bf
 	or a			;09c2 
 	jr nz,l0953h		;09c3 - Jump to cold restart, if corrupt
 
 	;; Main loop (Context 0 - Execution mode)
-l09c5h:	call sub_08d8h		;09c5
-	jr l09c5h		;09c8
+C0_MAIN_LOOP:
+	call C0_KERNEL		;09c5
+	jr C0_MAIN_LOOP		;09c8
 	
 	;; Check memory from 2000h--3FFFh
 sub_09cah:
@@ -2450,13 +2538,15 @@ sub_0a11h:
 	call l0750h		;0a16
 	jr l09f0h		;0a19
 
-	;; Main loop (Context 1 - System Editor)
-MAIN_LOOP:
-	call sub_0925h		;0a1b - Check for Parameter Stack underflow
-	call sub_0910h		;0a1e
-	call nc,sub_05ffh	;0a21 - Switch context, if new entry in
+	;; Main loop (Context 1 - ???)
+C1_MAIN_LOOP:
+	call CHECK_PSTACK	; Check for Parameter Stack underflow
+	call READ_FROM_KIB	; Read next value from KIB (carry set if none)
+
+	call nc,PARSE_KIB_ENTRY	;0a21 - Switch context, if new entry in
 				;       keyboard buffer (and if FLAG(3)
 				;       is set)
+
 	call sub_058ah		;0a24
 
 	ld hl,(0fc7ch)		;0a27
@@ -2465,7 +2555,7 @@ MAIN_LOOP:
 	ld hl,(0fc54h)		;0a2d
 	inc hl			;0a30
 	ld (0fc54h),hl		;0a31
-	jr MAIN_LOOP		;0a34
+	jr C1_MAIN_LOOP		;0a34
 
 sub_0a36h:
 	push hl			;0a36
@@ -3267,7 +3357,7 @@ l0e4ah:
 	pop de			;0e4a
 	pop hl			;0e4b
 	ret			;0e4c
-	ld bc,sub_0925h+2		;0e4d
+	ld bc,CHECK_PSTACK+2	;0e4d
 	nop			;0e50
 	call sub_06e3h		;0e51
 	rst 8			;0e54
@@ -3372,7 +3462,7 @@ l0ea2h:
 	nop			;0ed5
 	rst 10h			;0ed6
 	ld a,l			;0ed7
-	jp l0493h		;0ed8
+	jp PRINT_A		;0ed8
 	ld bc,l0c21h		;0edb
 	nop			;0ede
 	rst 10h			;0edf
@@ -3399,7 +3489,7 @@ sub_0eebh:
 	ld a,(bc)			;0ef5
 	nop			;0ef6
 	ld a,020h		;0ef7
-	jp l0493h		;0ef9
+	jp PRINT_A		;0ef9
 	rlca			;0efc
 	inc a			;0efd
 	ld b,d			;0efe
@@ -4151,7 +4241,7 @@ sub_1305h:
 	dec bc			;1328
 	nop			;1329
 	ld a,00ch		;132a
-	jp l0493h		;132c
+	jp PRINT_A		;132c
 	inc bc			;132f
 	ld b,c			;1330
 	ld b,d			;1331
@@ -4273,7 +4363,7 @@ l13b6h: rst 10h			;13b6
 	jp sub_036ah		;13ba
 
 	call sub_13d2h		;13bd
-	call sub_0909h		;13c0
+	call CHECK_KIB		;13c0
 	call z,sub_048dh	;13c3
 	call sub_18fah		;13c6
 	call sub_1036h		;13c9
@@ -4334,7 +4424,7 @@ sub_13d2h:
 	ex (sp),ix		;1422
 	rst 10h			;1424
 	ld a,l			;1425
-	call sub_0333h		;1426
+	call SCR_PR_CHR		;1426
 	pop ix			;1429
 	ret			;142b
 	ld (bc),a		;142c
@@ -4351,7 +4441,7 @@ sub_13d2h:
 	ld l,a			;143b
 
 l143ch:	rst 20h			;143c
-	call sub_0333h		;143d
+	call SCR_PR_CHR		;143d
 	dec l			;1440
 	jr nz,l143ch		;1441
 
@@ -4451,10 +4541,11 @@ l14beh:
 	call sub_14b3h		;14be
 	push de			;14c1
 	jp PUSH_STRING		;14c2
+
 sub_14c5h:
-	call sub_0621h		;14c5
+	call SWITCH_TO_MSTACK1	;14c5
 	and 07fh		;14c8
-	call l0493h		;14ca
+	call PRINT_A		;14ca
 	cp 01fh		;14cd
 	jr z,sub_14c5h		;14cf
 	ret			;14d1
@@ -5085,8 +5176,8 @@ l182bh:
 	nop			;1836
 l1837h:
 	ld a,01fh		;1837
-	call l0493h		;1839
-	call sub_0621h		;183c
+	call PRINT_A		;1839
+	call SWITCH_TO_MSTACK1	;183c
 	and 07fh		;183f
 	cp 01fh		;1841
 	jr z,l1837h		;1843
@@ -5697,20 +5788,20 @@ l1ba1h:
 	ex de,hl			;1ba7
 	rst 8			;1ba8
 	ret			;1ba9
-	dec b			;1baa
-	ld d,b			;1bab
-	ld d,d			;1bac
-	ld c,c			;1bad
-	ld c,(hl)			;1bae
-	ld d,h			;1baf
-	rrca			;1bb0
-	nop			;1bb1
+
+	;; FORTH word PRINT
+	db 0x05, 0x50, 0x52, 0x49, 0x4E, 0x54
+	db 0x0F, 0x00
+
 	call sub_06e3h		;1bb2
-	ld (0fc74h),hl		;1bb5
+	ld (PRINT_DRVR),hl	;1bb5
+
 	ret			;1bb8
+
+
 	ld bc,l0f4eh+2		;1bb9
 	nop			;1bbc
-	ld hl,0fcbeh		;1bbd
+	ld hl,FLAGS2		;1bbd
 	bit 0,(hl)		;1bc0
 	res 0,(hl)		;1bc2
 	ret nz			;1bc4
@@ -5723,6 +5814,8 @@ l1ba1h:
 	ld d,d			;1bcc
 	inc a			;1bcd
 	nop			;1bce
+
+	;; Default printer driver for Sinclair ZX Printer (or compatible)
 	push hl			;1bcf
 	rst 10h			;1bd0
 	ld a,l			;1bd1
@@ -5731,8 +5824,7 @@ l1ba1h:
 	cp 060h		;1bd7
 	jr c,l1bddh		;1bd9
 	add a,0e0h		;1bdb
-l1bddh:
-	cp 020h		;1bdd
+l1bddh:	cp 020h		;1bdd
 	jr nc,l1bf6h		;1bdf
 	cp 008h		;1be1
 	jr nz,l1bech		;1be3
@@ -5740,11 +5832,11 @@ l1bddh:
 	or (hl)			;1be6
 	jr z,l1beah		;1be7
 	dec (hl)			;1be9
-l1beah:
-	pop hl			;1bea
+l1beah:	pop hl			;1bea
+
 	ret			;1beb
-l1bech:
-	cp 00dh		;1bec
+
+l1bech:	cp 00dh		;1bec
 	jr z,l1beah		;1bee
 	cp 00ah		;1bf0
 	ld a,02eh		;1bf2
@@ -5789,7 +5881,7 @@ l1c1fh:
 l1c26h:
 	inc hl			;1c26
 	ex de,hl			;1c27
-	ld hl,(0fc90h)		;1c28
+	ld hl,(PSTACK_BASE)	;1c28
 	call sub_1c37h		;1c2b
 	pop hl			;1c2e
 	pop de			;1c2f
@@ -5814,7 +5906,7 @@ l1c3eh:
 	add hl,hl			;1c47
 	add hl,hl			;1c48
 	add hl,hl			;1c49
-	ld a,i		;1c4a
+	ld a,i			;1c4a
 	or h			;1c4c
 	ld h,a			;1c4d
 	ld a,c			;1c4e
