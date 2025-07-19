@@ -72,8 +72,8 @@
 
 	;; FCAD - FLAGS(Bit 0 ; Bit 4 -
 	;;        0 - Execution / Editor mode
-	;;        1 - 
-	;;        2 - Set when handling KIB
+	;;        1 - Set to prevent printing to editor window
+	;;        2 - Set to prevent printing to console
 	;;        4 - Machine stack in use (0/1)
 	;;        5 - Switch machine stack lock
 
@@ -109,6 +109,7 @@
 	;; FCC0--FCFF -- Character stack (wraps around)
 	;; FD00--FFFF - video RAM
 
+P_DFILE:	equ 0xFC6E
 PRINT_DRVR:	equ 0xFC74
 PSTACKC:	equ 0xFC84
 PSTACK_BASE:	equ 0xFc90
@@ -274,7 +275,7 @@ l0071h:	ld a,04ah		;0071 - 23h on 60 Hz version
 	ld bc,l1809h		;0077 - 24 rows and 8 scan lines +1
 	ld hl,DISP_BORDER	;007a - Set routine for other video handler
 	ld (NEXT_DISP_ROUTINE),hl		;007d 
-	ld hl,(0fc6eh)		;0080 - Possibly start of display file?
+	ld hl,(P_DFILE)		;0080 - Retrieve address if display file
 	ld a,0eah		;0083 - Set timer for display routine
 	halt			;0085 - Wait for interrupt (addr 0x0038)
 
@@ -759,20 +760,21 @@ sub_022dh:
 	
 	ret			;0240 - Done
 
-sub_0241h:
+	;; Retrieve address of current screen
+GET_SCR_ADDR:
 	push ix			;0241
 	push de			;0243
 
 	;; Update IX to point to current-location information for screen
-	ld de,l0002h		;0244
+	ld de,0x0002		;0244
 	add ix,de		;0247
 
 	;; Retrieve address of current screen into DE (preserving HL)
 	ex de,hl		;0249
-	ld hl,(0fc6eh)		;024a
+	ld hl,(P_DFILE)		;024a
 	ex de,hl		;024d
 
-	call sub_022dh		;024e - Retrieve offset into current screen
+	call sub_022dh		;024e - Retrieve offset of current screen
 	
 	add hl,de		;0251 - Work out address
 	
@@ -781,11 +783,17 @@ sub_0241h:
 
 	ret			;0255
 
-	;; Retrieve current screen location into HL
+	;; Retrieve address of current screen location into HL
+	;;
+	;; On entry:
+	;;   IX - points to screen information for current screen
+	;;
+	;; On exit:
+	;;   HL - points to start of screen
 GET_SCR_POSN:
 	push de			;0256 - Save DE
 
-	call sub_0241h		;0257 - Retrieve start of current screen
+	call GET_SCR_ADDR	;0257 - Retrieve start of current screen
 				;       into HL?
 	ex de,hl		;025a - Move to DE
 	call sub_022dh		;025b - Retrieve offset to current
@@ -844,7 +852,7 @@ INVERT_CUR_CHAR:
 	call GET_SCR_SIZE	;0283
 	ret c			;0286 - Return if zero screen
 	
-	call sub_0241h		;0287
+	call GET_SCR_ADDR		;0287
 
 	ld de,l0020h		;028a
 	ld a,(ix+007h)		;028d - Retrieve blank character for screen
@@ -870,7 +878,7 @@ SCROLL_SCRN:
 
 	call GET_SCR_SIZE	;02a7 - Retrieve screen size into BC
 	jr c,l02c2h		;02aa - Done if screen is negative sized
-	call sub_0241h		;02ac
+	call GET_SCR_ADDR		;02ac
 
 	ld de,l0020h		;02af - Set DE to width of display
 
@@ -898,57 +906,63 @@ l02c2h:	pop bc			;02c2
 	ret			;02c5
 
 	
-	push hl			;02c6
-	push de			;02c7
+	push hl			;02c6 - NB Don't think this is ever
+	push de			;02c7   executed
 	push bc			;02c8
 
 	;; Advance cursor to next row
-l02c9h:	call GET_SCR_SIZE	;02c9
-	jr c,l02dfh		;02cc - Skip forward if negative-sized screen
+LINE_FEED:
+	call GET_SCR_SIZE	;02c9
+	jr c,LF_DONE		;02cc - Skip forward if negative-sized screen
+				; NB: Could be jr c, AC_DONE
 
 	ld a,(ix+001h)		;02ce - Retrieve current row
 	inc a			;02d1 - Advance to next row
 	cp c			;02d2 - Compare to screen height
-	jr c,l02dch		;02d3 - Jump forward if not off bottom
+	jr c,LF_CONT		;02d3 - Jump forward if not off bottom
 				;       of screen
 
 	dec c			;02d5 - Set A to be last but one row
-	ld a,c			;02d6
+	ld a,c			;02d6   of screen
 
 	push af			;02d7
 
-	call SCROLL_SCRN		;02d8 - Scroll screen
+	call SCROLL_SCRN	;02d8 - Scroll screen
 
 	pop af			;02db
 
-l02dch:	ld (ix+001h),a		;02dc - Store new current row
+LF_CONT:
+	ld (ix+001h),a		;02dc - Store new current row
 
-l02dfh:	pop bc			;02df
+LF_DONE:
+	pop bc			;02df
 	pop de			;02e0
 	pop hl			;02e1
 
 	ret			;02e2
 
-sub_02e3h:
+	;; Advance current character position
+ADVANCE_CUR:
 	push hl			;02e3
 	push de			;02e4
 	push bc			;02e5
 
-	call GET_SCR_SIZE	;02e6
-	jr c,l02fbh		;02e9 - Done if zero-size screen
+	call GET_SCR_SIZE	;02e6 - BC = width/ height
+	jr c,AC_DONE		;02e9 - Done if zero-size screen
 	
 	ld a,(ix+000h)		;02eb - Get current column 
-	inc a			;02ee   Advance right
+	inc a			;02ee - Advance right
 	cp b			;02ef - Compare to screen width
 	jr c,l02f8h		;02f0 - Jump forward if not past end of screen
 	
 	call CR			;02f2 - Reset current column
 
-	jp l02c9h		;02f5 - Advance to next row and done
+	jp LINE_FEED		;02f5 - Advance to next row and done
 
 l02f8h:	ld (ix+000h),a		;02f8 - Store current column and done
 
-l02fbh:	pop bc			;02fb
+AC_DONE:
+	pop bc			;02fb
 	pop de			;02fc
 	pop hl			;02fd
 
@@ -986,7 +1000,7 @@ l0317h:	dec b			;0317
 	;; On exit:
 	;;   A  - (new) character code at current screen location
 	;;   All other registers preserved
-sub_0324h:
+SCR_INV_CUR:
 	push af			;0324
 	push hl			;0325
 
@@ -1008,21 +1022,32 @@ sub_0324h:
 	;; Print character to screen
 	;;
 	;; Handles both printable and non-printable characters
+	;;
+	;; On entry:
+	;;   IX - screen information
+	;;   A  - character to be printed
+	;; 
+	;; On exit:
+	;; 
 SCR_PR_CHR:
 	push af			;0333
 	push hl			;0334
 	push de			;0335
 	push bc			;0336
 
-	call sub_0324h		;0337 - (Un-)invert character at current
-				;	screen location (as cursor
-				;	highlight will move on
+	call SCR_INV_CUR		;0337 - (Un-)invert character at
+				;	current screen location (as
+				;	cursor highlight will move on)
 
-	and 07fh		;033a - Mask off Bit 7
-	cp 060h			;033c - Is it < "£" symbol
-	jr c,l0342h		;033e   Jump forward, if so
+	;; Convert character to 7-bit ASCII (lowercase letters replaced
+	;; by uppercase)
+	and 07fh		;033a - Mask off Bit 7 of character to
+				;       print
+	cp "`"			;033c - Is it < "£" symbol (same as
+				;       ASCII `)
+	jr c,SPC_CONT		;033e - Jump forward, if so
 
-	add a,0e0h		;0340 - Values in 0x60 -- 0x7F (i.e., £,
+	add a,"A"-"a"		;0340 - Values in 0x60 -- 0x7F (i.e., £,
 				;       a, b, ..., z, ... are shifted to
 				;       0x40 -- 0x5F (note that Bit 7 of
 				;       code already masked off). This
@@ -1031,17 +1056,20 @@ SCR_PR_CHR:
 				;       symbols into upper-case letters
 				;       and more common symbols.
 
-l0342h:	cp 020h			;0342 - Is it >= " " (printable ASCII char)
-	jr nc,l0357h		;0344 - Jump forward if so
+SPC_CONT:
+	cp " "			;0342 - Is it >= " " (printable
+					;ASCII char)
+	jr nc,SPC_PRINT_IT	;0344 - Jump forward if so
 
 	;; Special character (0--1F)
-	ld hl,l1cc0h		;0346 - Compute 1CC0+2*A, which is address
+	ld hl,SPECIAL_CHAR_TABLE ;0346 - Compute 1CC0+2*A, which is address
 	add a,a			;0349   of routine to handle keypress
 	add a,l			;034a
 	ld l,a			;034b
-	call sub_0365h		;034c - Call service routine 
+	call JP_ADDR_HL		;034c - Call service routine 
 
-l034fh:	call INVERT_CUR_CHAR	;034f - Reinstate cursor inversion
+SPC_DONE:
+	call INVERT_CUR_CHAR	;034f - Reinstate cursor inversion
 
 	pop bc			;0352
 	pop de			;0353
@@ -1052,51 +1080,83 @@ l034fh:	call INVERT_CUR_CHAR	;034f - Reinstate cursor inversion
 
 	;; Handle printable character (20--5F, with codes 60--7F shifted
 	;; down to 40--5F)
-l0357h:	add a,0e0h		;0357 - Shift character code to 00--3F
+SPC_PRINT_IT:
+	add a,0e0h		;0357 - Shift character code to 00--3F
 	call GET_SCR_POSN	;0359 - Get current screen location
 				;       (into HL)
 	xor (ix+006h)		;035c - Apply cursor mask
 
 	ld (hl),a		;035f - Write character to screen
 
-	call sub_02e3h		;0360
+	call ADVANCE_CUR	;0360 - Advance cursor
 
-	jr l034fh		;0363 - Done
+	jr SPC_DONE		;0363 - Done
 
-sub_0365h:
-	ld a,(hl)		;0365
+	;; Jump to address for to which HL points
+	;; 
+	;; On entry:
+	;;   HL - location of address
+	;;
+	;; On exit
+	;;   A corrupt
+	;;   HL = HL+1
+JP_ADDR_HL:ld a,(hl)		;0365
 	inc hl			;0366
 	ld h,(hl)		;0367
 	ld l,a			;0368
+
 	jp (hl)			;0369
 
+
+	;; Insert/ delete character into/ from editor screen at current
+	;; location
+	;;
+	;; On entry
+	;;   A - character to insert
+	;;   HL - current cursor position
+	;;   DE - next cursor position
+	;;   BC - length of row to right of cursor
+	;; 
 sub_036ah:
 	push hl			;036a
 	push de			;036b
 	push bc			;036c
 	push hl			;036d
+
+	;; Check if inserting/ deleting character
 	or a			;036e
 	sbc hl,de		;036f
-	jr nc,l037eh		;0371
-	ex de,hl			;0373
-	add hl,bc			;0374
-	ex de,hl			;0375
+	jr nc,l037eh		;0371 - Jump forward, if deleting
+
+	;; Find end of current line (and store in DE)
+	ex de,hl		;0373
+	add hl,bc		;0374
+	ex de,hl		;0375
+
+	;; Find last character to keep on line
 	pop hl			;0376
-	add hl,bc			;0377
+	add hl,bc		;0377
+
+	;; Shift tail of line right
 	dec hl			;0378
 	dec de			;0379
-	lddr		;037a
-	jr l0381h		;037c
-l037eh:
-	pop hl			;037e
-	ldir		;037f
-l0381h:
-	pop bc			;0381
+	lddr			;037a
+
+	jr l0381h		;037c - Done
+
+	;; Shift tail of line left
+l037eh:	pop hl			;037e
+
+	ldir			;037f
+
+l0381h:	pop bc			;0381
 	pop de			;0382
 	pop hl			;0383
+
 	ret			;0384
-	call GET_SCR_POSN		;0385
-	call GET_SCR_SIZE		;0388
+
+	call GET_SCR_POSN	;0385
+	call GET_SCR_SIZE	;0388
 	ld a,b			;038b
 	ld b,000h		;038c
 	sub (ix+000h)		;038e
@@ -1138,7 +1198,7 @@ sub_03bdh:
 	push af			;03c6
 	ld a,(ix+005h)		;03c7
 	ld (ix+003h),a		;03ca
-	call sub_0241h		;03cd
+	call GET_SCR_ADDR	;03cd
 	pop af			;03d0
 	ld (ix+003h),a		;03d1
 	ld de,0ffe0h		;03d4
@@ -1158,7 +1218,7 @@ sub_03eeh:
 	call CR		;03f2
 	call GET_SCR_POSN	;03f5
 	push hl			;03f8
-	ld hl,(0fc6eh)		;03f9
+	ld hl,(P_DFILE)		;03f9
 	ld de,l0200h		;03fc
 	add hl,de		;03ff
 
@@ -1189,7 +1249,7 @@ l0413h:	ld a,(hl)		;0413
 l041dh:	call sub_03b5h		;041d
 	ret z			;0420
 	call GET_SCR_SIZE		;0421
-	ld hl,(0fc6eh)		;0424
+	ld hl,(P_DFILE)		;0424
 	ld de,l0200h		;0427
 	add hl,de			;042a
 	call sub_0411h		;042b
@@ -1258,7 +1318,7 @@ sub_048dh:
 	jp (hl)			;0492
 
 
-	;; Possibly, print character
+	;; Print character (inc. control chars) to screen and printer
 	;; 
 	;; On entry:
 	;;   A = character to print
@@ -1297,28 +1357,30 @@ PRINT_A:
 	pop af			;04ab
 	pop hl			;04ac
 
-	;; Skip screen printing, if FLAGS2(0)=1 or (FLAGS(2)=1 and not
+	;; Skip screen printing, if FLAGS2(1)=1 or (FLAGS(2)=1 and not
 	;; handling cursor flash).
 
 	;; Handle character 0x1F or (FCBE)(0) being reset. At this point,
 	;; HL points to FLAGS2 and A is character being handled
 PA_CONT:
-	bit 1,(hl)		;04ad - HL = FLAGS2
-	jr nz,l04bch		;04af - Set carry flag and done
+	bit 1,(hl)		;04ad - If FLAGS2(1) is set, then do not
+	jr nz,PA_DONE_NP	;04af - print: Set carry flag and done
 
 	ld hl,FLAGS		;04b1
 	
 	cp 0x1E			;04b4 Check for EDIT (character 0x1E)
 	jr z,PR_PRINT_A		;04b6 Jump forward, if so
 
-	bit 2,(hl)		;04b8 - HL points to FLAGS
-	set 2,(hl)		;04ba
+	bit 2,(hl)		;04b8 - If FLAGS(2) is non-zero, then do
+				;not print
+	set 2,(hl)		;04ba   
 
-l04bch:	scf			;04bc
+PA_DONE_NP:
+	scf			;04bc
 
 	jr nz,PA_DONE		;04bd
 
-	;; Print character to current screen
+	;; Print character to console
 PR_PRINT_A:
 	push ix			;04bf
 
@@ -1327,8 +1389,8 @@ PR_PRINT_A:
 
 	pop ix			;04c8
 
-	or a			;04ca - CCF and FLAGS(2)=0
-	res 2,(hl)		;04cb
+	or a			;04ca - CCF and
+	res 2,(hl)		;04cb   FLAGS(2)=0
 
 PA_DONE:
 	pop hl			;04cd - Restore HL
@@ -1354,7 +1416,7 @@ l04deh:	pop hl			;04de
 	ret			;04df
 
 	;; Handle keypress in edit mode
-l04e0h:	bit 1,(hl)		;04e0 - Check FLAGS(1)
+l04e0h:	bit 1,(hl)		;04e0 - Check FLAGS(1) and skip printing if set
 	set 1,(hl)		;04e2
 	jr nz,l04deh		;04e4
 	
@@ -1385,17 +1447,18 @@ l0508h:	cp 018h			;0508 - Check for Shift-Q (Compile Line)
 
 	jr l04f3h		;050f - Done
 
+	;; Print character to editor window
 sub_0511h:
 	push hl			;0511
 	push de			;0512
 	push bc			;0513
 	push af			;0514
-	call sub_0324h		;0515
-	call GET_SCR_POSN		;0518
-	call GET_SCR_SIZE		;051b
-	ld a,b			;051e
+	call SCR_INV_CUR	;0515
+	call GET_SCR_POSN	;0518 - HL = screen position
+	call GET_SCR_SIZE	;051b - B = width ; C = height
+	ld a,b			;051e - Retrieve width
 	ld b,000h		;051f
-	sub (ix+000h)		;0521
+	sub (ix+000h)		;0521 - Current column value
 	dec a			;0524
 	ld c,a			;0525
 	jr z,l052eh		;0526
@@ -1419,7 +1482,7 @@ sub_0539h:
 	push hl			;0539
 	push de			;053a
 	push bc			;053b
-	call sub_0324h		;053c
+	call SCR_INV_CUR	;053c
 	call CR			;053f
 	call GET_SCR_POSN	;0542
 	call GET_SCR_SIZE	;0545
@@ -2433,7 +2496,7 @@ l0970h:	ld (hl),a		;0970
 	
 	ld hl,0bd00h		;0988 - By default, these variables
 				;       contain FD00
-	ld (0fc6eh),hl		;098b
+	ld (P_DFILE),hl		;098b
 	ld (0fc76h),hl		;098e
 
 l0991h:	call sub_09cah		;0991 - check if ROM/ RAM in 2000--3FFF
@@ -2912,10 +2975,12 @@ sub_0c13h:
 l0c21h:
 	ret			;0c21
 
+	;; Start of built-in FORTH dictionary.
+	;; 
 	;; Word check in https://github.com/monsonite/Z80_Forth/blob/master/h4th_source_2.asm
+
 	
 	;; Forth word ROT
-
 	inc bc			;0c22
 	ld d,d			;0c23
 	ld c,a			;0c24
@@ -3969,7 +4034,7 @@ l1190h:
 	add hl,hl			;11a1
 	ld de,011bah		;11a2
 	add hl,de			;11a5
-	jp sub_0365h		;11a6
+	jp JP_ADDR_HL		;11a6
 l11a9h:
 	pop hl			;11a9
 	pop hl			;11aa
@@ -4122,7 +4187,7 @@ l128bh:
 	jr nc,l12a0h		;1299
 	pop de			;129b
 	add hl,de			;129c
-	jp sub_0365h		;129d
+	jp JP_ADDR_HL		;129d
 l12a0h:
 	pop hl			;12a0
 	ret			;12a1
@@ -5762,7 +5827,7 @@ sub_1b70h:
 	ld b,(hl)			;1b87
 	dec c			;1b88
 	nop			;1b89
-	ld hl,0fc6eh		;1b8a
+	ld hl,P_DFILE		;1b8a
 	jp l1b0eh		;1b8d
 	inc b			;1b90
 	ld d,b			;1b91
@@ -5798,9 +5863,10 @@ l1ba1h:
 
 	ret			;1bb8
 
+	;; FORTH word P
+	db 0x01, 0x50
+	db 0x0F, 0x00
 
-	ld bc,l0f4eh+2		;1bb9
-	nop			;1bbc
 	ld hl,FLAGS2		;1bbd
 	bit 0,(hl)		;1bc0
 	res 0,(hl)		;1bc2
@@ -6003,7 +6069,8 @@ l1ca8h:
 
 	;; Jump table of 32 service routines, corresponding to special
 	;; key presses
-l1cc0h:	dw 0x0050		; 00 - No action, RET
+SPECIAL_CHAR_TABLE:
+	dw 0x0050		; 00 - No action, RET
 	dw 0x0297		; 01 - Home
 	dw 0x0050		; 02 - No action, RET
 	dw 0x0050		; 03 - No action, RET
