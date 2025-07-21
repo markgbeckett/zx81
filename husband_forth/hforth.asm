@@ -67,7 +67,7 @@
 	;; FC96 - MSTACK1: Pointer to machine-stack 1 (FC3E)
 	;; FC9A...FC9D/ FC9E...FCA1/FCA2...FCA5 are 4-byte buffers
 	;; FCA5 - Flags (Bit 0 - ; Bit 6 - tested at 0937 ; Bit 7 - set at 1071
-	;; FCAB - CUR_KEY
+	;; FCAB - POSSIBLE_KEY
 	;; FCAC - LAST_KEY
 
 	;; FCAD - FLAGS(Bit 0 ; Bit 4 -
@@ -115,6 +115,7 @@ PSTACKC:	equ 0xFC84
 PSTACK_BASE:	equ 0xFc90
 MSTACK0:	equ 0xFC94
 MSTACK1:	equ 0xFC96
+POSSIBLE_KEY:	equ 0xFCAB
 LAST_KEY:	equ 0xFCAC
 FLAGS:		equ 0xFCAD
 STACK0_BASE:	equ 0xFB80
@@ -167,7 +168,7 @@ l0010h:	ld l,(iy+000h)		;0010
 	jp l0201h		;001d
 
 
-	;; RST 20 - Pop from character stack into A
+	;; RST 20h - Pop from character stack into A
 l0020h:	push hl			;0020
 l0021h:	ld hl,PSTACKC		;0021
 	ld a,(hl)			;0024
@@ -175,14 +176,16 @@ l0021h:	ld hl,PSTACKC		;0021
 
 
 
-	jp 0200ah		;0028
+	;; RST 28h 
+	jp 0200ah		;0028 - Beyond end of standard ROM (possibly, floating-point handler?)
 	nop			;002b
 	nop			;002c
 	nop			;002d
 	nop			;002e
 	nop			;002f
 
-	jp 0200dh		;0030
+	;; RST 30h
+	jp 0200dh		;0030 - Beyond end of standard ROM (possibly, floating-point handler?)
 	nop			;0033
 	nop			;0034
 	nop			;0035
@@ -426,14 +429,13 @@ l00f6h:	djnz l00f6h		;00f6
 
 	;; At this point C points to key press (bit 6 indicates if shift
 	;; if pressed, and bit 7 indicates multiple key presses)
-l00fah:	ld hl,0fcabh		;00fa
+l00fah:	ld hl,POSSIBLE_KEY	;00fa
 
 	;; Check if no (real) keys pressed (that is, ignore Shift alone)
 	ld a,c			;00fd
 	and %10111111		;00fe - Mask off shift
 
 	;; *** End of VSYNC generation phase of display routine ***
-	
 l0100h:	out (0ffh),a		;0100 - Turn on HSYNC generator
 	out (0feh),a		;0102 - Turn off VSYNC generator and
 				;turn on NMI generator
@@ -441,20 +443,27 @@ l0100h:	out (0ffh),a		;0100 - Turn on HSYNC generator
 	jr nz,l0109h		;0104 - Jump forward if key other than
 				;       shift pressed
 
-	;; No real keys pressed, so set key-counter to zero and skip
+	;; No real keys pressed, so set LAST_KEY to zero and skip
 	;; forward
 	ld (hl),a		;0106
 	jr l0119h		;0107
 
-	;; For real key presses, need to check if enough
-l0109h:	ld a,c			;0109
-	bit 7,(hl)		;010a - Check ???
+	;; For real key presses, need to debounce
+l0109h:	ld a,c			;0109 - Retrieve keypress into A
+	bit 7,(hl)		;010a - Check if change of key detected on previous iteration
 	jr nz,l0119h		;010c   Jump forward if so
-	xor (hl)		;010e - Check if same key pressed
+
+	xor (hl)		;010e - Check if same key pressed as on previous iteration
 	jr z,l011eh		;010f   Jump forward if so
-	cp c			;0111 - Check if same key press???
-	jr nz,l0117h		;0112   Jump forward if not
-	ld (hl),c		;0114 - Store key press
+
+	cp c			;0111 - Check if first detection of new
+				;       key press, and no keypress on previous
+				;       iteraton
+
+	jr nz,l0117h		;0112 - Jump forward if different key from
+				;       that previously detected
+
+	ld (hl),c		;0114 - Otherwise, store key press
 	jr l0119h		;0115
 
 l0117h:	set 7,(hl)		;0117
@@ -462,20 +471,23 @@ l0117h:	set 7,(hl)		;0117
 	;; Multiple key presses
 l0119h:	dec hl			;0119
 	ld (hl),003h		;011a - Set countdown
-	jr l012eh		;011c
+	jr l012eh		;011c   and skip forward
 
-	;; Handle repeated key press
+	;; Handle key press
 l011eh:	dec hl			;011e
-	dec (hl)		;011f
-	ld a,(hl)		;0120
-	and 01fh		;0121
-	jr nz,l012eh		;0123
-	bit 5,(hl)		;0125
-	jr z,l012bh		;0127
+	dec (hl)		;011f - Decrement debounce counter
+	ld a,(hl)		;0120 
+	and %00011111		;0121 - Check lower five bits
+	jr nz,l012eh		;0123 - Jump forward if counter non-zero
+
+	;; Check if need to test for long keypress on Space (for Cold Restart)
+	bit 5,(hl)		;0125 - Is it Space key?
+	jr z,l012bh		;0127 
 	ld (hl),024h		;0129 - Related to long Break 
 
-l012bh:	inc hl			;012b
-	inc hl			;012c
+	;; Debounce counter is zero, so process key press
+l012bh:	inc hl			;012b - HL -> LASTKEY
+	inc hl			;012c - HL -> INKEY
 	ld (hl),c		;012d - Store keypress
 
 	;; Handle multitasking
@@ -619,6 +631,7 @@ l01dbh:	pop hl			;01db
 
 	;; Confirm now handled
 	set 7,(hl)		;01e4
+
 	push hl			;01e6
 
 	;; Retrieve ASCII character corresponding to keypress
@@ -637,8 +650,8 @@ l01dbh:	pop hl			;01db
 
 	pop hl			;01f8
 
-	jr nc,l01fdh		;01f9
-	res 7,(hl)		;01fb
+	jr nc,l01fdh		;01f9 - Skip forward, if key successfully processed
+	res 7,(hl)		;01fb - Otherwise, reset to try again next time
 
 l01fdh:	pop af			;01fd
 	pop bc			;01fe
