@@ -1,5 +1,5 @@
 	;; Stripped down version of the Husband Forth ROM, for the ZX81,
-	;; including only the code that is part of generation of the
+	;; including only the code that is used for generating the
 	;; display.
 	;;
 	;; This is done in part to help understand how it works and in
@@ -10,8 +10,58 @@
 	;;
 	;; Change log:
 	;;   24/JUL/25 - First implementation
-	
+	;;
+	;; Background notes on ZX81 display generation
+	;; 
+	;; On ZX80, bit 6 of keyboard port reads high if PAL (low if NTSC)
+	;; 
+	;; Video signal requirements (PAL), aiming to complete frame in
+	;; 20ms
+	;; 
+	;;   Vsync (every 20 mS (50 Hz) with duration of 384 us)
+	;;   Vsync is 6 lines (6*64us = 384us)
+	;;   Top and bottom borders have 56 lines (56*64*2 = 7,128us)
+	;;   Text area contains 24*8 = 192 lines (192*64 = 12,288um)
+	;;
+	;;   Total = 19.8ms, so worth increasing VSYNC duration
+	;; 
+	;; Video signal requirements (NTSC)
+	;;   Vsync is 6 lines
+	;;   Vsync (every 16.7 mS (60 Hz) with duration of 384 us)
+	;;   Top and bottom borders have 32 lines
+	;;   Text area contains 24*8 = 192 lines
+	;; 
+	;; Each scan line takes 64us (same for PAL and NTSC)
+	;;
+	;; When the Z80 is executing memory refresh cycle, the address
+	;; bus is populated with the address of a pixel from from the
+	;; character being printed, based on:
+	;;   A0--A2 - a 3-bit counter (for pixel row)
+	;;   A3--A8 - lower six bits of character code
+	;;   A9--A15 - lower seven bits of I register
+	;;
+	;; Hsync is triggered by the Z80 interrupt acknowledge, via a
+	;; series of three flip-flops, giving a 6us Hsync pulse.
+	;; 
+	;; Interacting with the display:
+	;;   OUT (FE),A - Enable NMI Generator (and enable HSync)
+	;;   OUT (FD),A - Disable NMI Generator
+	;;   IN A,(FE)  - Turn on Vsync
+	;;   OUT (??),A - Turn off Vsync
 
+	;; Profiling
+	;;
+	;; EightyOne has a built in profiler, which is very useful for
+	;; investigating the display code. I have included source code
+	;; labels that allow you to measure the duration of the VSync,
+	;; top border, and bottom border code, with labels VSYNC_ON,
+	;; VSYNC_OFF, TB_ON, TB_OFF, BB_ON, and BB_OFF.
+
+	;; Configuration options to allow you to adjust timings
+TOP_BORDER_LINES:	equ 52	; H_FORTH uses 4Ah (74d)
+BOT_BORDER_LINES:	equ 52	; H_FORTH uses 1Eh (30d)
+VSYNC_COUNTER:		equ 127 ; H_FORTH uses 60h (96d)
+	
 	;; Relevant system variables, related to display handling
 DBUFFER:		equ 0xF000 		; Location of display
 						; buffer
@@ -37,7 +87,7 @@ RST_00:	out (0xFD),a		; Disable NMI generator
 	;; Fill display buffer with asterisks
 	ld hl, DBUFFER
 	ld de, DBUFFER+1
-	ld (hl), "*"
+	ld (hl), 0x0A 		; Asterics
 	ld bc, 32*24-1
 	ldir
 
@@ -48,7 +98,7 @@ RST_00:	out (0xFD),a		; Disable NMI generator
 
 	out (0xFD),a		; Disable NMI Generator
 
-	ld a, 0x1E		; Not sure what this does as IM2
+	ld a, %00011110		; Not sure what this does as IM2
 	ld i,a			; not used, though I is used for upper
 				; byte of memory address during refresh
 				; cycle
@@ -87,27 +137,28 @@ MAIN_LOOP:
 	;;   On exit:
 	;;        Return address is dropped from stack, so returns to
 	;;        parent call (which will be main program)
-INT:	dec c			; Decrement scan-line counter
-	jr nz, I_NEXT_SCANLINE	; Skip forward if more scan lines to
+INT:	dec c			; (4) Decrement scan-line counter
+	jr nz, I_NEXT_SCANLINE	; (12/7) Skip forward if more scan lines to
 				; produce
 
-	pop hl			; Retrieve return address (next
+	pop hl			; (10) Retrieve return address (next
 				; character to execute in display
 				; buffer)
 
-	dec b			; Decrement row counter
+	dec b			; (4) Decrement row counter
 
-	ret z			; Exit, if done
+	ret z			; (12/7) Exit, if done
 
-	set 3,c			; Reset scan-line counter to 8
+	;; set 3,c		; (8) Reset scan-line counter to 8
+	ld c,8			; (7)
 
 	;;  Run display line
 I_EXEC_DISPLAY:
-	ld r,a			; Reset refresh counter
+	ld r,a			; (9) Reset refresh counter
 	ei			; Enable interrupts
 
-	nop			; Assume these are for timing purposes
-	nop
+	;; nop			; Assume these are for timing purposes
+	;; nop
 
 	jp (hl) 		; Execute next display line
 
@@ -116,8 +167,8 @@ I_NEXT_SCANLINE:
 				; re-run current row (address still in
 				; HL))
 
-	ret z			; Never satisfied, as always NZ, so
-				; assume this is timing-related
+	;; ret z			; Never satisfied, as always NZ, so
+	;; 			; assume this is timing-related
 
 	jr I_EXEC_DISPLAY	; Continue to execute display line
 
@@ -163,7 +214,8 @@ NMI_DONE: ; 0x006C
 	;; been exchanged, and HL has been stacked.
 RUN_DISPLAY:
 	;; Set up next display routine (bottom border)
-	ld a, 0x4A		; Set next NMI counter for bottom border
+	ld a, BOT_BORDER_LINES		; Set next NMI counter for
+					; bottom border
 	ex af, af'
 
 	ld hl, RUN_VSYNC	; Store address of next but one display
@@ -242,7 +294,7 @@ VSYNC_ON:
 	in a,(0xFE)		; (11) Turn on VSync
 
 	;; Set up next display routine (top border)
-	ld a, 0x1E		; (7) Set next NMI counter
+	ld a, TOP_BORDER_LINES	; (7) Set next NMI counter
 	ex af, af'		; (4)
 
 	ld hl, RUN_DISPLAY	; (10) Set next-but-one display step,
@@ -254,9 +306,11 @@ VSYNC_ON:
 	;;
 	;;  Timing routine for VSync (needs to be 1,300 - 48 =
 	;;  1,252). We have managed 8 + 13*(96-1) + 7 = 1,250
-	ld b, 0x60		; (7)
+	;;
+	;;  Better (than H Forth) would be 1,902 T states => 127 cycles
+	ld b, VSYNC_COUNTER	; (7) - was 60h
 VS_LOOP:
-	djnz VS_LOOP 		; (13/8)
+	djnz VS_LOOP	; (13/8)
 
 VSYNC_OFF:
 	out (0xFF),a		; (11) Disable VSync
@@ -270,3 +324,8 @@ TB_ON:	out (0xFE),a		; Enable NMI Generator (to initiate
 	;; In H Forth, routine services multi-tasking schedule, before
 	;; returning to calling program.
 	ret
+
+	ds 0x1E4F-$
+
+ASTERICX:
+	db 0x00, 0x00, 0x08, 0x2A, 0x1C, 0x2A, 0x08, 0x00
