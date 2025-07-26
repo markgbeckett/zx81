@@ -2,7 +2,7 @@
 	;; including only the code that is used for generating the
 	;; display.
 	;;
-	;; This is done in part to help understand how it works and in
+	;; I did this in part to help understand how it works and in
 	;; part to allow experiments and improvements to support for
 	;; Husband Forth on other Z80 systems.
 	;;
@@ -10,6 +10,7 @@
 	;;
 	;; Change log:
 	;;   24/JUL/25 - First implementation
+	;;   25/JUL/25 - Improved timing
 	;;
 	;; Background notes on ZX81 display generation
 	;; 
@@ -65,7 +66,7 @@ VSYNC_COUNTER:		equ 127 ; H_FORTH uses 60h (96d) / better 127
 	;; Relevant system variables, related to display handling
 DBUFFER:		equ 0xF000 		; Location of display
 						; buffer
-NEXT_DISP_ROUTINE: 	equ DBUFFER + 24*32 ; User to store address of
+NEXT_DISP_ROUTINE: 	equ DBUFFER + 24*32 ; Used to store address of
 					    ; next display routine, used
 					    ; at end of NMI-controlled
 					    ; border generation
@@ -75,6 +76,8 @@ P_DBUFFER: 		equ DBUFFER + 24*32 + 2	     ; Pointer to start
 	org 0x0000
 
 RST_00:	out (0xFD),a		; Disable NMI generator
+	im 1			; Set Interrupt Mode 1 (use routine at
+				; 38h)
 	ld sp, DBUFFER-2	; Set up stack
 
 	;; Note: Code seems to expect Maskable Interrupt Mode 1, though
@@ -155,7 +158,7 @@ I_EXEC_DISPLAY:
 	ld r,a			; (9) Reset refresh counter
 	ei			; (4) Enable interrupts and trigger HSync
 
-	;; nop			; (4) Assume these are for timing purposes
+	nop			; (4) Assume these are for timing purposes
 	;; nop                  ; (4)
 
 	jp (hl) 		; (4) Execute next display line
@@ -164,7 +167,7 @@ I_NEXT_SCANLINE:
 	pop de			; (10) Discard return address as we need
 				; to re-run current row (address still
 				; in HL))
-	ret z			; (5) Timing-related: this is never
+	;; 	ret z			; (5) Timing-related: this is never
 	 			; satisfied, so always adds 5 T states
 	 			; to the code to delay start of HSYNC
 
@@ -262,7 +265,7 @@ BB_ON:	out (0xFE),a		; Enable NMI Generator, to kick off
 RD_KERNEL:
 	ld r,a			; Set refresh counter
 
-	ld a, 0xDF		; Update start value for refresh counter
+	ld a, 0xDE		; Update start value for refresh counter
 				; based on time to execute a row of
 				; display (plus preamble).
 	
@@ -303,22 +306,21 @@ VSYNC_ON:
 	;;  1,304--1,310 T states. Here, we simply implement a wait
 	;;  loop.
 	;;
-	;;  Timing routine for VSync (needs to be 1,300 - 48 =
-	;;  1,252). We have managed 8 + 13*(96-1) + 7 = 1,250
-	;;
-	;;  Better (than H Forth) would be 1,902 T states => 127 cycles
-	ld b, VSYNC_COUNTER	; (7) - was 60h
+	;;  Timing routine for VSync (aiming for 1,712 - 59 =
+	;;  1,653). This an be done with 128 iterations (8 + 13*(127-1)
+	;;  + 7 = 1,653)
+	ld b, VSYNC_COUNTER	; (7) Set counter for delay loop
 VS_LOOP:
 	djnz VS_LOOP	; (13/8)
 
 VSYNC_OFF:
 	out (0xFF),a		; (11) Disable VSync
-TB_ON:	out (0xFE),a		; Enable NMI Generator (to initiate
+TB_ON:	out (0xFE),a		; (11) Enable NMI Generator (to initiate
 				; production of the top border of the
 				; display
 
 	;; Balance stack and done
-	pop hl
+	pop hl			; (10)
 
 	;; In H Forth, routine services multi-tasking schedule, before
 	;; returning to calling program.
