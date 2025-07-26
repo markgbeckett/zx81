@@ -58,9 +58,9 @@
 	;; VSYNC_OFF, TB_ON, TB_OFF, BB_ON, and BB_OFF.
 
 	;; Configuration options to allow you to adjust timings
-TOP_BORDER_LINES:	equ 52	; H_FORTH uses 4Ah (74d)
-BOT_BORDER_LINES:	equ 52	; H_FORTH uses 1Eh (30d)
-VSYNC_COUNTER:		equ 127 ; H_FORTH uses 60h (96d)
+TOP_BORDER_LINES:	equ 52	; H_FORTH uses 4Ah (30d) / better 52
+BOT_BORDER_LINES:	equ 52	; H_FORTH uses 1Eh (74d) / better 52
+VSYNC_COUNTER:		equ 127 ; H_FORTH uses 60h (96d) / better 127
 	
 	;; Relevant system variables, related to display handling
 DBUFFER:		equ 0xF000 		; Location of display
@@ -85,12 +85,8 @@ RST_00:	out (0xFD),a		; Disable NMI generator
 	ld (P_DBUFFER),hl
 	
 	;; Fill display buffer with asterisks
-	ld hl, DBUFFER
-	ld de, DBUFFER+1
-	ld (hl), 0x0A 		; Asterics
-	ld bc, 32*24-1
-	ldir
-
+	call INIT_DISP
+	
 	;; Check for shift (included from H Forth ROM, only becuase it
 	;; involves IN instruction)
 	ld a,0x7F		; Keyboard buffer read at 0x7FFE
@@ -147,30 +143,32 @@ INT:	dec c			; (4) Decrement scan-line counter
 
 	dec b			; (4) Decrement row counter
 
-	ret z			; (12/7) Exit, if done
+	ret z			; (11/5) Exit, if done
 
 	;; set 3,c		; (8) Reset scan-line counter to 8
 	ld c,8			; (7)
 
+	nop			; Padding
+	
 	;;  Run display line
 I_EXEC_DISPLAY:
 	ld r,a			; (9) Reset refresh counter
-	ei			; Enable interrupts
+	ei			; (4) Enable interrupts and trigger HSync
 
-	;; nop			; Assume these are for timing purposes
-	;; nop
+	;; nop			; (4) Assume these are for timing purposes
+	;; nop                  ; (4)
 
-	jp (hl) 		; Execute next display line
+	jp (hl) 		; (4) Execute next display line
 
 I_NEXT_SCANLINE:
-	pop de			; Discard return address as we need to
-				; re-run current row (address still in
-				; HL))
+	pop de			; (10) Discard return address as we need
+				; to re-run current row (address still
+				; in HL))
+	ret z			; (5) Timing-related: this is never
+	 			; satisfied, so always adds 5 T states
+	 			; to the code to delay start of HSYNC
 
-	;; ret z			; Never satisfied, as always NZ, so
-	;; 			; assume this is timing-related
-
-	jr I_EXEC_DISPLAY	; Continue to execute display line
+	jr I_EXEC_DISPLAY	; (12) Continue to execute display line
 
 	ds 0x0066-$		; Spacer to ensure NMI routine is
 				; located correctly
@@ -231,11 +229,12 @@ RUN_DISPLAY:
 				; (execution address in upper 32kB of
 				; memory)
 
-	ld a,0xEA		; User to set refresh register, so
-				; sufficient display-buffer cells
-				; executed before subsequent maskable
-				; interrupt signalled (when bit 6 of R
-				; register goes low)
+	ld a,0xE8		; Sets a pause before the main display
+				; starts to execute. User to set refresh
+				; register, so sufficient display-buffer
+				; cells executed before subsequent
+				; maskable interrupt signalled (when bit
+				; 6 of R register goes low)
 
 	halt			; Execute one more NMI cycle. Not sure
 				; why this happens: again, assume it is
@@ -263,7 +262,7 @@ BB_ON:	out (0xFE),a		; Enable NMI Generator, to kick off
 RD_KERNEL:
 	ld r,a			; Set refresh counter
 
-	ld a, 0xDD		; Update start value for refresh counter
+	ld a, 0xDF		; Update start value for refresh counter
 				; based on time to execute a row of
 				; display (plus preamble).
 	
@@ -325,7 +324,35 @@ TB_ON:	out (0xFE),a		; Enable NMI Generator (to initiate
 	;; returning to calling program.
 	ret
 
-	ds 0x1E4F-$
+INIT_DISP:
+	ld hl, DBUFFER
+	ld d, 0x10
+	ld bc, 32*24
 
-ASTERICX:
-	db 0x00, 0x00, 0x08, 0x2A, 0x1C, 0x2A, 0x08, 0x00
+IDLOOP:	ld (hl),d
+	inc hl
+
+	inc d
+	ld a,d
+	and 0x17
+	ld d,a
+	
+	dec bc
+	ld a,b
+	or c
+
+	jr nz, IDLOOP
+
+	ret
+	
+	ds 0x1E7F-$
+
+CHARSET:
+	db 0x00, 0x3C, 0x46, 0x4A, 0x52, 0x62, 0x3C, 0x00 ; 0
+	db 0x00, 0x04, 0x0C, 0x04, 0x04, 0x04, 0x0E, 0x00 ; 1
+	db 0x00, 0x3C, 0x42, 0x02, 0x3C, 0x40, 0x7E, 0x00 ; 2
+	db 0x00, 0x3C, 0x42, 0x04, 0x02, 0x42, 0x3C, 0x00 ; 3
+	db 0x00, 0x04, 0x0C, 0x14, 0x24, 0x7E, 0x04, 0x00 ; 4
+	db 0x00, 0x7E, 0x40, 0x7C, 0x02, 0x42, 0x3C, 0x00 ; 5
+	db 0x00, 0x3C, 0x40, 0x7C, 0x42, 0x42, 0x3C, 0x00 ; 6
+	db 0x00, 0x7E, 0x02, 0x04, 0x08, 0x10, 0x20, 0x00 ; 7
