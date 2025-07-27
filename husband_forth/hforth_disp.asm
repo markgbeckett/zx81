@@ -59,9 +59,9 @@
 	;; VSYNC_OFF, TB_ON, TB_OFF, BB_ON, and BB_OFF.
 
 	;; Configuration options to allow you to adjust timings
-TOP_BORDER_LINES:	equ 55	; H_FORTH uses 4Ah (30d) / better 52
-BOT_BORDER_LINES:	equ 55	; H_FORTH uses 1Eh (74d) / better 52
-VSYNC_COUNTER:		equ 124 ; H_FORTH uses 60h (96d) / better 127
+TOP_BORDER_LINES:	equ 54	; H_FORTH uses 4Ah (30d) / better 54
+BOT_BORDER_LINES:	equ 55	; H_FORTH uses 1Eh (74d) / better 55
+VSYNC_COUNTER:		equ 124 ; H_FORTH uses 60h (96d) / better 124
 	
 	;; Relevant system variables, related to display handling
 DBUFFER:		equ 0x7000 		; Location of display
