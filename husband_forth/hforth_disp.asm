@@ -59,18 +59,18 @@
 	;; VSYNC_OFF, TB_ON, TB_OFF, BB_ON, and BB_OFF.
 
 	;; Configuration options to allow you to adjust timings
-TOP_BORDER_LINES:	equ 52	; H_FORTH uses 4Ah (30d) / better 52
-BOT_BORDER_LINES:	equ 52	; H_FORTH uses 1Eh (74d) / better 52
-VSYNC_COUNTER:		equ 127 ; H_FORTH uses 60h (96d) / better 127
+TOP_BORDER_LINES:	equ 55	; H_FORTH uses 4Ah (30d) / better 52
+BOT_BORDER_LINES:	equ 55	; H_FORTH uses 1Eh (74d) / better 52
+VSYNC_COUNTER:		equ 124 ; H_FORTH uses 60h (96d) / better 127
 	
 	;; Relevant system variables, related to display handling
-DBUFFER:		equ 0xF000 		; Location of display
+DBUFFER:		equ 0x7000 		; Location of display
 						; buffer
-NEXT_DISP_ROUTINE: 	equ DBUFFER + 24*32 ; Used to store address of
+NEXT_DISP_ROUTINE: 	equ DBUFFER + 24*33 ; Used to store address of
 					    ; next display routine, used
 					    ; at end of NMI-controlled
 					    ; border generation
-P_DBUFFER: 		equ DBUFFER + 24*32 + 2	     ; Pointer to start
+P_DBUFFER: 		equ DBUFFER + 24*33 + 2	     ; Pointer to start
 						     ; of display buffer
 
 	org 0x0000
@@ -136,8 +136,9 @@ MAIN_LOOP:
 	;;   On exit:
 	;;        Return address is dropped from stack, so returns to
 	;;        parent call (which will be main program)
+	;;  Scan line needs to be around 208 T states, including 6 for Hsync, 128 for 32 NOP statements and left and right borders.
 INT:	dec c			; (4) Decrement scan-line counter
-	jr nz, I_NEXT_SCANLINE	; (12/7) Skip forward if more scan lines to
+	jp nz, I_NEXT_SCANLINE	; (10) Skip forward if more scan lines to
 				; produce
 
 	pop hl			; (10) Retrieve return address (next
@@ -148,18 +149,12 @@ INT:	dec c			; (4) Decrement scan-line counter
 
 	ret z			; (11/5) Exit, if done
 
-	;; set 3,c		; (8) Reset scan-line counter to 8
-	ld c,8			; (7)
+	set 3,c			; (7) Reset scan-line counter to 8
 
-	nop			; Padding
-	
 	;;  Run display line
 I_EXEC_DISPLAY:
 	ld r,a			; (9) Reset refresh counter
 	ei			; (4) Enable interrupts and trigger HSync
-
-	nop			; (4) Assume these are for timing purposes
-	;; nop                  ; (4)
 
 	jp (hl) 		; (4) Execute next display line
 
@@ -167,12 +162,13 @@ I_NEXT_SCANLINE:
 	pop de			; (10) Discard return address as we need
 				; to re-run current row (address still
 				; in HL))
-	;; 	ret z			; (5) Timing-related: this is never
+	
+	ret z			; (4) Timing-related: this is never
 	 			; satisfied, so always adds 5 T states
 	 			; to the code to delay start of HSYNC
 
 	jr I_EXEC_DISPLAY	; (12) Continue to execute display line
-
+	
 	ds 0x0066-$		; Spacer to ensure NMI routine is
 				; located correctly
 
@@ -231,8 +227,9 @@ RUN_DISPLAY:
 	ld hl,(P_DBUFFER)	; Point to start of display buffer
 				; (execution address in upper 32kB of
 				; memory)
-
-	ld a,0xE8		; Sets a pause before the main display
+	set 7,h			; Switch address to upper memory
+	
+	ld a,0xEA		; Sets a pause before the main display
 				; starts to execute. User to set refresh
 				; register, so sufficient display-buffer
 				; cells executed before subsequent
@@ -243,38 +240,38 @@ RUN_DISPLAY:
 				; why this happens: again, assume it is
 				; timing related
 
-TB_OFF:	out (0xFD),a		; Disable NMI Generator
+TB_OFF:	out (0xFD),a		; (11) Disable NMI Generator
 
-	call RD_KERNEL		; Run display
+	call RD_KERNEL		; (17) Run display
 
-BB_ON:	out (0xFE),a		; Enable NMI Generator, to kick off
+BB_ON:	out (0xFE),a		; (11) Enable NMI Generator, to kick off
 				; generation of bottom border
 
 	;; Restore registers (including HL, which was stacking in NMI
 	;; routine)
-	pop de
-	pop bc
-	pop af
+	pop de			; (10)
+	pop bc			; (10)
+	pop af			; (10)
 
-	pop hl
+	pop hl			; (10)
 
-	ret			; Return to main program: display
+	ret			; (10) Return to main program: display
 				; generation will continue, when next
 				; NMI pulse is generated.
 
 RD_KERNEL:
-	ld r,a			; Set refresh counter
+	ld r,a			; (9) Set refresh counter
 
-	ld a, 0xDE		; Update start value for refresh counter
+	ld a, 0xDD		; (7) Update start value for refresh counter
 				; based on time to execute a row of
-				; display (plus preamble).
+				; display (plus preamble). Value of DC adds one more cycle at the end of the row.
 	
-	ei			; Enable maskable interrupt (will be
+	ei			; (4) Enable maskable interrupt (will be
 				; triggered when bit 6 of R register
 				; drops low) starting production of main
 				; part of display.
 
-	halt			; Wait for maskable interrupt. Note, the
+	halt			; (4) Wait for maskable interrupt. Note, the
 				; code never returns from the maskable
 				; interrupt. It returns to the calling
 				; program (by dropping the first return
@@ -283,8 +280,8 @@ RD_KERNEL:
 
 	;; Continuation of NMI cycle when bottom border has been
 	;; generated. This code segment produces VSync signal for around
-	;; 400 microseconds while (for real H Forth code) reading
-	;; keyboard.
+	;; 640 microseconds (1,664 T-states) while (for real H Forth
+	;; code) reading keyboard.
 	;;
 	;; Note NMI Generator still active at this point, A and A' have
 	;; been exchanged, and HL has been stacked.
@@ -306,9 +303,9 @@ VSYNC_ON:
 	;;  1,304--1,310 T states. Here, we simply implement a wait
 	;;  loop.
 	;;
-	;;  Timing routine for VSync (aiming for 1,712 - 59 =
-	;;  1,653). This an be done with 128 iterations (8 + 13*(127-1)
-	;;  + 7 = 1,653)
+	;;  Timing routine for VSync (aiming for 1,664 - 48 =
+	;;  1,616). This an be done with 124 iterations (8 + 13*(124-1)
+	;;  + 7 = 1,014)
 	ld b, VSYNC_COUNTER	; (7) Set counter for delay loop
 VS_LOOP:
 	djnz VS_LOOP	; (13/8)
@@ -329,9 +326,11 @@ TB_ON:	out (0xFE),a		; (11) Enable NMI Generator (to initiate
 INIT_DISP:
 	ld hl, DBUFFER
 	ld d, 0x10
-	ld bc, 32*24
+	ld c,24
+IDLOOP:	ld b,32
 
-IDLOOP:	ld (hl),d
+IDLOOP2:
+	ld (hl),d
 	inc hl
 
 	inc d
@@ -339,15 +338,18 @@ IDLOOP:	ld (hl),d
 	and 0x17
 	ld d,a
 	
-	dec bc
-	ld a,b
-	or c
+	djnz IDLOOP2
+	
+	ld a,0x76		; HALT
+	ld (hl),a
+	inc hl
 
+	dec c
 	jr nz, IDLOOP
 
 	ret
 	
-	ds 0x1E7F-$
+	ds 0x1E80-$
 
 CHARSET:
 	db 0x00, 0x3C, 0x46, 0x4A, 0x52, 0x62, 0x3C, 0x00 ; 0
