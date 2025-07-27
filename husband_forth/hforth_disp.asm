@@ -136,10 +136,14 @@ MAIN_LOOP:
 	;;   On exit:
 	;;        Return address is dropped from stack, so returns to
 	;;        parent call (which will be main program)
-	;;  Scan line needs to be around 208 T states, including 6 for Hsync, 128 for 32 NOP statements and left and right borders.
+	;; 
+	;;  Scan line needs to be around 208 T states, including 6 for
+	;;  Hsync, 128 for 32 NOP statements and left and right borders.
 INT:	dec c			; (4) Decrement scan-line counter
-	jp nz, I_NEXT_SCANLINE	; (10) Skip forward if more scan lines to
-				; produce
+	jp nz, I_NEXT_SCANLINE	; (10) Skip forward if more scan lines
+				; to produce (Use JP to ensure
+				; consistent timing with/ without a
+				; branch)
 
 	pop hl			; (10) Retrieve return address (next
 				; character to execute in display
@@ -163,7 +167,7 @@ I_NEXT_SCANLINE:
 				; to re-run current row (address still
 				; in HL))
 	
-	ret z			; (4) Timing-related: this is never
+	ret z			; (5) Timing-related: this is never
 	 			; satisfied, so always adds 5 T states
 	 			; to the code to delay start of HSYNC
 
@@ -230,19 +234,19 @@ RUN_DISPLAY:
 	set 7,h			; Switch address to upper memory
 	
 	ld a,0xEA		; Sets a pause before the main display
-				; starts to execute. User to set refresh
-				; register, so sufficient display-buffer
-				; cells executed before subsequent
-				; maskable interrupt signalled (when bit
-				; 6 of R register goes low)
+				; starts to execute. Used to set refresh
+				; register on first iteration of main
+				; loop in RD_KERNEL, for first maskable
+				; interrupt. Tends to affect left-right
+				; alignment of text.
 
-	halt			; Execute one more NMI cycle. Not sure
+	halt			; Execute one more NMI. Not sure
 				; why this happens: again, assume it is
-				; timing related
+				; timing related.
 
 TB_OFF:	out (0xFD),a		; (11) Disable NMI Generator
 
-	call RD_KERNEL		; (17) Run display
+	call RD_KERNEL		; (17) Run display buffer.
 
 BB_ON:	out (0xFE),a		; (11) Enable NMI Generator, to kick off
 				; generation of bottom border
