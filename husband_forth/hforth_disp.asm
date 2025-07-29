@@ -59,8 +59,8 @@
 	;; VSYNC_OFF, TB_ON, TB_OFF, BB_ON, and BB_OFF.
 
 	;; Configuration options to allow you to adjust timings
-TOP_BORDER_LINES:	equ 54	; H_FORTH uses 4Ah (30d) / better 54
-BOT_BORDER_LINES:	equ 55	; H_FORTH uses 1Eh (74d) / better 55
+TOP_BORDER_LINES:	equ 54	; H_FORTH uses 1Eh (30d) / better 54
+BOT_BORDER_LINES:	equ 55	; H_FORTH uses 4Ah (74d) / better 55
 VSYNC_COUNTER:		equ 124 ; H_FORTH uses 60h (96d) / better 124
 	
 	;; Relevant system variables, related to display handling
@@ -114,8 +114,7 @@ RST_00:	out (0xFD),a		; Disable NMI generator
 				; first proper display frame.
 
 	;; Dummy loop which will simply run an infinite loop
-MAIN_LOOP:
-	jr MAIN_LOOP
+	jp MAIN
 	
 	ds 0x0038-$		; Padding, so maskable interrupt routine
 				; is located correctly for IM1
@@ -300,6 +299,10 @@ VSYNC_ON:
 	ld a, TOP_BORDER_LINES	; (7) Set next NMI counter
 	ex af, af'		; (4)
 
+	push de			; (11)
+	push bc			; (11) 00a5
+	push af			; (11) 00a6
+
 	ld hl, RUN_DISPLAY	; (10) Set next-but-one display step,
 	ld (NEXT_DISP_ROUTINE),hl ; (16) which is main display
 
@@ -321,6 +324,9 @@ TB_ON:	out (0xFE),a		; (11) Enable NMI Generator (to initiate
 				; display
 
 	;; Balance stack and done
+	pop af
+	pop bc
+	pop de
 	pop hl			; (10)
 
 	;; In H Forth, routine services multi-tasking schedule, before
@@ -352,8 +358,32 @@ IDLOOP2:
 	jr nz, IDLOOP
 
 	ret
+
+	;; Main loop (foreground program) scrolls the screen from right
+	;; to left continuously
+MAIN:	ld bc, 0x2018		; 32 columns and 24 rows
+	ld hl, (P_DBUFFER)	; Start of display buffer
+
+LOOP:	ld a,(hl)		; Cycle character through 0, 1, ..., 7
+	inc a
+	and 0x17
+	ld (hl),a
+
+	inc hl			; Next character
+
+	djnz LOOP		; Repeat for rest of row
+
+	inc hl			; Skip HALT at end of row
+
+	ld b, 0x20		; Reset column count (for next row)
+
+	dec c			; Check if more rows to update
+	jr nz, LOOP
 	
-	ds 0x1E80-$
+	jr MAIN			; Repeat
+
+	
+	ds 0x1E80-$		; Spacer
 
 CHARSET:
 	db 0x00, 0x3C, 0x46, 0x4A, 0x52, 0x62, 0x3C, 0x00 ; 0
