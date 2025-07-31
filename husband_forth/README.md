@@ -16,29 +16,37 @@ However, my investigations to date have identified a number of issues that seem 
 
 ## Husband Forth Display Handling
 
-Building on its predecessor, the ZX81 relied on the Z80 CPU (with some custom electronics) to generate a display. This made the ZX81 very low cost, but also meant that the ZX81 potentially spent much (in fact, up to 80%) of its time producing a display, rather than running user programs.
+The ZX81 produces a PAL-compatible display signal. It's sibling, the Timex Simclair 1000, which was sold in North America produced an NTSC-compatible display. The two standards are very similar, but with different timings. Here I am looking at the PAL system, though these notes are relevant to NTSC with specific timings adjusted appropriately.
+
+The official [PAL display format](https://martin.hinner.info/vga/pal.html) consists of 625 lines and is updated 25 times per second. Each frame is transmitted as two fields of 312.5 scan lines, and pairs of fields are interlaced to produce picture with less flicker. Not every scanline is visible: a small number are used for frame synchronisation to ensure the display is stable.
+
+The first component of frame synchronisation, generated at the beginning of each field, is called the Vsync. Its length alternates between 7 and 8 scanlines (448 and 512 us), which provides the interlacing effort. Following the Vsync pulse, a series of 64us scanlines follows, containing the visible part of the display. However, not all 64us of each horizontal scanline contains picture data: the first 12us is used for a horizontal pulse (4us) and backporch signal (8us) which helps align the line and callibrate the brightness.
+
+Instead of an interlaced 625-line signal, the ZX81 is designed to produce a simplified field of around 312 lines at a rate of 50 Hz (20ms/ field), with a consistent Vsync pulse to prevent interlacing. From now on, we will refer to the fields produced by the ZX81 as frames.
+
+Building on its predecessor, the ZX81 relied heavily on the Z80 CPU (with some help from custom electronics) to generate the display signal. This made the ZX81 very low cost, but also meant that the micro potentially spent much (in fact, up to 80%) of its time producing a display, rather than running user programs.
 
 Husband Forth uses very similar code to the ZX81 8K BASIC ROM for creating the display, though with some differences. A good explanation of how the ZX81 generates its display is provided on the [Tynemouth Software blog](http://blog.tynemouthsoftware.co.uk/2023/10/how-the-zx81-generates-video.html). Here I summarise how Husband Forth generates a display, though only going into detail on the differences from the ZX81 display.
 
 Both Husband Forth and ZX81 8K BASIC generate the display in four phases:
 
-* A Vsync is produced to initiate the start of a new frame. This is a fixed-length signal during which Husband Forth scans the keyboard and does some initial processing of key presses.
+* A constant-length Vsync signal is produced to initiate the start of a new frame. 
 
-* A top border is produced, using the NMI mechanism to allow the Forth monitor to be run, with perioidic interruptions for creating each scan line in the border.
+* A top border, consisting of blank scanlines, is produced, using the NMI mechanism to allow the Forth monitor to be run with periodic interruptions for creating each scan line in the border.
 
 * The main display (where text is shown) is produced by "executing" the display and relying on a clever configuration of the ZX81 hardware to turn this into a valid display signal.
 
-* The bottom border is generated, again using the NMI mechanism to the Forth monitor to be run.
+* The bottom border is generated, again using the NMI mechanism and allowing the Forth monitor code to make progress.
 
-As you can see, most of the Forth monitor code runs during the top- and bottom- border generation, with specific keyboard-scanning operations hidden inside the VSync stage.
+As you can see, most of the Forth monitor code runs during the top- and bottom- border generation, though there is also some keyboard-scanning code hidden inside the VSync stage, as we will describe below.
 
 ### Border Generation
 
 The top and bottom borders of the display are generated via the Z80's NMI support. On the ZX81, when active, an NMI pulse is generated every 64 microseconds (the length of time to produce a scan line on a PAL display). The NMI routine in Husband Forth (at address 0x066h) simply decrements a counter and, unless it reaches zero, returns to the previously running routine. The counter is held in the A' register, which is initiated to the desired number of scanlines for the border.
 
-Slightly unusually, a standard `ret` instruction is used to exit the NMI routine (wheras, more normally, a `retn` would be used). Using `ret` means the previousstate of the maskable interrupt will be lost and the maskable interrupts will always be disabled.
+When the counter reaches zero, the border has been produced, so the computer moves on to the next phase of the display (either producing the Vsync, after the bottom border is produced, or producing the main display after the top border is produced). This is done by jumping to a routine whose address has been previously stored in memory -- either the start of a Vsync or main-display routine.
 
-When the counter reaches zero, the border has been produced, so the computer moves onto the next phase of the display (either producing the Vsync, after the bottom border is produced, or producing the main display after the top border is produced). This is done by jumping to a routine whose address is stored in memory -- either the start of a Vsync or main-display routine.
+The kernel of the NMI routine to generate the top and bottom borders is reproduced below.
 
 ```
 NMI:	ex af, af'		; Retrieve and decrement cycle counter
@@ -51,7 +59,7 @@ NMI:	ex af, af'		; Retrieve and decrement cycle counter
 
 	ret			; ... return to calling program, with
 				; maskable interrupt disabled (that is,
-				; not using RETN here.
+				; not using RETN here)
 
 NMI_DONE: ; 0x006C
 	push hl 		; Save register
@@ -60,18 +68,17 @@ NMI_DONE: ; 0x006C
 	jp (hl)			  ; RUN_VSYNC or RUN_DISPLAY)
 ```
 
-By default, Husband Forth sets the top border to have 30 lines and the bottom border to have 74 lines, so the main screen is not centred vertically.
+Slightly unusually, a standard `ret` instruction is used to exit the NMI routine (wheras, more normally, a `retn` would be used). Using `ret` means the previousstate of the maskable interrupt is lost and the maskable interrupts is always be disabled.
 
+By default, Husband Forth sets the top border to have 31 lines and the bottom border to have 74 lines, so the main screen is not centred vertically.
 
 ## Vsync Generation
 
-Generation of the Vsync signal is relatively straightforward (via the ZX81's built-in ULA). One can turn on Vsync from software using `in (0xFE),a` and turn off Vsync using `out (<any_address>),a`.
+The Vsync signal is controlled by the ZX81s ULA. The Vsync signal is turned on, from software, using `in (0xFE),a` and turned off using `out (<any_address>),a`. Other than activating and deactivating the signal, the Z80 has little to do during this phase. However, the Z80 is responsible for getting the timing right and on both ZX81 BASIC and Husband Forth, the time between the start and end of the Vsync signal is used to do something useful: to scan the keyboard. To work, the code to scan the keyboard has to take a fixed amount of time.
 
-The Vsync routine in Husband Forth (starting at address 0x98h) first disables the NMI signal, then activates the Vsync signal.
+The Vsync routine in Husband Forth (starting at address 0x98h) first disables the NMI signal, then activates the Vsync signal. It them proceeds with a carefully timed sequence of instructions that, first of all, sets up the NMI paramaters (initial value of A' and NEXT_DISPLAY_ROUTINE) for the top border and then reads the keyboard. The combined sequence of actions takes 1,304--1,312 T states (about 402ms or 6 scanlines). This is a little shorter than te ideal Vsync of 7--8 scanlines.
 
-It them proceeds with a carefully timed sequence of instructions that, first of all, sets up the NMI paramaters (initial value of A' and NEXT_DISPLAY_ROUTINE) for the top border and then reads the keyboard. The keyboard reading routine is configured to be relatively constant in length. Combining this with the setup steps for the next NMI cycle, gives a Vsync time of 1,304--1,312 T states, depending on whether a key is pressed or not.
-
-After the Vsync signal is deactivated, the NMI signal is reenabled, to produce the bottom border of the display. The keyboard scanning routine continues, while NMI is enabled, and -- after that -- the multitasking scheduler is serviced, before returning to user code.
+After the Vsync signal is deactivated, the NMI signal is reenabled, to trigger the production of the top border of the display, though before returning to user code, the keyboard scanning routine is wrapped up and the multitasking scheduler is serviced. This further reduces the time available for user code.
 
 ### Generation of the main display
 
@@ -79,7 +86,7 @@ The most complicated part of display generation is the main screen area, in whic
 
 I have put "executing" in quotes because this is not completely correct. The Z80 is instructed to run a row of the mirror of the display buffer (in the upper 32K of the ZX81 memory space) with a `jp` instruction. However, the Z80 never receives the character codes that are stored in the display: they are characters not instructions, so would be meaningless. Instead the Z80 receives `nop` instructions and the character codes are intercepted by other ZX81 hardware and turned into a display signal.
 
-The ZX81 replaces the instruction on the database by `nop` when the Z80 tries to retrieve an instruction from an address in upper memory (address bit 15 is high) for which bit 6 of the byte at the address is low. The requirement on bit 6 being low is significant, as I will explain shortly. First, note that the ZX81's character set contains 64 characters with codes in the range of 0 to 63 (all of which have bit 6 low) plus inverted versions of these characters, between 128 and 191 (again, all of which have bit 6 low). 
+On the ZX81, when the Z80 tries to retrieve an instruction from an address in upper memory (address bit 15 is high) for which bit 6 of the byte at the byte at the address is low, the bytes is replaced by `nop`. The requirement on bit 6 being low is significant, as I will explain shortly. First, note that the ZX81's character set contains 64 characters with codes in the range of 0 to 63 (all of which have bit 6 low) plus inverted versions of these characters, between 128 and 191 (again, all of which have bit 6 low). 
 
 While the Z80 receives a `nop` instruction, the actual byte read from memory is visible on part of the databuse to a character latch, which interprets it as a pixel pattern (a row of a character) to be displayed. This is done by creating an address, combined the contents of the lower seven bits of the I register, with the lower six bits of the byte read, and augmenting to a three-bit counter to produce a 15-bit address, as follows:
 
@@ -87,7 +94,7 @@ While the Z80 receives a `nop` instruction, the actual byte read from memory is 
 *   lower six bits of character code - A3--A8
 *   lower seven bits of I register - A9--A15
 
-A pixel bitmap is read from that address and transmitted bit-by-bit to the screen at the expected cadence of the display.
+The sequence of eight pixels in the character row is read from that derived memory address and transmitted bit-by-bit to the screen in the 4 T states (1.2us) needed for the Z80 to execute `nop`.
 
 Husband Forth stores the pixel patterns of the 64 characters it recognises at address 0x1E00. For example, row 0 of the space character (with character code 0) is stored at 0xE00, row 1 is at 0x1E01, and so on. Then row 0 of the exclamation mark (with character code 1) is stored at 0x1E08, row 1 at 0x1E09, and so on. During startup, the I register is initialised to hold 0x1E.
 
@@ -95,16 +102,17 @@ The three bit counter steps through 0, 1, ..., 7, incrementing once per scanline
 
 For this mechanism to work, there needs to be a way to interrupt execution of the display buffer at the end of each character row. Husband Forth uses a different technique to ZX81 BASIC to do this, so we will briefly describe both approaches.
 
-ZX81 BASIC relies on an newline character to terminate execution of the display buffer. To accommodate this, the ZX81 BASIC display buffer allows up to 33 characters per line (up to 32 printable characters and and one newline character). Because the new-line character (code 0x76) has bit 6 set, it is not substituted by `nop` but is passed to the Z80. Fortuitously, code 0x76 corresponds to the `halt` instructions, so causes the Z80 to stop and wait for a maskable interrupt.
+ZX81 BASIC relies on an newline character to terminate execution of a row of the display buffer. To accommodate this, the ZX81 BASIC display buffer allows up to 33 characters per line (up to 32 printable characters and a newline character). Because the new-line character (code 0x76) has bit 6 set, it is not substituted by `nop` but is passed to the Z80. Fortuitously(!), code 0x76 corresponds to the `halt` instructions, so causes the Z80 to stop and wait for a maskable interrupt. Husband Forth does not use a newline character but instead relies on every row of the display buffer having 32 characters.
 
-Husband Forth does not use a newline character and instead relies on every row of the display buffer having 32 characters. Both ZX81 BASIC and Husband Forth then rely on careful timing to ensure that a maskable interrupt is computed at the end of the display row.
+Both ZX81 BASIC and Husband Forth then rely on careful timing to ensure that a maskable interrupt is generated at the appropriate time to end the scanline.
 
-The ZX81 does not have a typical maskable interrupt. Instead, the interrupt line is configured so it is triggered whenever bit 6 of the refresh register R goes low. The Z80 refresh register supports the use of dynamic RAM with the Z80 exploiting the time when the Z80 is processing an instruction to do a dummy memory access. The R register is incremented after each instruction fetch, so by setting an intial value for R correctly, one can ensure the bit 6 of the R register goes low when the Z80 gets to the 32nd character of the current display-buffer row.
+The ZX81 does not have a typical maskable interrupt. Instead, the interrupt line is configured so it is triggered whenever bit 6 of the refresh register R goes low. The Z80 refresh register is intended to support the use of dynamic RAM exploiting the time when the Z80 is processing an instruction to put a dummy memory address on the bus and triggering a fake read. To step through the memory space, the R register is incremented after each instruction fetch. The ZX81 does not support DRAM and, instead uses the R register to interrupt the Z80 at the end of each main-display scanline. Effectively, one initiates the R register to ensure the bit 6 of the register goes low when the Z80 gets to the 32nd character of the current display-buffer row.
 
 The following code segment, from Husband Forth, shows how this works:
 ```
 EXEC_DISPLAY:
-	ld a, 0xDD              ; 32 characters plus two additional instructions
+	ld a, 0xDD              ; FFh - 22h (32 characters plus
+	                        ; three additional instructions)
 	...
 	ld r,a			; Reset refresh counter (to 0xDD)
 	ei			; Enable maskable interrupts
@@ -112,11 +120,11 @@ EXEC_DISPLAY:
 	jp (hl) 		; Execute next display line
 ```
 
-The R register incremeents to 0xDE after the Z80 executes `ei`, then increments to 0xDF after the Z80 executes `jp (hl)`, and then increments 32 more times as the Z80 executes the 32 characters in the current row of the display buffer, before it wraps around and triggers the maskable interrupt.
+The R register increments to 0xDE after the Z80 executes `ei`, then increments to 0xDF after the Z80 executes `jp (hl)`, and then increments 32 more times as the Z80 executes the 32 characters in the current row of the display buffer, before it wraps around and triggers the maskable interrupt.
 
-In Husband Forth (and ZX81 BASIC), interrupt mode 1 is used to execute the routine at address 0x38. This routine loops through the 24 character rows of the display and eight pixel rows per character row, to generate the display.
+In Husband Forth (and ZX81 BASIC), interrupt mode 1 is used to execute the routine at address 0x38. This routine loops through the 24 character rows of the display (tracked in the C register) and eight pixel rows per character row (tracked in the B register), to generate the main display.
 
-This routine is reproduced below:
+This maskable-interrupt routine is reproduced below:
 
 ```
 M_INT:	dec c			; Decrement scan-line counter
@@ -155,6 +163,22 @@ NEXT_SCANLINE:
 
 ```
 
-When setting up to produce the main display, the BC pair is initialised to 9 pixels per row (one more than needed as B is decremented at the start of the interrupt) and 24 rows.
+When setting up to produce the main display, the BC pair is initialised to 24 rows and 9 pixels per row (one more than needed as B is decremented at the start of the interrupt).
 
-There are two significant paths through the interrupt routine (the `jp` instruction is the branch point): one when progressing through a character row, and one when advancing to the next character row. It is very important that both paths take the same amount of time to complete, to provide a stable display. Using a `jp` rather than `jr` instruction and inserting a dummy `ret z` ensures both paths take 57 T states to prepare to execute the display buffer. This time is reflected by the left-hand border on the screen display.
+There are two significant paths through the interrupt routine (the `jp` instruction is the branch point): one when progressing through a character row, and one when advancing to the next character row. It is very important that both paths take the same amount of time to complete, to provide a stable display. Using a `jp` rather than `jr` instruction and inserting a dummy `ret z` ensures both paths take 57 T states (17.5 us) to prepare to execute the display buffer. This time is reflected by the left-hand border on the screen display.
+
+At the end of the main display, the NMI circuitry is enabled (having previously set it up to display the bottom border). The routine then exits (back to user code) and relies on the NMI circuitry to interrupt the Z80 at the end of each bottom-border display line.
+
+### Husband Forth Timing
+
+As noted above, the Husband Forth ROM does not produce a stable display on the Minstrel 3, so the first thing I wanted to do was check the timing of display generation in the ROM, based on the deduction above.
+
+A Husband Forth frame consists of a VSync signal (taking 402us), 105 border lines (each taking 64 us) and 192 main display lines, each taking 60.3us (based on 57+32*4+11 T states). This give a frame length of 18.1ms. Both the frame length and the main-display scanline length are shorter than idea, potentially leading to an undisplayable signal.
+
+However, when investigating the Husband Forth display code, I also spotted that the Z80 is never set to interrupt mode 1. This means it will operate in Interrupt Mode 0, which retrieves and executes an instruction from the data bus when an interrupt is generated.
+
+### 
+
+8 scan lines = 512 us = 1,664 T states
+
+Would like scanlines to be 12 T states longer
