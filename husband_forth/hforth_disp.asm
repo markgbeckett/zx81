@@ -59,7 +59,7 @@
 	;; VSYNC_OFF, TB_ON, TB_OFF, BB_ON, and BB_OFF.
 
 	;; Configuration options to allow you to adjust timings
-TOP_BORDER_LINES:	equ 54	; H_FORTH uses 1Eh (30d) / better 54
+TOP_BORDER_LINES:	equ 56	; H_FORTH uses 1Eh (30d) / better 54
 BOT_BORDER_LINES:	equ 55	; H_FORTH uses 4Ah (74d) / better 55
 VSYNC_COUNTER:		equ 124 ; H_FORTH uses 60h (96d) / better 124
 	
@@ -214,7 +214,7 @@ NMI_DONE: ; 0x006C
 	;; been exchanged, and HL has been stacked.
 RUN_DISPLAY:
 	;; Set up next display routine (bottom border)
-	ld a, BOT_BORDER_LINES		; Set next NMI counter for
+	ld a, BOT_BORDER_LINES-1		; Set next NMI counter for
 					; bottom border
 	ex af, af'
 
@@ -296,7 +296,7 @@ VSYNC_ON:
 	in a,(0xFE)		; (11) Turn on VSync
 
 	;; Set up next display routine (top border)
-	ld a, TOP_BORDER_LINES	; (7) Set next NMI counter
+	ld a, TOP_BORDER_LINES+1 ; (7) Set next NMI counter
 	ex af, af'		; (4)
 
 	push de			; (11)
