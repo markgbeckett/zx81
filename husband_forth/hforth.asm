@@ -1,4 +1,4 @@
-; z80dasm 1.1.6
+; z80dasm.1.6
 ; command line: z80dasm -g 0 -a -l -o hforth.asm husband_forth.bin
 
 
@@ -38,33 +38,55 @@
 	;; which is the next display routine to run. It will either
 	;; point at 0x0098 or the content of 0xFC82 (either 0x0071 or
 	;; ???)
-	;; 
+	;;
+	;; Interacting with the display:
+	;;   OUT (FE),A - Enable NMI Generator (and enable HSync)
+	;;   OUT (FD),A - Disable NMI Generator
+	;;   IN A,(FE)  - Turn on Vsync
+	;;   OUT (??),A - Turn off Vsync
+	;;
+	;; Role of 
+	;;   NMI generated every 64 microseconds
+	;;   R register increments (lower 7 bits) every instruction fetch
+	;;   A6 is tied to Maskable Interrupt
 
+	;;   Maskable interrupt is generated whenever A6 goes
+	;;   low. Therefore, in normal operation it should be
+	;;   disabled. The mechanism for triggering maskable interrupts
+	;;   is when the the R register causes A6 to go low at the end
+	;;   of executing a display line.
+	;; 
 	;; System variables
 	;;
 	;; FC40 - interrogated at end of restart
 	;; FC54 - frame counter???
-	;; FC56 - Amount of RAM (set during init of system variables)
+	;; FC56 - RAMSIZE (in 256k pages)
+	;; FC57 - RAM-related
 	;; FC5C - TIME - system clock (see Ch 15 of manual)
 	;; FC68 - PERiod - tic limit at which clock resets (see Ch 15 of manual)
+	;; FC6C - Start of RAM 
 	;; FC6E - Pointer to DFILE - Set to BD00/ FD00 during
 	;;        initialisation, based on memory test
 	;; FC76 - Set to BD00/ FD00 during initialisation, based on memory test
 	;; FC78 - Set to FF during restart, to indicate warm restart is
 	;;        possible
-	;; FC7C - Set to 0050 during restart
+	;; FC7C - Location of task scheduler ??? (Set to 0050 during restart)
 	;; FC7E - Offset to most recently read entry in Keyboard Input Buffer
 	;; FC7F - Offset to most recently  written value in keyboard input buffer
 	;; FC80 - Next video handling routine
 	;; FC82 - Particular video handling routine (0x57 or 0x71)
 	;; FC84 - Pointer to character stack
-	;; FC88 -
+	
+	;; FC88 - Counted string (two characters) to check for when
+	;;        parsing token, potentially triggers extended
+	;;        functionality?
 	;; FC8A -
-	;; FC8C - Init value of FC88
+	;; FC8C - Default value for 0xFC8C (that is, 0x0AFB)
 	;; FC8E - Init value of FC8A
 	;; FC90 - Start of parameter stack
 	;; FC94 - MSTACK0: Pointer to machine-stack 0 (grows down from FB80)
 	;; FC96 - MSTACK1: Pointer to machine-stack 1 (FC3E)
+	;; FC98 - Address of multi-tasking-related routine
 	;; FC9A...FC9D/ FC9E...FCA1/FCA2...FCA5 are 4-byte buffers
 	;; FCA5 - Flags (Bit 0 - ; Bit 6 - tested at 0937 ; Bit 7 - set at 1071
 	;; FCAB - POSSIBLE_KEY
@@ -98,7 +120,7 @@
 	;; FCBE - FLAGS2 , passed into main loop (context 0) as HL
 	;;        0 - printer disabled/ enabled
 
-	;; FCBF - Reset at start of main monitor loop
+	;; FCBF - Character count for current token in input string
 
 	;; Memory map
 	;; 
@@ -109,36 +131,50 @@
 	;; FCC0--FCFF -- Character stack (wraps around)
 	;; FD00--FFFF - video RAM
 
-P_DFILE:	equ 0xFC6E
-PRINT_DRVR:	equ 0xFC74
-PSTACKC:	equ 0xFC84
-PSTACK_BASE:	equ 0xFc90
+TOP_BORDER_LINES:	equ 56	; H_FORTH uses 4Ah (30d) / better 54
+BOT_BORDER_LINES:	equ 55	; H_FORTH uses 1Eh (74d) / better 55
+
+VARS:		equ 0xFC40	; Start of system variables
+RAM_SIZE:	equ 0xFC56	; Amount of RAM (in 256-byte pages)
+RAM_START:	equ 0xFC6C	; Start of RAM
+P_DBUFFER:	equ 0xFC6E	; Address of display buffer
+PRINT_DRVR:	equ 0xFC74	; Address of printer driver
+P_MTASK:	equ 0xFC7C	; Location of multitasking scheduler???
+P_RUN_DISP:	equ 0xFC82	; Address of routine to produce main
+				; display
+P_STACKC:	equ 0xFC84	; Address of next entry in Char Stack
+SPC_STR_1:	equ 0xFC88	; Special string (used with expansion ROM)
+SPC_STR_1_DEF:	equ 0xFC8C
+STACKP_BASE:	equ 0xFC90	; Base offset of Char stack
 MSTACK0:	equ 0xFC94
 MSTACK1:	equ 0xFC96
 POSSIBLE_KEY:	equ 0xFCAB
 LAST_KEY:	equ 0xFCAC
 FLAGS:		equ 0xFCAD
 STACK0_BASE:	equ 0xFB80
-PAD:		equ 0xFBC0		; Start of PAD
-FLAGS2:		equ 0xFCBE		; Further flags
+PAD:		equ 0xFBC0	; Start of PAD
+FLAGS2:		equ 0xFCBE	; Further flags
 STACKC_BASE:	equ 0xFCC0
 STACK1_BASE:	equ 0xFC3E
-RAM_SIZE:	equ 0xFC56
-F_WARM_RESTART:	equ 0xFC78	; Indicates warm restart is possible
+F_WARM_RESTART:	equ 0xFC78	; 0xFF indicates warm restart possible
 NEXT_DISP_ROUTINE:	equ 0xFC80	
 SCR_INFO_ED:	equ 0xFCAE
 SCR_INFO_CO:	equ 0xFCB6
-KIB_R_OFFSET:	equ 0fc7eh
-KIB_W_OFFSET:	equ 0fc7fh
+KIB_R_OFFSET:	equ 0xFC7E
+KIB_W_OFFSET:	equ 0xFC7F
+FLAGS3:		equ 0xFCA5	; Bits:
+				;  6 - 0 = stop tasks on restart; 1 =
+				;  continue multitasking
+TOKEN_LN:	equ 0xFCBF	; Track length of currently being entered token
 
 	org	00000h
 
 	;;
 	;; RST 00 routine (cold or warm restart)
 	;; 
-l0000h:	out (0xFD),a		;0000 - Disable NMI
+l0000h:	out (0xFD),a		;0000 - Disable NMI Generator
 l0002h:	ld sp,STACK0_BASE	;0002 - Reset stack pointer
-l0005h:	jp l0946h		;0005 - Continue with reset
+l0005h:	jp RESTART		;0005 - Continue with reset
 
 
 	;; Push HL onto parameter stack
@@ -164,20 +200,23 @@ l0010h:	ld l,(iy+000h)		;0010
 	;; RST 18 - Push A onto character stack
 	push hl			;0018
 	push af			;0019
-	ld hl,PSTACKC		;001a
+	ld hl,P_STACKC		;001a
 	jp l0201h		;001d
 
 
 	;; RST 20h - Pop from character stack into A
 l0020h:	push hl			;0020
-l0021h:	ld hl,PSTACKC		;0021
+l0021h:	ld hl,P_STACKC		;0021
 	ld a,(hl)			;0024
 	jp l020bh		;0025
 
 
 
 	;; RST 28h 
-	jp 0200ah		;0028 - Beyond end of standard ROM (possibly, floating-point handler?)
+	jp 0200ah		;0028 - Beyond end of standard ROM
+				;       (possibly, floating-point
+				;       handler?)
+	
 	nop			;002b
 	nop			;002c
 	nop			;002d
@@ -185,44 +224,91 @@ l0021h:	ld hl,PSTACKC		;0021
 	nop			;002f
 
 	;; RST 30h
-	jp 0200dh		;0030 - Beyond end of standard ROM (possibly, floating-point handler?)
+	jp 0200dh		;0030 - Beyond end of standard ROM
+				;       (possibly, floating-point
+				;       handler?)
+	
 	nop			;0033
 	nop			;0034
 	nop			;0035
 	nop			;0036
 	nop			;0037
 
-	;; Maskable Interrupt (used to service display)
+	;; 
+	;; Maskable interrupt, used to produce row of main (character)
+	;; display. Setup of the required parameters for this done in
+	;; RUN_DISPLAY.
 	;;
-	;; On entry, HL points to display file
+	;; On entry:
+	;;   B  - number of character rows still to generate.
+	;;   C  - number of scan lines in current character row still to
+	;;        generate + 1.
+	;;   A  - number of refresh cycles until will reach end of
+	;;        display line (32 plus any cycles for preamble code).
+	;;   HL - address of start of display row being executed.
+	;;
+	;;   On exit:
+	;;        Return address is dropped from stack, so returns to
+	;;        parent call (which will be main program)
+	;;
+	;; Also, note the IOREQ signal enables the Hsync, which occurs
+	;; at the second instruction of the routine (jp nz) and
+	;; automatically disables the Hsync signal at the start of the
+	;; fourth instruction, meaning a 20 T-state Hsync (see
+	;; https://youtu.be/QPGE8JjC700?si=rvKLr70LLXWQUwNn for
+	;; details).
+	;; 
+	;; Each scanline should be 64us (208 T states at 3.235 MHz)
+INT:
+	;; srl d		; (8) Timing
 
-	;; Check if have display all eight pixel rows for current screen row
-	dec c			;0038
-	jp nz,l0047h		;0039 - Jump on if not
+				; Hsync signal enabled
 
-	pop hl			;003c - Retrieve execution point in
-				;       display file
+	dec c			; (4) Decrement scan-line counter
 
-	dec b			;003d - Check if more rows to display
-	ret z			;003e - Return if not
+	jp nz, I_NEXT_SCANLINE	; (10) Skip forward if more scan lines
+				; to produce (Use JP to ensure
+				; consistent timing with/ without a
+				; branch).
 
-	set 3,c			;003f - Set C=8 (pixel rows per character)
+	pop hl			; (10) Retrieve return address (next
+				; character to execute in display
+				; buffer)
 
-	;; Execute next display pixel line
-l0041h:	ld r,a			;0041 - Seems to be DD
-	ei			;0043
-	nop			;0044 *** This is different ***
-	nop			;0045
-	jp (hl)			;0046 - Jump to display file
+				; Hsync turned off by flip-flop circuit
+	
+	dec b			; (4) Decrement row counter
 
-	;; Next pixel row
-l0047h:	pop de			;0047 - Discard return address (will
-				;       rerun row of display file, using
-				;       address in HL)
-	ret z			;0048 - Timing paise, condition should
-				;       never be satisfied
-	jr l0041h		;0049
+	ret z			; (11/5) Exit, if done
 
+	set 3,c			; (8) Reset scan-line counter to 8 (used
+				; instead of ld c,8, to ensure
+				; consistent timing)
+
+	;;  Run display line
+I_EXEC_DISPLAY:
+	ld r,a			; (9) Reset refresh counter
+	ei			; (4) Enable interrupts
+
+	nop			; (4) Included for timing, to pad
+	nop			; (4) scanline to close to 64us
+	
+	jp (hl) 		; (4) Execute next display line
+
+I_NEXT_SCANLINE:
+	pop de			; (10) Discard return address as we need
+				; to re-run current row (address still
+				; in HL))
+	
+				; Hsync turned off by flip-flop circuit
+	
+	ret z			; (5) Timing-related: this is never
+	 			; satisfied, so always adds 5 T states
+	 			; to the code to delay start of HSYNC
+
+	jr I_EXEC_DISPLAY	; (12) Continue to execute display line
+
+	
 	;; Continuation of PUSH_HL restart routine (RST 08)
 l004bh:	dec iy			;004b
 	ld (iy+000h),l		;004d
@@ -238,87 +324,167 @@ l0051h:	ld h,(iy+000h)		;0051
 
 	;; Routine to transition between display modes
 l0057h:	ld a,0ffh		;0057 - E4h in 60 Hz version
-	ex af,af'			;0059
-	ld hl,DISP_BORDER		;005a - Set routine for video handling ???
+	ex af,af'		;0059
+	ld hl,RUN_VSYNC		;005a - Set routine for video handling
 	ld (NEXT_DISP_ROUTINE),hl	;005d
 
 l0060h:	pop hl			;0060
 
 	ret			;0061
 
+	;; Padding???
 	nop			;0062
 	nop			;0063
-l0064h:
-	nop			;0064
+l0064h:	nop			;0064
 
 jump_to_hl:
 	jp (hl)			;0065
 
-	;; NMI routine
-	ex af,af'		;0066 - Retrieve and decrement line count
-	dec a			;0067 - inc a
-	jr z,l006ch		;0068 - Jump forward if border done
-				;       jp m, L006D
-				;       jr z, l006F
-	ex af,af'		;006a - Otherwise continue with application
+	;;
+	;; NMI routine - used to produce top/ bottom borders, while also
+	;; running user code. When active, an NMI pulse is generated
+	;; every 64 us (that is, every one scanline) plus triggers
+	;; Hsync, so can be used to count scanlines in each border.
+	;;
+	;; On entry:
+	;;   A' - counter of how many scanlines still required for
+	;;        currently being generated border
+	;;   (NEXT_DISP_ROUTINE) - address of routine to call, when countdown
+	;;                    reaches zero
+	;;
+	;; On exit:
+	;;   A' - updated, if more NMI cycles required
+	;; or
+	;;   Advances to one of several NMI exit routines, depending on
+	;;   which component of frame is being generated next
+	;;
+	;; N.B. The Z80 takes 11 clock cycles to jump to this NMI
+	;; routine on an interrupt
+NMI:	ex af, af'		; Retrieve and decrement cycle counter
+	dec a			
+
+	jr z, NMI_DONE		; Move on to next phase of display, if
+				; done
+
+	ex af, af'		; Otherwise, restore counter and 
+
+	ret			; return to calling program, with
+				; maskable interrupt disabled (that is,
+				; not using RETN here.
+
+NMI_DONE: ; 0x006C
+	push hl 		; Save register
+
+	ld hl,(NEXT_DISP_ROUTINE) ; Proceed to next routine (either
+	jp (hl)			  ; RUN_VSYNC or RUN_DISPLAY)
+
+	;; Continuation of NMI cycle when top border has been
+	;; generated. This code segment produces main character display,
+	;; using the maskable interrupt.
+	;;
+	;; Note NMI Generator still active at this point, A and A' have
+	;; been exchanged, and HL has been stacked.
+RUN_DISPLAY:
+	;; Set up next display routine (bottom border)
+	ld a, BOT_BORDER_LINES+1	; Set next NMI counter for
+					; bottom border
+	ex af, af'
+
+	;; Save remaining registers
+	push af
+	push bc
+	push de
+
+	ld bc,0x1809		; 24 rows and 8 scan lines + 1
+	ld hl, RUN_VSYNC	; Store address of next but one display
+	ld (NEXT_DISP_ROUTINE), hl ; routine (VSync)
+
+	ld hl,(P_DBUFFER)	; Point to start of display buffer
+				; (execution address in upper 32kB of
+				; memory)
+	;; set 7,h		; Switch address to upper memory
 	
-	ret			;006b
+	ld a,0xEA		; Sets a pause before the main display
+				; starts to execute. Used to set refresh
+				; register on first iteration of main
+				; loop in RD_KERNEL, for first maskable
+				; interrupt. Tends to affect left-right
+				; alignment of text.
 
-l006ch:	push hl			;006c 
-	ld hl,(NEXT_DISP_ROUTINE)	;006d - next video handling routine
 
-	jp (hl)			;0070
+	;; Resynchronisation step (to ensure that, whatever user code
+	;; was running when the previous NMI occurred, the main display
+	;; starts at the same point in the frame).
+	halt			; Execute one more NMI. Not sure
+				; why this happens: again, assume it is
+				; timing related.
 
-	;; Display service routine (run display file)
-l0071h:	ld a,04ah		;0071 - 23h on 60 Hz version
-	ex af,af'		;0073
-	push af			;0074
-	push bc			;0075
-	push de			;0076
-	ld bc,l1809h		;0077 - 24 rows and 8 scan lines +1
-	ld hl,DISP_BORDER	;007a - Set routine for other video handler
-	ld (NEXT_DISP_ROUTINE),hl		;007d 
-	ld hl,(P_DFILE)		;0080 - Retrieve address if display file
-	ld a,0eah		;0083 - Set timer for display routine
-	halt			;0085 - Wait for interrupt (addr 0x0038)
+TB_OFF:	out (0xFD),a		; (11) Disable NMI Generator
 
-	;; Arrives here, once DFILE has been executed
-l0086h:	out (0fdh),a		;0086 - Disable NMI : left marging timing now ???
-	call sub_0092h		;0088
-	out (0feh),a		;008b - Enable NMI
+	call RD_KERNEL		; (17) Run display buffer.
+
+BB_ON:	out (0xFE),a		; (11) Enable NMI Generator, to kick off
+				; generation of bottom border
+
+	;; Restore registers (including HL, which was stacking in NMI
+	;; routine)
+	pop de			; (10)
+	pop bc			; (10)
+	pop af			; (10)
+
+	pop hl			; (10)
+
+	ret			; (10) Return to main program: display
+				; generation will continue, when next
+				; NMI pulse is generated.
+
+RD_KERNEL:
+	ld r,a			; (9) Set refresh counter
+
+	ld a, 0xDD		; (7) Update start value for refresh
+				; counter based on time to execute a row
+				; of display (plus preamble). Value of
+				; DC adds one more cycle at the end of
+				; the row.
 	
-	pop de			;008d
-	pop bc			;008e
-	pop af			;008f
-	pop hl			;0090
+	ei			; (4) Enable maskable interrupt (will be
+				; triggered when bit 6 of R register
+				; drops low) starting production of main
+				; part of display.
 
-	ret			;0091
+	halt			; (4) Wait for maskable interrupt. Note, the
+				; code never returns from the maskable
+				; interrupt. It returns to the calling
+				; program (by dropping the first return
+				; address)
 
-	;; Set up display parameters, enable interrupts, jump to DFILE
-sub_0092h: 			; Looks like DISPLAY-5 at L02B5
-	ld r,a			;0092 - Is it F5?
-	ld a,0ddh		;0094
-	ei			;0096
-	halt			;0097 - Returns once display file is complete
 
+	;; ----------------------------------------------------------------
 	;; Video handling routine (VSync and read keyboard)
-DISP_BORDER:
-	out (0fdh),a		;0098 - Disable NMI
-	in a,(0feh)		;009a - Trigger VSync
+RUN_VSYNC:
+BB_OFF:	out (0FDh),a		;0098 - Disable NMI Generator
+VS_ON:	in a,(0FEh)		;009a - Turn on VSync
 
-	ld a,01eh		;009c - Set counter for top margin *** TIMING **
-	ex af,af'		;009e
+	;;
+	;; Vsync duration is 11 + 32 + 1,255 + 11 = 1,310 (including final OUT)
+	;;                or 1,304 (400 us) (if no key press)
+	;; 		  or 1,312 if shifted key press
+	;; 
+	ld a,TOP_BORDER_LINES-1	; (7) 009c - Set counter for top margin,
+				;     REPLACED 0x1E
+	ex af,af'		; (4) 009e   and store for next NMI cycle.
 
 	;; Set next display routine
-	ld hl,(0fc82h)		;009f
-	ld (NEXT_DISP_ROUTINE),hl	;00a2 - Set video handling routine
+	ld hl,(P_RUN_DISP)	; (16) 009f - Usually contains 0071h
+	ld (NEXT_DISP_ROUTINE),hl ; (16)
 
-	push bc			;00a5
-	push af			;00a6
+	;; Timing = 42 T states for prep
+	push bc			; (11) 00a5
+	push af			; (11) 00a6
 
 	;; Read keyboard
-	ld hl,0x0000		;00a7 - Initialise buffer for key press
-	ld bc,0xFEFE		;00aa - I/O port for first half-row
+	ld hl,0x0000		; (10) 00a7 - Initialise buffer for key press
+	ld bc,0xFEFE		; (10) 00aa - I/O port for first half-row
 				;       (B,...,Shift). Single bit that
 				;       is reset will also be used as
 				;       flag to confirm when keyboard
@@ -326,28 +492,31 @@ DISP_BORDER:
 
 	;; Check keyboard one half row at a time, starting with FEFE ->
 	;; FDFE -> FBFE -> F7FE -> EFFE -> DFFE -> BFFE -> 7FFE
-l00adh:	in a,(c)		;00ad - Read keyboard
 
-	or %11100000		;00af - Mask off top three bits
+	;; Timing: Typical iteration is 75 T states (or 78 T states, if key
+	;; prssed). Final iteration is 70 T states or 73 T states). Assuming one key is pressed, timing will be 75*7 + 70 + 3 = 598 T states
+l00adh:	in a,(c)		; (12) 00ad - Read keyboard
+
+	or %11100000		; (7) 00af - Mask off top three bits
 				;       (keyboard half-row only contains
 				;       five keys)
-	cpl			;00b1 - Complement, so any keys pressed
+	cpl			; (4) 00b1 - Complement, so any keys pressed
 				;       will be set
 
-	or a			;00b2 - Check if zero, meaning no
-	jr z,l00b7h		;00b3 - key pressed
+	or a			; (4) 00b2 - Check if zero, meaning no
+	jr z,l00b7h		; (12/7) 00b3 - key pressed
 
-	set 0,l			;00b5 - L is used to confirm half-row in
+	set 0,l			; (8) 00b5 - L is used to confirm half-row in
 				;       which key is detected
-l00b7h:	rrc l			;00b7 - 8-bit rotation right (bit 0 also
+l00b7h:	rrc l			; (8) 00b7 - 8-bit rotation right (bit 0 also
 				;       copied into carry
 
-	or h			;00b9 - Save column value into H
-	ld h,a			;       (keeping any previously detected
+	or h			; (4) 00b9 - Save column value into H
+	ld h,a			; (4) (keeping any previously detected
 				;       key presses)
 
-	rlc b			;00bb - Next half-row 
-	jr c,l00adh		;00bd - Move on to next half row (unless
+	rlc b			; (8) 00bb - Next half-row 
+	jr c,l00adh		; (12/7) 00bd - Move on to next half row (unless
 				;       carry is reset, which means eight
 				;       half-rows have been scanned.,
 
@@ -365,83 +534,95 @@ l00b7h:	rrc l			;00b7 - 8-bit rotation right (bit 0 also
 	;; H = 01, 02, 04, 08, 10 - based on position
 
 	;; Check for Shift (L(0)=1 and H(0)=1
-	ld a,l		;00bf - L=1, if shift half-row
-	and h		;00c0 - H=1, if shift half-row
-	rrca		;00c1 - Rotate bit 0 into carry
+	;;
+	;; Timing = 34 T states (or 37 T states, if shift pressed)
+	ld a,l		; (4) 00bf - L=1, if shift half-row
+	and h		; (4) 00c0 - H=1, if shift half-row
+	rrca		; (4) 00c1 - Rotate bit 0 into carry
 
-	ld bc,l0800h	;00c2 - B accounts for eight possible,
+	ld bc,l0800h	; (10) 00c2 - B accounts for eight possible,
 			;       half-rows; C is offset to character
-	jr nc,l00c9h	;00c5 - Skip forward if Shift not pressed
-	set 6,c		;00c7 - Add 64 to key value, if shifted
+	jr nc,l00c9h	; (12/7) 00c5 - Skip forward if Shift not pressed
+	set 6,c		; (8) 00c7 - Add 64 to key value, if shifted
 
 	;; Normalise H and L on zero (also drops shift)
-l00c9h:	srl h		;00c9 - Shift column value right
-	srl l		;00cb - Shift row value right
+	;;
+	;; Timing (no multikey): 16 + 27 + 20 + 7 = 70
+l00c9h:	srl h		; (8) 00c9 - Shift column value right
+	srl l		; (8) 00cb - Shift row value right
 
 	;; Check for multiple key presses (not including shift, which
 	;; has been dealt with)
-	ld a,h		;00cd - Load column reference into A
-	neg		;00ce - 0-col/2
-	and h		;00d0
-	sub h		;00d1
-	jr nz,l00d9h	;00d2 - Skip forward if multiple keypresses (in
+	ld a,h		; (4) 00cd - Load column reference into A
+	neg		; (8) 00ce - 0-col/2
+	and h		; (4) 00d0
+	sub h		; (4) 00d1
+	jr nz,l00d9h	; (12/7) 00d2 - Skip forward if multiple keypresses (in
 			;same half-row)
 	
-	ld a,l		;00d4 - Retrieve row value
-	neg		;00d5
-	and l		;00d7
-	sub l		;00d8
+	ld a,l		; (4) 00d4 - Retrieve row value
+	neg		; (8) 00d5
+	and l		; (4) 00d7
+	sub l		; (4) 00d8
 
-l00d9h:	jr nz,l00f4h	;00d9 - Skip forward if multiple keypresses
+l00d9h:	jr nz,l00f4h	; (12/7) 00d9 - Skip forward if multiple keypresses
 
 	;; Turn half-row indicator into index of offset of bit
-l00dbh:	rlc l		;00db - Check next bit
-	jr nc,l00e0h	;00dd
- 	add a,b		;00df - Set offset (will happen no more than
+	;;
+	;; Timing = 32 * 7 + 27 + 1 = 252 T states (or 251, if no key press)
+l00dbh:	rlc l		; (8) 00db - Check next bit
+	jr nc,l00e0h	; (12/7) 00dd
+ 	add a,b		; (4) 00df - Set offset (will happen no more than
 			;       once and will add current value of
 			;       countdown)
-l00e0h:	djnz l00dbh	;00e0
+l00e0h:	djnz l00dbh	; (13/8) 00e0
 
-	add a,c		;00e2
-	ld c,a		;00e3 - C is half-row offset
+	;; Timing = 26 T states
+	add a,c		; (4) 00e2
+	ld c,a		; (4) 00e3 - C is half-row offset
 
-	ld b,005h	;00e4 - Five possible key positions
-	ld l,008h	;00e6 - Step size for each key position
-	xor a		;00e8 - Key position in half-row gives
+	ld b,005h	; (7) 00e4 - Five possible key positions
+	ld l,008h	; (7) 00e6 - Step size for each key position
+	xor a		; (4) 00e8 - Key position in half-row gives
 			;       8* offset (normalised on zero)
+
 	;; Now work out offset for key press (in half row)
-l00e9h:	add a,l			;00e9 
-	rrc h			;00ea
-	jr nc,l00f0h		;00ec
-	add a,c			;00ee
-	ld c,a			;00ef
-l00f0h:	djnz l00e9h		;00f0
+	;;
+	;; Timing = 4*40 + 35 + 5 = 200 T states (or, 195, if no key press)
+l00e9h:	add a,l		; (7) 00e9 
+	rrc h		; (8) 00ea
+	jr nc,l00f0h	; (12/7) 00ec
+	add a,c		; (4) 00ee
+	ld c,a		; (4) 00ef
+l00f0h:	djnz l00e9h	; (13/8) 00f0
 
 	;; At this point C contains offset for keypress
-	jr l00fah		;00f2 - Skip handling of multiple key
+	;; Timing = 12 T states
+	jr l00fah	; (12) 00f2 - Skip handling of multiple key
 				;       presses
 
 	;; Multiple key presses detected: implement pause to
 	;; resynchronise with main loop
-l00f4h:	ld b,022h		;00f4
-l00f6h:	djnz l00f6h		;00f6
-	set 7,c			;00f8 - Indicates multiple key presses
+l00f4h:	ld b,022h	; (7) 00f4
+l00f6h:	djnz l00f6h	; (13/8) 00f6
+	set 7,c		; (8) 00f8 - Indicates multiple key presses
 
 	;; At this point C points to key press (bit 6 indicates if shift
 	;; if pressed, and bit 7 indicates multiple key presses)
-l00fah:	ld hl,POSSIBLE_KEY	;00fa
+l00fah:	ld hl,POSSIBLE_KEY	; (10) 00fa
 
 	;; Check if no (real) keys pressed (that is, ignore Shift alone)
-	ld a,c			;00fd
-	and %10111111		;00fe - Mask off shift
+	;; Timing = 21 T states
+	ld a,c		; (4) 00fd
+	and %10111111	; (7) 00fe - Mask off shift
 
 	;; *** End of VSYNC generation phase of display routine ***
-l0100h:	out (0ffh),a		;0100 - Turn on HSYNC generator
-	out (0feh),a		;0102 - Turn off VSYNC generator and
-				;turn on NMI generator
+l0100h:
+VS_OFF:	out (0ffh),a	; (11) 0100 - Disable VSync REPLACE - was at 0x100
+TB_ON:	out (0feh),a	; (11) 0102 - Enable NMI Generator
 
-	jr nz,l0109h		;0104 - Jump forward if key other than
-				;       shift pressed
+	jr nz,l0109h	; (12/7) 0104 - Jump forward if key other than
+			;       shift pressed
 
 	;; No real keys pressed, so set LAST_KEY to zero and skip
 	;; forward
@@ -449,9 +630,9 @@ l0100h:	out (0ffh),a		;0100 - Turn on HSYNC generator
 	jr l0119h		;0107
 
 	;; For real key presses, need to debounce
-l0109h:	ld a,c			;0109 - Retrieve keypress into A
-	bit 7,(hl)		;010a - Check if change of key detected on previous iteration
-	jr nz,l0119h		;010c   Jump forward if so
+l0109h:	ld a,c			; (4) 0109 - Retrieve keypress into A
+	bit 7,(hl)		; (14) 010a - Check if change of key detected on previous iteration
+	jr nz,l0119h		; (12/7) 010c   Jump forward if so
 
 	xor (hl)		;010e - Check if same key pressed as on previous iteration
 	jr z,l011eh		;010f   Jump forward if so
@@ -469,9 +650,9 @@ l0109h:	ld a,c			;0109 - Retrieve keypress into A
 l0117h:	set 7,(hl)		;0117
 
 	;; Multiple key presses
-l0119h:	dec hl			;0119
-	ld (hl),003h		;011a - Set countdown
-	jr l012eh		;011c   and skip forward
+l0119h:	dec hl			; (6) 0119
+	ld (hl),003h		; (10) 011a - Set countdown
+	jr l012eh		; (12) 011c   and skip forward
 
 	;; Handle key press
 l011eh:	dec hl			;011e
@@ -595,7 +776,7 @@ l018bh:
 l01b6h:	res 4,(hl)		;01b6
 	set 5,(hl)		;01b8
 	ex (sp),hl		;01ba - Extract return address into HL
-
+	
 	;; Switch from Stack 1 to Stack 0
 	ld (MSTACK1),sp		;01bb 
 	ld sp,(MSTACK0)		;01bf
@@ -653,7 +834,7 @@ l01dbh:	pop hl			;01db
 	jr nc,l01fdh		;01f9 - Skip forward, if key successfully processed
 	res 7,(hl)		;01fb - Otherwise, reset to try again next time
 
-l01fdh:	pop af			;01fd
+l01fdh:	pop af			;01fd - End of RUN_VSYNC routine
 	pop bc			;01fe
 	pop hl			;01ff
 
@@ -678,7 +859,7 @@ l020bh:	ld l,a			; Move character-stack pointer
 				; (high byte is always FCh)
 	inc a			;020c - Increase character stack pointer
 	or 0c0h			;020d - Wrap around from FF to C0
-	ld (PSTACKC),a		;020f - Store new pointer value
+	ld (P_STACKC),a		;020f - Store new pointer value
 	ld a,(hl)		;0212 - Retrieve value from stack
 	pop hl			;0213 - Done
 
@@ -784,7 +965,7 @@ GET_SCR_ADDR:
 
 	;; Retrieve address of current screen into DE (preserving HL)
 	ex de,hl		;0249
-	ld hl,(P_DFILE)		;024a
+	ld hl,(P_DBUFFER)		;024a
 	ex de,hl		;024d
 
 	call sub_022dh		;024e - Retrieve offset of current screen
@@ -1231,7 +1412,7 @@ sub_03eeh:
 	call CR		;03f2
 	call GET_SCR_POSN	;03f5
 	push hl			;03f8
-	ld hl,(P_DFILE)		;03f9
+	ld hl,(P_DBUFFER)		;03f9
 	ld de,l0200h		;03fc
 	add hl,de		;03ff
 
@@ -1262,7 +1443,7 @@ l0413h:	ld a,(hl)		;0413
 l041dh:	call sub_03b5h		;041d
 	ret z			;0420
 	call GET_SCR_SIZE		;0421
-	ld hl,(P_DFILE)		;0424
+	ld hl,(P_DBUFFER)		;0424
 	ld de,l0200h		;0427
 	add hl,de			;042a
 	call sub_0411h		;042b
@@ -1552,7 +1733,7 @@ sub_0581h:
 sub_058ah:
 	call sub_03b5h		;058a
 	ret nz			;058d
-	ld hl,0fca5h		;058e
+	ld hl,FLAGS3		;058e
 	bit 1,(hl)		;0591
 	res 1,(hl)		;0593
 	ret z			;0595
@@ -1709,7 +1890,7 @@ SWITCH_TO_MSTACK1:
 
 sub_062ch:
 	push hl			;062c
-	ld hl,0fca5h		;062d
+	ld hl,FLAGS3		;062d
 	set 0,(hl)		;0630
 	call sub_06dah		;0632
 	pop hl			;0635
@@ -1855,35 +2036,55 @@ sub_069dh:
 	ld a,(hl)			;06a3
 	inc hl			;06a4
 	jr l06b1h		;06a5
-sub_06a7h:
+
+	;; Match string
+	;;
+	;; On entry:
+	;; - HL - points to candidate match (counted string)
+	;; - String on Character stack and string-length on Parameter
+	;;   Stack
+	;;
+	;; On exit:
+	;; - Z = match (or zero match string)/ NZ = no match
+	;; - A corrupted
+MATCH_STRING:
 	push hl			;06a7
 	push de			;06a8
 	push bc			;06a9
-	ex de,hl			;06aa
-	rst 10h			;06ab
-	rst 8			;06ac
-	ld a,l			;06ad
-	ld hl,(PSTACKC)		;06ae
-l06b1h:
-	and 03fh		;06b1
-	ld b,a			;06b3
-	ld a,(de)			;06b4
-	and 03fh		;06b5
-	cp b			;06b7
-	jr nz,l06c5h		;06b8
-	or a			;06ba
-	jr z,l06c5h		;06bb
-l06bdh:
-	inc de			;06bd
-	ld a,(de)			;06be
-	cp (hl)			;06bf
-	jr nz,l06c5h		;06c0
-	inc hl			;06c2
-	djnz l06bdh		;06c3
-l06c5h:
+
+	ex de,hl		;06aa - DE points to match string
+
+	;; Retrieve length of token into A (should be one byte) via HL
+	rst 10h			;06ab - Pop HL from Param stack
+	rst 8			;06ac - Push HL to Param stack
+	ld a,l			;06ad 
+
+	ld hl,(P_STACKC)	;06ae - Retrieve character-stack current
+				;       position
+
+l06b1h:	and %0111111		;06b1 - Max 127-byte match
+	ld b,a			;06b3 - Set loop counter to length of string
+	ld a,(de)		;06b4 - Retrieve length of match string
+	and %0111111		;06b5 - Max 127
+	cp b			;06b7 - Check if strings are same length
+	jr nz,MS_DONE		;06b8 - Skip forward, if not
+	or a			;06ba - Check if match-string is zero-length
+	jr z,MS_DONE		;06bb - Skip forward if 0
+
+MS_LOOP:
+	inc de			;06bd - Advance to next character
+	ld a,(de)		;06be - Retrieve and ...
+	cp (hl)			;06bf - ... compare to corresponding in string
+	jr nz,MS_DONE		;06c0 - Exit if not same
+
+	inc hl			;06c2 - Check again
+	djnz MS_LOOP		;06c3 - Repeat for every character
+
+MS_DONE:
 	pop bc			;06c5
 	pop de			;06c6
 	pop hl			;06c7
+	
 	ret			;06c8
 
 	;; Routine to handle user error (Part 2)
@@ -1915,73 +2116,98 @@ sub_06e3h:
 	jp l0d6bh		;06ee
 
 
-sub_06f1h:
+	;; Read a token into screen from keyboard
+	;;
+	;; Read token from keyboard, echoing key entries to screen
+	;;
+	;; On exit:
+	;;   Token is on Character Stack (length on Parameter Stack)
+	;;   A - corrupted
+READ_TOKEN:
 	push hl			;06f1
 	
-	ld hl,0fcbfh		;06f2
+	ld hl,TOKEN_LN		;06f2 - Zero current-token length
 	ld (hl),000h		;06f5
 
-l06f7h:	or a			;06f7 - Clear carry for next subroutine
-	call SWITCH_TO_MSTACK1	;06f8 - Activate Context 1
+RT_GET_CHAR:
+	or a			;06f7 - Clear carry for next subroutine
+
+	call SWITCH_TO_MSTACK1	;06f8 - Activate Context 1 (read keyboard?)
 
 	;; At this point, A contains most recent entry in KIB + 0x80
-	and 07fh		;06fb - Mask off bit 7
+	and %01111111		;06fb - Mask off bit 7
 
-	cp 01eh			; Check if control character (other than
-	jr c,l0717h		; EDIT (1E) or FLASH (1F): branch if so
+	cp 0x1E			; Check if control character (other than
+	jr c,RT_CTRL		; EDIT (1E) or FLASH (1F): branch if so
 
-	call PRINT_A		;0701 - Print character ???
+	call PRINT_A		;0701 - Print character
 
-	cp 020h			;0704 - Check for SPACE ???
-	jr z,l070dh		;0706
+	cp 020h			;0704 - Check for SPACE (triggers parser
+				;       in console ???)
+	jr z,RT_PARSE_TOKEN	;0706 - Parse token
 	
-	call nc,sub_0737h	;0708
-	jr l06f7h		;070b
+	call nc,STR_ADD_CHR	;0708
 
-l070dh:	ld a,(hl)		;070d
+	jr RT_GET_CHAR		;070b - Loop
+
+RT_PARSE_TOKEN:
+	ld a,(hl)		;070d - Check token length
 	or a			;070e
-	jr z,l06f7h		;070f
+	jr z,RT_GET_CHAR	;070f - Loop, if zero (as initially)
 
-l0711h:	call PUSH_STRING	;0711
+RT_DONE:
+	call PUSH_STRING	;0711
 
-	pop hl			;0714
+	pop hl			;0714 - Balance stack
 
 	or a			;0715 - Reset carry
 
-	ret			;0716
+	ret			;0716 - Token read, so done
 
-	
-l0717h:	cp 00dh		;0717
-	jr nz,l0720h		;0719
+	;; Parse control character (0x00--0x1D)
+RT_CTRL:
+	cp 00dh			;0717 - Check for carriage return
+	jr nz,RT_CONT		;0719 - Jump forward, if not
 	call sub_062ch		;071b
-	jr l0711h		;071e
-l0720h:
-	cp 01bh		;0720
-	jr z,l072eh		;0722
-	call sub_0737h		;0724
-	ld a,02eh		;0727
-l0729h:
-	call PRINT_A		;0729
-	jr l06f7h		;072c
+	jr RT_DONE		;071e
+
+RT_CONT:
+	cp 01bh			;0720 - Check for ???
+	jr z,l072eh		;0722 - Jump forward, if so
+	call STR_ADD_CHR	;0724
+	ld a,0x2E		;0727 - Display as "."
+
+l0729h:	call PRINT_A		;0729
+	jr RT_GET_CHAR		;072c
+
 l072eh:
-	ld a,(hl)			;072e
+	ld a,(hl)		;072e
 	or a			;072f
-	jr z,l06f7h		;0730
-	dec (hl)			;0732
+	jr z,RT_GET_CHAR	;0730
+	dec (hl)		;0732
 	ld a,008h		;0733
 	jr l0729h		;0735
-sub_0737h:
+
+	;; Add character to string
+STR_ADD_CHR:
 	push hl			;0737
 	push af			;0738
-	ld a,(hl)			;0739
-	inc a			;073a
-	and 03fh		;073b
-	ld (hl),a			;073d
+
+	;; Increment token length
+	ld a,(hl)		;0739 - Retrieve current length of token 
+	inc a			;073a   and increment (for new character)
+	and 03fh		;073b - Max length is 63 characters
+	ld (hl),a		;073d
+
+	;; Move to character position in buffer
 	add a,l			;073e
 	ld l,a			;073f
+
+	;; Retrieve and store character
 	pop af			;0740
-	ld (hl),a			;0741
+	ld (hl),a		;0741
 	pop hl			;0742
+
 	ret			;0743
 
 sub_0744h:
@@ -1989,22 +2215,25 @@ sub_0744h:
 	ld (0fc98h),hl		;0747
 	ld hl,(02006h)		;074a
 	ld (0fc8ah),hl		;074d
-l0750h:
-	ld hl,(02004h)		;0750
-	ld (0fc88h),hl		;0753
+
+	;; Deal with recognised ROM
+l0750h:	ld hl,(02004h)		;0750 - Jump address in ROM
+	ld (SPC_STR_1),hl		;0753
+
 sub_0756h:
 	push hl			;0756
-	ld hl,(0fc88h)		;0757
-	ld (0fc8ch),hl		;075a
+	ld hl,(SPC_STR_1)		;0757
+	ld (SPC_STR_1_DEF),hl		;075a
 	ld hl,(0fc8ah)		;075d
 	ld (0fc8eh),hl		;0760
 	pop hl			;0763
+
 	ret			;0764
 
 sub_0765h:
 	push hl			;0765
-	ld hl,(0fc8ch)		;0766
-	ld (0fc88h),hl		;0769
+	ld hl,(SPC_STR_1_DEF)		;0766
+	ld (SPC_STR_1),hl		;0769
 	ld hl,(0fc8eh)		;076c
 	ld (0fc8ah),hl		;076f
 	pop hl			;0772
@@ -2014,7 +2243,7 @@ sub_0765h:
 sub_0774h:
 	push de			;0774
 	ex de,hl			;0775
-	ld hl,(0fc88h)		;0776
+	ld hl,(SPC_STR_1)		;0776
 	or a			;0779
 	sbc hl,de		;077a
 	call sub_07c4h		;077c
@@ -2023,11 +2252,11 @@ sub_0774h:
 	ret			;0781
 
 sub_0782h:
-	call sub_06f1h		;0782
+	call READ_TOKEN		;0782
+
 sub_0785h:
-	ld hl,(0fc88h)		;0785
-l0788h:
-	call sub_06a7h		;0788
+	ld hl,(SPC_STR_1)		;0785
+l0788h:	call MATCH_STRING	;0788
 	ret z			;078b
 	call sub_0795h		;078c
 	xor a			;078f
@@ -2097,8 +2326,11 @@ sub_07dbh:
 sub_07e5h:
 	ld a,0c9h		;07e5
 	jp sub_07b9h		;07e7
+
+
 sub_07eah:
 	push hl			;07ea
+
 	call sub_0785h		;07eb
 	jr nc,l0805h		;07ee
 	ld hl,(0fc7ah)		;07f0
@@ -2107,13 +2339,14 @@ sub_07eah:
 	call sub_06dah		;07f8
 	call PRINT_STRING		;07fb
 	ld a,055h		;07fe
-l0800h:
-	call sub_06c9h		;0800
-l0803h:
-	pop hl			;0803
+l0800h:	call sub_06c9h		;0800
+
+l0803h:	pop hl			;0803
+
 	ret			;0804
-l0805h:
-	call l0d6bh		;0805
+
+
+l0805h:	call l0d6bh		;0805
 	bit 7,(hl)		;0808
 	push af			;080a
 	call sub_082ah		;080b
@@ -2122,9 +2355,10 @@ l0805h:
 	call jump_to_hl		;0811
 	call sub_0756h		;0814
 	pop hl			;0817
+
 	ret			;0818
-l0819h:
-	call jump_to_hl		;0819
+
+l0819h:	call jump_to_hl		;0819
 	call sub_07e5h		;081c
 	ld hl,(0fc8eh)		;081f
 	call jump_to_hl		;0822
@@ -2188,7 +2422,7 @@ sub_0866h:
 	call sub_07a8h		;086d
 	pop hl			;0870
 	call sub_0774h		;0871
-	ld (0fc88h),hl		;0874
+	ld (SPC_STR_1),hl		;0874
 	ret			;0877
 
 	;; Handle user error
@@ -2199,7 +2433,7 @@ sub_0866h:
 	;; On exit:
 	;;   
 l0878h:	call sub_084dh		;0878
-	jp l099ah		;087b
+	jp WARM_RESTART		;087b
 
 l087eh:
 	call sub_07d3h		;087e
@@ -2248,7 +2482,7 @@ sub_08c2h:
 	and 070h		;08c6
 	ld (hl),a			;08c8
 	
-	ld hl,0fca5h		;08c9
+	ld hl,FLAGS3		;08c9
 	ld a,(hl)			;08cc
 	and 0c0h		;08cd
 	ld (hl),a			;08cf
@@ -2260,28 +2494,35 @@ sub_08c2h:
 
 	ret			;08d7
 
-	;; Kernel of context 0 loop (???)
+	;; Kernel of context 0 loop (GOT THIS FAR)
 C0_KERNEL:
-	call sub_06f1h		;08d8
-	rst 10h			;08db - Pop from stack into HL
+	call READ_TOKEN		;08d8 - Read and parse from KIB
+	rst 10h			;08db - Pop string length from Parameter
+				;       stack into HL
 
 	;; Check if L is zero
-	xor a			;08dc
+	xor a			;08dc - Token length zero?
 	cp l			;08dd
 	jr z,l08e4h		;08de
 
-	rst 8			;08e0
+	rst 8			;08e0 - Push HL onto Parameter stack
+				;       (restore previous state)
+	
 	call sub_07eah		;08e1
-l08e4h:	ld hl,0fca5h		;08e4
+
+l08e4h:	ld hl,FLAGS3		;08e4
 	bit 0,(hl)		;08e7
 	res 0,(hl)		;08e9
+
 	call nz,sub_066eh	;08eb
+
 	ret			;08ee
 
 	;;	
 l08efh:	call READ_FROM_KIB	;08ef
 	ret c			;08f2
 	call PARSE_KIB_ENTRY	;08f3
+
 	jr l08efh		;08f6
 
 	;; ================================================================
@@ -2409,8 +2650,8 @@ sub_091eh:
 	;;   CF - reset, if no underflow
 	;;   ERR - underflow
 	;; ================================================================
-CHECK_PSTACK:
-	ld hl,(PSTACK_BASE)	;0925 - Retrieve address of top of
+CHECK_STACKP:
+	ld hl,(STACKP_BASE)	;0925 - Retrieve address of top of
 				;       parameter stack
 	push iy			;0928 - Load current parameter stack location 
 l092ah:	pop de			;092a   into DE
@@ -2426,38 +2667,49 @@ l092ah:	pop de			;092a   into DE
 
 
 sub_0934h:
-	ld hl,0fca5h		;0934
-	bit 6,(hl)		;0937
-	ret nz			;0939
+	ld hl,FLAGS3		;0934 - Check if multitasking is enabled
+	bit 6,(hl)		;0937   (as set by TON)
+	ret nz			;0939 - Return if so
 
+	;; Disable multitasking?
 	ld hl,l0050h		;093a - Points to RET statement 
-	ld (0fc7ch),hl		;093d - Store for later use in
+	ld (P_MTASK),hl		;093d - Store for later use in
 				;       jump_to_hl at $0A27
 
-	call 01128h		;0940
+	call 01128h		;0940 - Service multitasking
+
 	jp l106eh		;0943
 
 	;; 
 	;; Continuation of RST 0x00 routine
 	;;
-	
+RESTART:
 	;;  Check if Shift key is pressed (to force cold restart)
-l0946h:	ld a,07fh		;0946
-l0948h:	in a,(0feh)		;0948 - Read keyboard 'Shift', 'z', ..., 'V'
+	ld a,07fh		;0946
+l0948h:	in a,(0feh)		;0948 - Read keyboard half-row for
+				;       'Shift', 'z', ..., 'v'
 	rrca			;094a - Rotate 'shift key' into carry
-	jr nc,l0953h		;094b - Branch, if shift pressed (to
+	jr nc,COLD_RESTART		;094b - Branch, if shift pressed (to
 				;       force cold restart)
-	
+
+	;; Check if warm restart is possible
 l094dh:	ld hl,F_WARM_RESTART	;094d - Check if warm restart is
 	inc (hl)		;       possible (if (FC78)=FF)
-	jr z,l099ah		;0951 - Jump forward if warm restart
+	jr z,WARM_RESTART		;0951 - Jump forward if warm restart
 
 	;; Continuation of cold-restart routine
-l0953h:	out (0fdh),a		;0953 - Disable NMI
+COLD_RESTART: im 1	   		; REPLACEMENT CODE ( as NMI generated
+				; already disabled ).
+	;; out (0fdh),a		;0953 - Disable NMI Generator
 
-	;; Check how much memory there is
-	ld hl,040ffh		;0955 - Last byte of first page of RAM
-				;       in 1k/16k RAM configuration
+	;; 
+	;; Check memory configuation of machine (i.e., how much memory
+	;; there is)
+	;;
+	;; Start by checking for RAM above 0x4000
+	ld hl,040ffh		;0955 - Last byte of first page of
+				;       RAM. This is guaranteed to exist
+				;       on all RAM configurations
 
 	;; Write test data (high byte of address) to end of each 256-byte page
 l0958h:	ld (hl),h		;0958
@@ -2474,7 +2726,7 @@ l095eh:	ld a,(hl)		;095e
 	jr nz,l095eh		;0963
 
 	;; Calculate size of memory 
-l0965h:	cpl			;0965 - Calculate 10000h-LAST ADDR 
+l0965h:	cpl			;0965 - Calculate $10000-HL
 	ld h,a			;0966   and store in HL
 	inc hl			;0967
 
@@ -2490,8 +2742,8 @@ l0970h:	ld (hl),a		;0970
 	jr nc,l0970h		;0972
 
 	;; Initialise (Second half of) system variables
-	ld hl,01da0h		;0974
-	ld de,0fc60h		;0977
+	ld hl,DEFVARS		;0974
+	ld de,VARS+0x20		;0977
 	ld bc,l0060h		;097a
 	ldir			;097d
 
@@ -2503,18 +2755,19 @@ l0970h:	ld (hl),a		;0970
 	;; Check how much memory was found and set system variables at
 	;; FC6E and FC76 accordingly.
 	ld a,0xBF		;0983
-	cp h			;0985 - H is 40 or 80 for 16k or 32k of RAM, respectively
-	jr nc,l0991h		;0986 - If H >= C0, then default values
-				;       are okay
+	cp h			;0985 - H is number of RAM pages
+				;       detected -- e.g., 08 = 2K, 10 =
+				;       4K, 40 = 16K, or 80 = 32K RAM
+	jr nc,l0991h		;0986 - Skip forward if <= 32K RAM
 	
-	ld hl,0bd00h		;0988 - By default, these variables
-				;       contain FD00
-	ld (P_DFILE),hl		;098b
-	ld (0fc76h),hl		;098e
+	ld hl,0xBD00		;0988 - Need to adjust memory
+				;       configuration for 48k RAM.
+	ld (P_DBUFFER),hl	;098b - By default, these variables
+	ld (0fc76h),hl		;098e   contain FD00, so only need to
+				;       change if largest RAM
+				;       configuration
 
-l0991h:	call sub_09cah		;0991 - check if ROM/ RAM in 2000--3FFF
-	;; im 1
-	;; db 0x00
+l0991h:	call CHECK_FP_ROM	;0991 - check if ROM/ RAM in 2000--3FFF
 	
 	;; Display copyright message
 	ld hl,COPYRIGHT_MSG	;0994
@@ -2523,66 +2776,84 @@ l0991h:	call sub_09cah		;0991 - check if ROM/ RAM in 2000--3FFF
 	;; ============================================================
 	;; Warm restart
 	;; ============================================================
-	;; *** Somewhere in here, we check integrity of system variables
-l099ah:	ld sp,STACK0_BASE	; Reset machine-stack (possibly
-				; redundant, as stack is reset as part
-				; of RST 00h ???)
+WARM_RESTART:
+	ld sp,STACK0_BASE	; Reset machine-stack #0
+	
+	ld hl,STACKC_BASE	;099d - Reset character stack
+	ld (P_STACKC),hl	;09a0
 
-	ld hl,STACKC_BASE	;099d - Reset character-stack pointer
-	ld (PSTACKC),hl		;09a0
-
-	;; Initialise KIB (32-byte circular buffer at FB80--FBBF
+	;; Initialise KIB (32-byte circular buffer at FB80--FBBF)
 	ld hl,08080h		;09a3 - Initial offset for both
-	ld (KIB_R_OFFSET),hl	;09a6   last-read and lastwrite offset
+	ld (KIB_R_OFFSET),hl	;09a6 - last-read and lastwrite offset are
+				;       stored in consecutive bytes
 
-l09a9h:	call sub_0934h		;09a9 - ???
+l09a9h:	call sub_0934h		;09a9 - Service multitasking (and setup
+				;       display routine)
 	call sub_05ebh		;09ac - Initialise two machine stacks
 	call sub_0765h		;09af - Initialise some variables
 	call sub_08c2h		;09b2 - Set/ reset some flags
 
-	ld iy,(PSTACK_BASE)	;09b5 - Reset parameter stack
+	ld iy,(STACKP_BASE)	;09b5 - Reset parameter stack
 
-	ld a,01eh		;09b9 - Not sure if this is necessary
+	;; Set I register to point to page containing character set
+	ld a,CHARS>>8		;09b9 - Not sure if this is necessary
 	ld i,a			;09bb
-	out (0feh),a		;09bd - Enable NMI, to start display
-				;       handling (Note AF' (used to
-				;       count NMI signals) has not been
-				;       set). Initially,
+
+	;; Initiate display production
+	out (0xFE),a		;09bd - Enable NMI Generator, to start
+				;       display handling (Note AF' (used
+				;       to count NMI signals) has not
+				;       been set). Initially,
 				;       NEXT_DISP_ROUTINE is set to be
 				;       0x0098
 	
 	;; Check if system variables are corrupted (assumed if value at
 	;; FC40 is non-zero, as is zeroed as part of cold restart)
-	ld a,(0fc40h)		;09bf
-	or a			;09c2 
-	jr nz,l0953h		;09c3 - Jump to cold restart, if corrupt
+	;;
+	;; NOTE: Would it be better to do this before starting display
+	;; routine?
+	ld a,(VARS)		;09bf - Check for zero at start of Sys
+	or a			;09c2   Variables. Otherwise assume
+				;       corrupt
+	jr nz,COLD_RESTART	;09c3 - Jump to cold restart, if corrupt
 
 	;; Main loop (Context 0 - Execution mode)
 C0_MAIN_LOOP:
 	call C0_KERNEL		;09c5
 	jr C0_MAIN_LOOP		;09c8
 	
-	;; Check memory from 2000h--3FFFh
-sub_09cah:
+	;; Check memory from 2000h--3FFFh -- e.g. to see if
+	;; floating-point ROM
+CHECK_FP_ROM:
 	ld hl,02000h		;09ca
 	ld a,(hl)		;09cd
 	cpl			;09ce
 	ld (hl),a		;09cf
-	cp (hl)			;09d0
-	cpl			;09d1
-	ld (hl),a		;09d2
-	jr nz,l0a0fh		;09d3 - Jump forward if RAM
-	
+	cp (hl)			;09d0 - Check if ROM/ RAM - Z => RAM
+	cpl			;09d1 - Reinstate value in RAM
+	ld (hl),a		;09d2 
+
+	jr nz,l0a0fh		;09d3 - Jump forward if not RAM
+
+	;; RAM detected at 0x2000
 	push af			;09d5
-	ld hl,0fc57h		;09d6
-	ld a,020h		;09d9
-	ld (0fc6dh),a		;09db
-	add a,(hl)			;09de
-	ld (hl),a			;09df
-	ld hl,0fca5h		;09e0
+
+	;; Update RAM stats
+	ld hl,0fc57h		;09d6 - Some measure of RAM
+
+	;; Update RAM start
+	ld a,020h		;09d9 - 32 256-byte pages / also high
+				;       byte of RAM_START
+	ld (RAM_START+1),a	;09db
+	add a,(hl)		;09de - Increase count by 2k
+	ld (hl),a		;09df
+
+	ld hl,FLAGS3		;09e0
 	set 4,(hl)		;09e3
+
 	pop af			;09e5
 
+	;; Check for known RAM content?
 	xor 0a5h		;09e6
 	jr z,l0a0ch		;09e8
 	dec a			;09ea
@@ -2601,22 +2872,27 @@ l09f4h:	ld hl,02000h		;09f4
 	call sub_1b70h		;0a02
 	ld hl,l19b4h		;0a05
 	ld (02002h),hl		;0a08
+
 	ret			;0a0b
 
 l0a0ch:	jp sub_0744h		;0a0c
 
+	;; Check if valid ROM
+	;;
+	;; At this point A = 0xD3
 l0a0fh:	xor 0a5h		;0a0f - %10100101
 sub_0a11h:
-	jp z,l0750h		;0a11
-	dec a			;0a14
-	ret nz			;0a15
+	jp z,l0750h		;0a11 - Jump if recognised ROM ???
+	dec a			;0a14 - A=0x74
+	ret nz			;0a15 - Return, if not recognised ???
 
 	call l0750h		;0a16
-	jr l09f0h		;0a19
+
+	jr l09f0h		;0a19 - Jump to address in 0x2002
 
 	;; Main loop (Context 1 - ???)
 C1_MAIN_LOOP:
-	call CHECK_PSTACK	; Check for Parameter Stack underflow
+	call CHECK_STACKP	; Check for Parameter Stack underflow
 	call READ_FROM_KIB	; Read next value from KIB (carry set if none)
 
 	call nc,PARSE_KIB_ENTRY	;0a21 - Switch context, if new entry in
@@ -2625,7 +2901,7 @@ C1_MAIN_LOOP:
 
 	call sub_058ah		;0a24
 
-	ld hl,(0fc7ch)		;0a27
+	ld hl,(P_MTASK)		;0a27
 	call jump_to_hl		;0a2a
 
 	ld hl,(0fc54h)		;0a2d
@@ -2769,9 +3045,12 @@ l0addh:
 	rst 18h			;0af7
 	inc c			;0af8
 	jr l0ac8h		;0af9
-	ld (bc),a			;0afb
+
+	;; Routine/ list to deal with ??? when no additional ROM installed
+	ld (bc),a		;0afb
 	ld c,l			;0afc
 	ld hl,(l0064h)		;0afd
+
 sub_0b00h:
 	push hl			;0b00
 	push de			;0b01
@@ -2787,7 +3066,9 @@ sub_0b00h:
 	call sub_0b39h		;0b13
 	pop de			;0b16
 	pop hl			;0b17
+
 	ret			;0b18
+
 sub_0b19h:
 	bit 7,h		;0b19
 	ret z			;0b1b
@@ -3212,7 +3493,7 @@ l0d39h:
 	jr z,l0d60h		;0d50
 	push bc			;0d52
 	ld b,a			;0d53
-	ld hl,(PSTACKC)		;0d54
+	ld hl,(P_STACKC)	;0d54
 	dec a			;0d57
 	add a,l			;0d58
 	ld l,a			;0d59
@@ -3435,7 +3716,7 @@ l0e4ah:
 	pop de			;0e4a
 	pop hl			;0e4b
 	ret			;0e4c
-	ld bc,CHECK_PSTACK+2	;0e4d
+	ld bc,CHECK_STACKP+2	;0e4d
 	nop			;0e50
 	call sub_06e3h		;0e51
 	rst 8			;0e54
@@ -3738,7 +4019,6 @@ l0fdeh:
 	ret			;0fe0
 
 	;; Forth word TASK
-
 	inc b			;0fe1
 	ld d,h			;0fe2
 	ld b,c			;0fe3
@@ -3748,7 +4028,7 @@ l0fdeh:
 	nop			;0fe7
 
 	call sub_0866h		;0fe8
-	ld hl,(0fc88h)		;0feb
+	ld hl,(SPC_STR_1)		;0feb
 	set 6,(hl)		;0fee
 	ld hl,(0fc8ah)		;0ff0
 	ld de,l0005h		;0ff3
@@ -3791,11 +4071,11 @@ l102dh:
 	ld c,a			;102d
 	dec hl			;102e
 	nop			;102f
-	ld hl,0fca5h		;1030
+	ld hl,FLAGS3		;1030
 	res 7,(hl)		;1033
 	ret			;1035
 sub_1036h:
-	ld hl,0fca5h		;1036
+	ld hl,FLAGS3		;1036
 	bit 7,(hl)		;1039
 	ret nz			;103b
 	ld de,l0000h		;103c
@@ -3816,11 +4096,11 @@ sub_1036h:
 	ld d,h			;1058
 	inc de			;1059
 	nop			;105a
-	ld hl,0fca5h		;105b
+	ld hl,FLAGS3		;105b
 	set 7,(hl)		;105e
 l1060h:
 	ld hl,l0057h		;1060
-	ld (0fc82h),hl		;1063
+	ld (P_RUN_DISP),hl		;1063
 	ret			;1066
 	inc b			;1067
 	ld d,e			;1068
@@ -3830,12 +4110,14 @@ l1060h:
 	inc de			;106c
 	nop			;106d
 
-l106eh:	ld hl,0fca5h		;106e
+	;; Set the location of main display routine
+l106eh:	ld hl,FLAGS3		;106e
 	set 7,(hl)		;1071
-l1073h:	ld hl,l0071h		;1073
-	ld (0fc82h),hl		;1076
-	ret			;1079
 
+l1073h:	ld hl,RUN_DISPLAY	;1073
+	ld (P_RUN_DISP),hl	;1076
+	
+	ret			;1079
 
 
 	ld (bc),a			;107a
@@ -3952,10 +4234,13 @@ l10d7h:
 	ld c,e			;1125
 	db 0x11,0x00
 
-	ld hl,($FC98)		;1128
-	ld de,$000A
-	add hl,de			;112e
+	;; Some kind of multi-tasking service routine. When multitasking
+	;; is off, $FC98 points to ROM, so this routine does nothing.
+	ld hl,($FC98)		;1128 - Initially contains 0x0000
+	ld de,$000A		; 
+	add hl,de		;112e
 	set 7,(hl)		;112f
+	
 	ret			;1131
 
 	ld b,055h		;1132
@@ -4132,7 +4417,7 @@ l1223h:
 	djnz l122eh		;122c
 l122eh:
 	call sub_0c13h		;122e
-	ld de,l0041h		;1231
+	ld de,0x0041		;1231
 	ld hl,0eb00h		;1234
 	jr l1223h		;1237
 	ld (bc),a			;1239
@@ -4456,7 +4741,7 @@ sub_13d2h:
 	push hl			;13d2
 	push de			;13d3
 	ld hl,0fc58h		;13d4
-	ld de,0fc60h		;13d7
+	ld de,0xFC60		;13d7
 	call sub_12d7h		;13da
 	ld l,05ch		;13dd
 	ld e,064h		;13df
@@ -4641,7 +4926,7 @@ sub_14c5h:
 	ld c,a			;14e6
 	ld d,d			;14e7
 	ld d,h			;14e8
-	ld (l0086h),hl		;14e9
+	ld (0x0086),hl		;14e9 - ??? ROM
 	ld hl,l14f1h		;14ec
 	jr l149eh		;14ef
 l14f1h:
@@ -4654,7 +4939,7 @@ l14f1h:
 	pop hl			;14f9
 	ret z			;14fa
 	call PRINT_STR_HL		;14fb
-	jp l099ah		;14fe
+	jp WARM_RESTART		;14fe
 sub_1501h:
 	push af			;1501
 	in a,(0feh)		;1502
@@ -4748,15 +5033,18 @@ sub_155ch:
 	ret z			;1576
 	rst 10h			;1577
 	ld (0fc52h),hl		;1578
-l157bh:
-	out (0fdh),a		;157b
+
+l157bh:	out (0fdh),a		;157b
+
 	ld hl,(0fc76h)		;157d
 	call sub_152eh		;1580
 	call sub_1553h		;1583
 	call sub_155ch		;1586
 	call sub_153fh		;1589
 	call sub_152eh		;158c
+
 	out (0feh),a		;158f
+
 	ret			;1591
 l1592h:
 	call sub_15a5h		;1592
@@ -4938,11 +5226,11 @@ l167fh:
 	nop			;1689
 	jr l1692h		;168a
 sub_168ch:
-	ld hl,0fca5h		;168c
+	ld hl,FLAGS3		;168c
 	bit 2,(hl)		;168f
 	ret z			;1691
 l1692h:
-	ld hl,0fca5h		;1692
+	ld hl,FLAGS3		;1692
 	set 1,(hl)		;1695
 	ret			;1697
 	inc bc			;1698
@@ -4951,7 +5239,7 @@ l1692h:
 	ld c,(hl)			;169b
 	inc c			;169c
 	nop			;169d
-	ld hl,0fca5h		;169e
+	ld hl,FLAGS3		;169e
 	set 2,(hl)		;16a1
 	ret			;16a3
 	inc b			;16a4
@@ -4961,7 +5249,7 @@ l1692h:
 	ld b,(hl)			;16a8
 	dec c			;16a9
 	nop			;16aa
-	ld hl,0fca5h		;16ab
+	ld hl,FLAGS3		;16ab
 	res 2,(hl)		;16ae
 	ret			;16b0
 	ld bc,l113eh		;16b1
@@ -5036,8 +5324,8 @@ l16d5h:
 	rst 10h			;170a
 	call sub_0b19h		;170b
 	pop af			;170e
-	ret z			;170f
-	call sub_0b1eh		;1710
+	ret z			;170f - BUG fix - `nop`
+	call sub_0b1eh		;1710 - BUG fix - `call nz, ...`
 	rst 8			;1713
 	ret			;1714
 	ld bc,0082ch		;1715
@@ -5070,7 +5358,7 @@ l16d5h:
 	ld d,h			;1737
 	rra			;1738
 	nop			;1739
-	ld hl,(0fc88h)		;173a
+	ld hl,(SPC_STR_1)		;173a
 	ld de,sub_0008h		;173d
 l1740h:
 	call PUSH_STRING	;1740
@@ -5133,7 +5421,7 @@ l1787h:	call sub_0866h		;1787
 
 	
 	;; Jump here from definition of BASE
-l1797h:	ld hl,0fca5h		;1797 - FLAGs
+l1797h:	ld hl,FLAGS3		;1797 - FLAGs
 	bit 5,(hl)		;179a
 	res 5,(hl)		;179c
 	pop hl			;179e
@@ -5154,7 +5442,7 @@ l17abh:	ld a,02ah		;17ab
 	ld c,a			;17b7
 	dec bc			;17b8
 	nop			;17b9
-	ld hl,0fca5h		;17ba
+	ld hl,FLAGS3		;17ba
 	set 5,(hl)		;17bd
 	ret			;17bf
 	add a,l			;17c0
@@ -5364,7 +5652,7 @@ l18c7h:
 	ld c,e			;18d1
 	ld c,000h		;18d2
 	call sub_06e3h		;18d4
-	ld (0fc7ch),hl		;18d7
+	ld (P_MTASK),hl		;18d7
 	ret			;18da
 
 	db 0x03, 0x4D, 0x45, 0x4D	; MEM
@@ -5375,20 +5663,20 @@ l18c7h:
 
 sub_18e6h:
 	ld hl,(0fc8ah)		;18e6
-	ex de,hl			;18e9
-	ld hl,(RAM_SIZE)		;18ea
-	push iy		;18ed
+	ex de,hl		;18e9
+	ld hl,(RAM_SIZE)	;18ea
+	push iy			;18ed
 	or a			;18ef
 	sbc hl,de		;18f0
 	pop de			;18f2
 	add hl,de			;18f3
 	ex de,hl			;18f4
-	ld hl,(0fc6ch)		;18f5
+	ld hl,(RAM_START)		;18f5
 	add hl,de			;18f8
 	ret			;18f9
 
 sub_18fah:
-	ld hl,0fca5h		;18fa
+	ld hl,FLAGS3		;18fa
 	bit 3,(hl)		;18fd
 	ret nz			;18ff
 	call sub_18e6h		;1900
@@ -5398,7 +5686,7 @@ sub_18fah:
 	ld hl,(RAM_SIZE)		;1908
 	sbc hl,de		;190b
 	ret nc			;190d
-	ld hl,0fca5h		;190e
+	ld hl,FLAGS3		;190e
 	set 3,(hl)		;1911
 	ld a,04dh		;1913
 	jp sub_06c9h		;1915
@@ -5435,54 +5723,54 @@ sub_1927h:
 	call sub_12a2h		;1946
 	ld a,046h		;1949
 	jp nc,sub_06c9h		;194b
-	ld hl,(0fc7ch)		;194e
+	ld hl,(P_MTASK)		;194e
 	call sub_12a2h		;1951
 	jr c,l195ch		;1954
 	ld hl,l19b4h		;1956
-	ld (0fc7ch),hl		;1959
+	ld (P_MTASK),hl		;1959
 l195ch:
 	ld hl,(0fc70h)		;195c
 l195fh:
 	push hl			;195f
 	pop bc			;1960
 	ld (0fc92h),hl		;1961
-	ld a,(hl)			;1964
+	ld a,(hl)		;1964
 	inc hl			;1965
-	ld h,(hl)			;1966
+	ld h,(hl)		;1966
 	ld l,a			;1967
 	or h			;1968
 	jr z,l1974h		;1969
 	call sub_12a2h		;196b
 	jr c,l195fh		;196e
 	xor a			;1970
-	ld (bc),a			;1971
+	ld (bc),a		;1971
 	inc bc			;1972
-	ld (bc),a			;1973
+	ld (bc),a		;1973
 l1974h:
-	ex de,hl			;1974
+	ex de,hl		;1974
 	ld (0fc8eh),hl		;1975
 	call sub_0795h		;1978
-	ld (0fc8ch),hl		;197b
+	ld (SPC_STR_1_DEF),hl	;197b
 	jp sub_0765h		;197e
-	inc b			;1981
-	ld d,h			;1982
-	ld c,a			;1983
-	ld b,(hl)			;1984
-	ld b,(hl)			;1985
-	dec c			;1986
-	nop			;1987
-	ld hl,0fca5h		;1988
+
+	;; FORTH word TOFF
+	db 0x04, 0x54, 0x4F, 0x46, 0x46
+	db 0x0D, 0x00
+
+	ld hl,FLAGS3		;1988
 	res 6,(hl)		;198b
+
 	ret			;198d
-	inc bc			;198e
-	ld d,h			;198f
-	ld c,a			;1990
-	ld c,(hl)			;1991
-	inc c			;1992
-	nop			;1993
-	ld hl,0fca5h		;1994
+
+	;; FORTH word TON
+	db 0x03, 0x54, 0x4F, 0x4E
+	db 0x0C, 0x00
+
+	ld hl,FLAGS3		;1994
 	set 6,(hl)		;1997
+
 	ret			;1999
+
 	inc b			;199a
 	ld d,a			;199b
 	ld b,c			;199c
@@ -5490,7 +5778,7 @@ l1974h:
 	ld c,l			;199e
 	ld a,(bc)			;199f
 	nop			;19a0
-	jp l099ah		;19a1
+	jp WARM_RESTART		;19a1
 	inc b			;19a4
 	ld b,e			;19a5
 	ld c,a			;19a6
@@ -5498,7 +5786,7 @@ l1974h:
 	ld b,h			;19a8
 	ld a,(bc)			;19a9
 	nop			;19aa
-	jp l0953h		;19ab
+	jp COLD_RESTART		;19ab
 	inc bc			;19ae
 	ld c,(hl)			;19af
 	ld d,l			;19b0
@@ -5522,9 +5810,9 @@ l19b4h:
 	ld hl,0fc8ah		;19c5
 	rst 8			;19c8
 	ret			;19c9
-	ld bc,l0953h+1		;19ca
+	ld bc,COLD_RESTART+1		;19ca
 	nop			;19cd
-	ld hl,0fc88h		;19ce
+	ld hl,SPC_STR_1		;19ce
 	rst 8			;19d1
 	ret			;19d2
 	ld (bc),a			;19d3
@@ -5532,7 +5820,7 @@ l19b4h:
 	ld b,b			;19d5
 	ex af,af'			;19d6
 	nop			;19d7
-	jp sub_06f1h		;19d8
+	jp READ_TOKEN		;19d8
 	ld (bc),a			;19db
 	ld a,023h		;19dc
 	dec bc			;19de
@@ -5700,20 +5988,20 @@ l1ac2h:
 	rst 10h			;1ac8
 	rst 10h			;1ac9
 	ret			;1aca
-	ld (bc),a			;1acb
+	ld (bc),a		;1acb
 	ld d,a			;1acc
 	dec a			;1acd
-	ld a,(bc)			;1ace
+	ld a,(bc)		;1ace
 	nop			;1acf
 	call sub_069dh		;1ad0
 	jr l1a96h		;1ad3
-	ld (bc),a			;1ad5
+	ld (bc),a		;1ad5
 	ld d,e			;1ad6
 	dec a			;1ad7
 	dec bc			;1ad8
 	nop			;1ad9
 	rst 10h			;1ada
-	call sub_06a7h		;1adb
+	call MATCH_STRING	;1adb
 l1adeh:
 	jr l1a96h		;1ade
 	inc b			;1ae0
@@ -5828,7 +6116,7 @@ l1b40h:
 sub_1b70h:
 	ld hl,(0fc8ah)		;1b70
 	ld (02006h),hl		;1b73
-	ld hl,(0fc88h)		;1b76
+	ld hl,(SPC_STR_1)	;1b76
 	ld (02004h),hl		;1b79
 	ld hl,(0fc98h)		;1b7c
 	ld (02008h),hl		;1b7f
@@ -5840,7 +6128,7 @@ sub_1b70h:
 	ld b,(hl)			;1b87
 	dec c			;1b88
 	nop			;1b89
-	ld hl,P_DFILE		;1b8a
+	ld hl,P_DBUFFER		;1b8a
 	jp l1b0eh		;1b8d
 	inc b			;1b90
 	ld d,b			;1b91
@@ -5921,7 +6209,7 @@ l1bech:	cp 00dh		;1bec
 	ld a,02eh		;1bf2
 	jr z,l1bfdh		;1bf4
 l1bf6h:
-	call sub_0737h		;1bf6
+	call STR_ADD_CHR	;1bf6
 	bit 5,(hl)		;1bf9
 	jr z,l1c02h		;1bfb
 l1bfdh:
@@ -5960,7 +6248,7 @@ l1c1fh:
 l1c26h:
 	inc hl			;1c26
 	ex de,hl			;1c27
-	ld hl,(PSTACK_BASE)	;1c28
+	ld hl,(STACKP_BASE)	;1c28
 	call sub_1c37h		;1c2b
 	pop hl			;1c2e
 	pop de			;1c2f
@@ -6169,17 +6457,16 @@ l1d9bh:	db 0x08			 ; 5 (Left)
 	db 0x0A			; 6 (Down)
 	db "]", "#", "*"	; Y, H, B
 
+	;; Copy of system variables 1DA0--1DFF
+DEFVARS:
 	db 0x00, 0x00
-
-	;; Copy of system variables 1DA0--1E00
 	nop			;1da2
 	nop			;1da3
 	rrca			;1da4
 	nop			;1da5
 	nop			;1da6
-l1da7h:
-	nop			;1da7
-	nop			;1da8
+l1da7h:	nop			;1da7
+	nop		;1da8 - PERiod - tic limit at which clock resets (see Ch 15 of manual)
 	ld a,(de)			;1da9
 	ld c,a			;1daa
 	nop			;1dab
@@ -6199,7 +6486,7 @@ l1db2h:
 	nop			;1dbd
 	add a,b			;1dbe
 	add a,b			;1dbf
-	dw DISP_BORDER		; Initial display routine to call (points 
+	dw RUN_VSYNC		; Initial display routine to call points 
 	ld (hl),c		;1dc2
 	nop			;1dc3
 	ret nz			;1dc4
@@ -6258,79 +6545,19 @@ l1db2h:
 	nop			;1dfe
 	rrca			;1dff
 
-	
-	nop			;1e00
-	nop			;1e01
-	nop			;1e02
-	nop			;1e03
-	nop			;1e04
-	nop			;1e05
-	nop			;1e06
-	nop			;1e07
-	nop			;1e08
-	ex af,af'			;1e09
-	ex af,af'			;1e0a
-	ex af,af'			;1e0b
-	ex af,af'			;1e0c
-	nop			;1e0d
-	ex af,af'			;1e0e
-	nop			;1e0f
-	nop			;1e10
-	ld (de),a			;1e11
-	ld (de),a			;1e12
-	nop			;1e13
-	nop			;1e14
-	nop			;1e15
-	nop			;1e16
-	nop			;1e17
-	nop			;1e18
-	inc h			;1e19
-	ld a,(hl)			;1e1a
-	inc h			;1e1b
-	inc h			;1e1c
-	ld a,(hl)			;1e1d
-	inc h			;1e1e
-	nop			;1e1f
-	nop			;1e20
-	ex af,af'			;1e21
-	ld a,048h		;1e22
-	inc a			;1e24
-	ld (de),a			;1e25
-	ld a,h			;1e26
-	djnz l1e29h		;1e27
-l1e29h:
-	ld h,d			;1e29
-	ld h,h			;1e2a
-	ex af,af'			;1e2b
-	djnz $+40		;1e2c
-	ld b,(hl)			;1e2e
-	nop			;1e2f
-	nop			;1e30
-	jr l1e57h		;1e31
-	jr $+42		;1e33
-	ld b,h			;1e35
-	ld a,002h		;1e36
-	nop			;1e38
-	inc b			;1e39
-	ex af,af'			;1e3a
-	nop			;1e3b
-	nop			;1e3c
-	nop			;1e3d
-	nop			;1e3e
-	nop			;1e3f
-	nop			;1e40
-	inc b			;1e41
-	ex af,af'			;1e42
-	ex af,af'			;1e43
-	ex af,af'			;1e44
-	ex af,af'			;1e45
-	inc b			;1e46
-	nop			;1e47
-	nop			;1e48
-	jr nz,l1e5bh		;1e49
-	djnz $+18		;1e4b
-	djnz l1e6fh		;1e4d
-	nop			;1e4f
+	;; Character ROM (64 characters * 8 pixel-rows per character)
+	;; Needs to be a the start of a RAM page -- that is, 0x??00.
+CHARS:	db 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00 ; 00 Space
+	db 0x00, 0x08, 0x08, 0x08, 0x08, 0x00, 0x08, 0x00 ; 01 Exclamation
+	db 0x00, 0x12, 0x12, 0x00, 0x00, 0x00, 0x00, 0x00 ; 02 Quotes
+	db 0x00, 0x24, 0x7E, 0x24, 0x24, 0x7E, 0x24, 0x00 ; 03 Hash
+	db 0x00, 0x08, 0x3E, 0x48, 0x3C, 0x12, 0x7C, 0x10 ; 04 Dollar
+	db 0x00, 0x62, 0x64, 0x08, 0x10, 0x26, 0x46, 0x00 ; 05 Percentage
+	db 0x00, 0x18, 0x24, 0x18, 0x28, 0x44, 0x3E, 0x02 ; 06 Ampersand
+	db 0x00, 0x04, 0x08, 0x00, 0x00, 0x00, 0x00, 0x00 ; 07 Quote
+	db 0x00, 0x04, 0x08, 0x08, 0x08, 0x08, 0x04, 0x00 ; 08 Left parenthesis
+	db 0x00, 0x20, 0x10, 0x10, 0x10, 0x10, 0x20, 0x00 ; 09 Right parenthesis
+
 	nop			;1e50
 	nop			;1e51
 	ex af,af'			;1e52
@@ -6338,6 +6565,7 @@ l1e29h:
 	ex af,af'			;1e56
 l1e57h:
 	nop			;1e57
+
 	nop			;1e58
 	nop			;1e59
 	ex af,af'			;1e5a
@@ -6373,72 +6601,18 @@ l1e6fh:
 	inc b			;1e79
 	inc b			;1e7a
 	ex af,af'			;1e7b
-	djnz l1e9eh		;1e7c
+	djnz 0x1E9E		;1e7c
 	jr nz,l1e80h		;1e7e
-l1e80h:
-	nop			;1e80
-	inc a			;1e81
-	ld b,(hl)			;1e82
-	ld c,d			;1e83
-	ld d,d			;1e84
-	ld h,d			;1e85
-	inc a			;1e86
-	nop			;1e87
-	nop			;1e88
-	inc b			;1e89
-	inc c			;1e8a
-	inc b			;1e8b
-	inc b			;1e8c
-	inc b			;1e8d
-	ld c,000h		;1e8e
-	nop			;1e90
-	inc a			;1e91
-	ld b,d			;1e92
-	ld (bc),a			;1e93
-	inc a			;1e94
-	ld b,b			;1e95
-	ld a,(hl)			;1e96
-	nop			;1e97
-	nop			;1e98
-	inc a			;1e99
-	ld b,d			;1e9a
-	inc b			;1e9b
-	ld (bc),a			;1e9c
-	ld b,d			;1e9d
-l1e9eh:
-	inc a			;1e9e
-	nop			;1e9f
-	nop			;1ea0
-	inc b			;1ea1
-	inc c			;1ea2
-	inc d			;1ea3
-	inc h			;1ea4
-	ld a,(hl)			;1ea5
-	inc b			;1ea6
-	nop			;1ea7
-	nop			;1ea8
-	ld a,(hl)			;1ea9
-	ld b,b			;1eaa
-	ld a,h			;1eab
-	ld (bc),a			;1eac
-	ld b,d			;1ead
-	inc a			;1eae
-	nop			;1eaf
-	nop			;1eb0
-	inc a			;1eb1
-	ld b,b			;1eb2
-	ld a,h			;1eb3
-	ld b,d			;1eb4
-	ld b,d			;1eb5
-	inc a			;1eb6
-	nop			;1eb7
-	nop			;1eb8
-	ld a,(hl)			;1eb9
-	ld (bc),a			;1eba
-	inc b			;1ebb
-	ex af,af'			;1ebc
-	djnz l1edfh		;1ebd
-	nop			;1ebf
+
+l1e80h:	db 0x00, 0x3C, 0x46, 0x4A, 0x52, 0x62, 0x3C, 0x00 ; 0
+	db 0x00, 0x04, 0x0C, 0x04, 0x04, 0x04, 0x0E, 0x00 ; 1
+	db 0x00, 0x3C, 0x42, 0x02, 0x3C, 0x40, 0x7E, 0x00 ; 2
+	db 0x00, 0x3C, 0x42, 0x04, 0x02, 0x42, 0x3C, 0x00 ; 3
+	db 0x00, 0x04, 0x0C, 0x14, 0x24, 0x7E, 0x04, 0x00 ; 4
+	db 0x00, 0x7E, 0x40, 0x7C, 0x02, 0x42, 0x3C, 0x00 ; 5
+	db 0x00, 0x3C, 0x40, 0x7C, 0x42, 0x42, 0x3C, 0x00 ; 6
+	db 0x00, 0x7E, 0x02, 0x04, 0x08, 0x10, 0x20, 0x00 ; 7
+
 	nop			;1ec0
 	inc a			;1ec1
 	ld b,d			;1ec2
