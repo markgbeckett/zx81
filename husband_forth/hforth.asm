@@ -76,7 +76,7 @@
 	;; FC80 - Next video handling routine
 	;; FC82 - Particular video handling routine (0x57 or 0x71)
 	;; FC84 - Pointer to character stack
-	
+	;; FC86 - BASE (16-bit base for processing numbers)
 	;; FC88 - Counted string (two characters) to check for when
 	;;        parsing token, potentially triggers extended
 	;;        functionality?
@@ -143,9 +143,13 @@ P_MTASK:	equ 0xFC7C	; Location of multitasking scheduler???
 P_RUN_DISP:	equ 0xFC82	; Address of routine to produce main
 				; display
 P_STACKC:	equ 0xFC84	; Address of next entry in Char Stack
-SPC_STR_1:	equ 0xFC88	; Special string (used with expansion ROM)
-SPC_STR_1_DEF:	equ 0xFC8C
+BASE:		equ 0xFC86	; Base for numerical calculations
+START_OF_DICT:	equ 0xFC88	; Special string (used with expansion ROM)
+
+START_OF_DICT_DEF:	equ 0xFC8C
+
 STACKP_BASE:	equ 0xFC90	; Base offset of Char stack
+
 MSTACK0:	equ 0xFC94
 MSTACK1:	equ 0xFC96
 POSSIBLE_KEY:	equ 0xFCAB
@@ -1991,18 +1995,21 @@ sub_066eh:
 	ld hl,l1d60h		;066f
 	call PRINT_STR_HL		;0672
 	pop hl			;0675
-	ret
-				;0676
-sub_0677h:
-	and 07fh		;0677
-	cp 060h		;0679
+	ret			;0676
+
+
+	;; Convert a character into a digit, in current base
+ATOI:
+	and %01111111		;0677
+	cp 060h			;0679 - Check for letter
 	jr c,l067fh		;067b
-	add a,0e0h		;067d
-l067fh:
-	add a,0d0h		;067f
-	cp 010h		;0681
+	add a,0e0h		;067d - Subtract 0x20
+l067fh:	add a,0d0h		;067f - Add 
+	cp 010h			;0681
 	ret c			;0683
+
 	add a,0f9h		;0684
+
 	ret			;0686
 sub_0687h:
 	push af			;0687
@@ -2218,12 +2225,12 @@ sub_0744h:
 
 	;; Deal with recognised ROM
 l0750h:	ld hl,(02004h)		;0750 - Jump address in ROM
-	ld (SPC_STR_1),hl		;0753
+	ld (START_OF_DICT),hl		;0753
 
 sub_0756h:
 	push hl			;0756
-	ld hl,(SPC_STR_1)		;0757
-	ld (SPC_STR_1_DEF),hl		;075a
+	ld hl,(START_OF_DICT)		;0757
+	ld (START_OF_DICT_DEF),hl		;075a
 	ld hl,(0fc8ah)		;075d
 	ld (0fc8eh),hl		;0760
 	pop hl			;0763
@@ -2232,8 +2239,8 @@ sub_0756h:
 
 sub_0765h:
 	push hl			;0765
-	ld hl,(SPC_STR_1_DEF)		;0766
-	ld (SPC_STR_1),hl		;0769
+	ld hl,(START_OF_DICT_DEF)		;0766
+	ld (START_OF_DICT),hl		;0769
 	ld hl,(0fc8eh)		;076c
 	ld (0fc8ah),hl		;076f
 	pop hl			;0772
@@ -2243,7 +2250,7 @@ sub_0765h:
 sub_0774h:
 	push de			;0774
 	ex de,hl			;0775
-	ld hl,(SPC_STR_1)		;0776
+	ld hl,(START_OF_DICT)		;0776
 	or a			;0779
 	sbc hl,de		;077a
 	call sub_07c4h		;077c
@@ -2254,36 +2261,68 @@ sub_0774h:
 sub_0782h:
 	call READ_TOKEN		;0782
 
-sub_0785h:
-	ld hl,(SPC_STR_1)		;0785
-l0788h:	call MATCH_STRING	;0788
-	ret z			;078b
-	call sub_0795h		;078c
+CHECK_FOR_WORD:
+	;; Check if token in string buffer corresponds to Forth word in
+	;; dictionary.
+	;;
+	;; On exit:
+	;;   HL - matching word
+	;;   CF - reset (matched) / set (no match)
+	ld hl,(START_OF_DICT)	;0785
+CW_LOOP:
+	call MATCH_STRING	;0788
+	ret z			;078b - Return if matched (HL points to
+				;       word)
+
+	;; Advance to next word (pointer in HL)
+	call FIND_NEXT_WORD		;078c
+
+	;; Check if end of dictionary (if H=0)
 	xor a			;078f
 	cp h			;0790
-	jr nz,l0788h		;0791
+	
+	jr nz,CW_LOOP		;0791
+
 	scf			;0793
+
 	ret			;0794
 
-sub_0795h:
+	;; Advance to next word (in dictionary)
+	;;
+	;; On entry:
+	;;  HL - address of current word
+	;;
+	;; On exit:
+	;; 
+FIND_NEXT_WORD:
 	push de			;0795
-	ld d,h			;0796
+
+	;; Move address of word into HL
+	ld d,h			;0796 
 	ld e,l			;0797
-	ld a,(de)			;0798
+
+	;; Retrieve word-name-length
+	ld a,(de)		;0798 
 	and 03fh		;0799
+
+	;;  Advance HL to word-length field
 	add a,l			;079b
 	ld l,a			;079c
-	jr nc,l07a0h		;079d
+	jr nc,l07a0h		;079d - Skip forward if no carry
 	inc h			;079f
-l07a0h:
-	inc hl			;07a0
-	ld a,(hl)			;07a1
+l07a0h:	inc hl			;07a0
+
+	;; Advance to next word
+	ld a,(hl)		;07a1
 	inc hl			;07a2
-	ld h,(hl)			;07a3
+	ld h,(hl)		;07a3
 	ld l,a			;07a4
-	add hl,de			;07a5
+	add hl,de		;07a5
+
 	pop de			;07a6
+	
 	ret			;07a7
+
 sub_07a8h:
 	ld hl,(0fc8ah)		;07a8
 	call sub_0d8dh		;07ab
@@ -2328,24 +2367,41 @@ sub_07e5h:
 	jp sub_07b9h		;07e7
 
 
-sub_07eah:
-	push hl			;07ea
+	;; Parse word entered at keyboard
+	;;
+	;; On entry:
+	;;   Word is on parameter stack
+	;;   HL - length of work
+	;;
+	;; On exit:
+	;; 
+PROCESS_TOKEN:
+	push hl			;07ea Save token length
 
-	call sub_0785h		;07eb
-	jr nc,l0805h		;07ee
-	ld hl,(0fc7ah)		;07f0
+	call CHECK_FOR_WORD	;07eb - Search dictionary for matching word
+	jr nc,l0805h		;07ee - Jump forward if match found (HL
+				;       points to word)
+
+	;; Attempt to parse as a number
+	ld hl,(0xFC7A)		;07f0 - Contains 0A36
 	call jump_to_hl		;07f3
-	jr nc,l0803h		;07f6
+
+	;; GOT THIS FAR
+	jr nc,l0803h		;07f6 - Skip forward if done
+
+	;; Deal with error?
 	call sub_06dah		;07f8
-	call PRINT_STRING		;07fb
+	call PRINT_STRING	;07fb
+
 	ld a,055h		;07fe
 l0800h:	call sub_06c9h		;0800
 
-l0803h:	pop hl			;0803
+PT_DONE:
+	pop hl			;0803
 
 	ret			;0804
 
-
+	;; Process word (pointed to by HL)
 l0805h:	call l0d6bh		;0805
 	bit 7,(hl)		;0808
 	push af			;080a
@@ -2354,6 +2410,7 @@ l0805h:	call l0d6bh		;0805
 	jr nz,l0819h		;080f
 	call jump_to_hl		;0811
 	call sub_0756h		;0814
+
 	pop hl			;0817
 
 	ret			;0818
@@ -2400,8 +2457,8 @@ l0848h:
 sub_084dh:
 	push af			;084d - Save error code
 	call sub_06dah		;084e
-	call 00d48h		;0851
-	call PRINT_STRING		;0854
+	call CDUP		;0851 - Duplicate string on character stack
+	call PRINT_STRING	;0854
 
 	pop af			;0857 - Retrieve error code
 	
@@ -2422,7 +2479,7 @@ sub_0866h:
 	call sub_07a8h		;086d
 	pop hl			;0870
 	call sub_0774h		;0871
-	ld (SPC_STR_1),hl		;0874
+	ld (START_OF_DICT),hl		;0874
 	ret			;0877
 
 	;; Handle user error
@@ -2496,7 +2553,8 @@ sub_08c2h:
 
 	;; Kernel of context 0 loop (GOT THIS FAR)
 C0_KERNEL:
-	call READ_TOKEN		;08d8 - Read and parse from KIB
+	call READ_TOKEN		;08d8 - Read and parse token from
+				;       keyboard
 	rst 10h			;08db - Pop string length from Parameter
 				;       stack into HL
 
@@ -2508,7 +2566,7 @@ C0_KERNEL:
 	rst 8			;08e0 - Push HL onto Parameter stack
 				;       (restore previous state)
 	
-	call sub_07eah		;08e1
+	call PROCESS_TOKEN	;08e1
 
 l08e4h:	ld hl,FLAGS3		;08e4
 	bit 0,(hl)		;08e7
@@ -2909,42 +2967,50 @@ C1_MAIN_LOOP:
 	ld (0fc54h),hl		;0a31
 	jr C1_MAIN_LOOP		;0a34
 
+	;; Part of processing word entered at keyboard (e.g., called
+	;; from 0x07F3)
+	;;
+	;; Possible push token as a number to stack
 sub_0a36h:
 	push hl			;0a36
 	push de			;0a37
 	push bc			;0a38
-	call 00d48h		;0a39
+
+	call CDUP		;0a39 - Duplicate token
 	xor a			;0a3c
 	ld c,a			;0a3d
-	rst 10h			;0a3e
-l0a3fh:
-	or l			;0a3f
-	jr z,l0a79h		;0a40
-	ld b,a			;0a42
+	rst 10h			;0a3e - Pop string length from stack to HL
+
+l0a3fh:	or l			;0a3f - Check if A and L are zero
+	jr z,l0a79h		;0a40 - Skip forward if so
+	
+	ld b,a			;0a42 
 	ld h,c			;0a43
 	ld l,c			;0a44
 	ld d,c			;0a45
-	rst 8			;0a46
-	rst 8			;0a47
-	ld hl,(0fc86h)		;0a48
-	ex de,hl			;0a4b
-l0a4ch:
-	rst 20h			;0a4c
-	call sub_0677h		;0a4d
-	cp e			;0a50
-	jr nc,l0a7eh		;0a51
-	ex de,hl			;0a53
-	rst 8			;0a54
-	ex de,hl			;0a55
+	rst 8			;0a46 - Push HL onto param stack
+	rst 8			;0a47 - Push HL onto stack
+	ld hl,(BASE)		;0a48 - Retrieve base
+	ex de,hl		;0a4b - DE = base
+
+l0a4ch:	rst 20h			;0a4c - Pop from character stack into A
+	call ATOI		;0a4d
+	cp e			;0a50 - Check if exceeds base
+	jr nc,l0a7eh		;0a51   Exit, if exceeds
+	
+	ex de,hl		;0a53
+	rst 8			;0a54 - Push HL onto param stack
+	ex de,hl		;0a55
 	ld l,a			;0a56
 	call sub_0c13h		;0a57
-	call sub_0cd6h		;0a5a
-	rst 8			;0a5d
+	call DSTAR		;0a5a
+	rst 8			;0a5d - Push HL onto param stack
 	call sub_0c13h		;0a5e
 	call sub_1305h		;0a61
+
 	djnz l0a4ch		;0a64
-l0a66h:
-	call sub_0b9bh		;0a66
+
+l0a66h:	call sub_0b9bh		;0a66
 	bit 0,c		;0a69
 	call nz,sub_0b2dh		;0a6b
 	call l0d6bh		;0a6e
@@ -2953,11 +3019,12 @@ l0a66h:
 	call nz,sub_0008h		;0a74
 	ex de,hl			;0a77
 	rst 8			;0a78
-l0a79h:
-	ld a,c			;0a79
+l0a79h:	ld a,c			;0a79
+
 	pop bc			;0a7a
 	pop de			;0a7b
 	pop hl			;0a7c
+
 	ret			;0a7d
 l0a7eh:
 	cp 0f7h		;0a7e
@@ -2988,8 +3055,8 @@ sub_0a96h:
 	call sub_0b28h		;0a9f
 	push af			;0aa2
 l0aa3h:
-	call sub_0b39h		;0aa3
-	ld hl,(0fc86h)		;0aa6
+	call STACK_DE_HL		;0aa3
+	ld hl,(BASE)		;0aa6
 	rst 8			;0aa9
 	call sub_0c13h		;0aaa
 	call 00cc5h		;0aad
@@ -3028,7 +3095,7 @@ sub_0ad3h:
 	push af			;0adc
 l0addh:
 	rst 8			;0add
-	ld hl,(0fc86h)		;0ade
+	ld hl,(BASE)		;0ade
 	rst 8			;0ae1
 	call sub_0bf2h		;0ae2
 	rst 10h			;0ae5
@@ -3046,10 +3113,14 @@ l0addh:
 	inc c			;0af8
 	jr l0ac8h		;0af9
 
-	;; Routine/ list to deal with ??? when no additional ROM installed
-	ld (bc),a		;0afb
-	ld c,l			;0afc
-	ld hl,(l0064h)		;0afd
+	;; Start of built-in FORTH dictionary.
+	;; 
+	;; Word check in
+	;; https://github.com/monsonite/Z80_Forth/blob/master/h4th_source_2.asm
+
+	;; Forth word M*
+	db 0x02, 0x4D, 0x2A
+	db 0x64, 0x00
 
 sub_0b00h:
 	push hl			;0b00
@@ -3063,7 +3134,7 @@ sub_0b00h:
 	call sub_0b3eh		;0b0c
 	or a			;0b0f
 	call po,sub_0b2dh		;0b10
-	call sub_0b39h		;0b13
+	call STACK_DE_HL		;0b13
 	pop de			;0b16
 	pop hl			;0b17
 
@@ -3096,12 +3167,23 @@ l0b34h:
 	call sub_0b1eh		;0b34
 	ex de,hl			;0b37
 	ret			;0b38
-sub_0b39h:
-	ex de,hl			;0b39
-	rst 8			;0b3a
-	ex de,hl			;0b3b
-	rst 8			;0b3c
+
+	;; Stack DE and HL  ( -- HL DE )
+	;; On entry:
+	;;
+	;; On exit:
+	;; 
+STACK_DE_HL:
+	;; Push DE onto parameter stack
+	ex de,hl		;0b39
+	rst 8			;0b3a - Push HL onto Parameter stack
+
+	;; Push HL onto parameter stack
+	ex de,hl		;0b3b
+	rst 8			;0b3c - Push DE onto stack
+	
 	ret			;0b3d
+
 sub_0b3eh:
 	push ix		;0b3e
 l0b40h:
@@ -3164,7 +3246,7 @@ sub_0b73h:
 	call c,sub_0b1eh		;0b90
 	ex de,hl			;0b93
 l0b94h:
-	call sub_0b39h		;0b94
+	call STACK_DE_HL		;0b94
 	pop bc			;0b97
 	pop de			;0b98
 	pop hl			;0b99
@@ -3254,25 +3336,24 @@ sub_0bf2h:
 	dec l			;0c0e
 	ld a,044h		;0c0f
 	ld d,000h		;0c11
+
+	;; ( XX -- XX FLAG )
 sub_0c13h:
 	push de			;0c13
 	push hl			;0c14
-	rst 10h			;0c15
-	ld a,h			;0c16
-	rla			;0c17
-	ex de,hl			;0c18
-	sbc hl,hl		;0c19
-	ex de,hl			;0c1b
-	call sub_0b39h		;0c1c
+	
+	rst 10h			;0c15 - Pop from stack into HL
+	ld a,h			;0c16 - Move upper byte to A
+	rla			;0c17 - Bit 7 into carry
+	ex de,hl		;0c18
+	sbc hl,hl		;0c19 - 0000 or FFFF, depending on carry
+	ex de,hl		;0c1b
+	call STACK_DE_HL	;0c1c
+
 	pop hl			;0c1f
 	pop de			;0c20
-l0c21h:
-	ret			;0c21
 
-	;; Start of built-in FORTH dictionary.
-	;; 
-	;; Word check in https://github.com/monsonite/Z80_Forth/blob/master/h4th_source_2.asm
-
+l0c21h:	ret			;0c21
 	
 	;; Forth word ROT
 	inc bc			;0c22
@@ -3337,11 +3418,11 @@ l0c67h:
 	pop hl			;0c71
 	pop ix		;0c72
 	ret			;0c74
-	inc bc			;0c75
-	ld c,l			;0c76
-	ld b,h			;0c77
-	ld hl,(l004bh)		;0c78
-sub_0c7bh:
+
+	;; Forth word MD*
+	db 0x03, 0x4D, 0x44, 0x2A
+	db 0x4B, 0x00
+MDSTAR:
 	push ix		;0c7b
 	push hl			;0c7d
 	push de			;0c7e
@@ -3384,35 +3465,39 @@ l0cabh:
 	pop hl			;0cbc
 	pop ix		;0cbd
 	ret			;0cbf
-	ld (bc),a			;0cc0
-	ld b,h			;0cc1
-	cpl			;0cc2
-	ld de,0cd00h		;0cc3
-	sbc a,e			;0cc6
-	dec bc			;0cc7
+
+	;; Forth Word D/
+	;;
+	;;
+	db 0x02, 0x44, 0x2F
+	db 0x11, 0x00
+
+	call 0x0B9B
 	call sub_0cfbh		;0cc8
-	call sub_0b39h		;0ccb
+	call STACK_DE_HL		;0ccb
 	jp l0c3ah		;0cce
-	ld (bc),a			;0cd1
-	ld b,h			;0cd2
-	ld hl,(00016h)		;0cd3
-sub_0cd6h:
+
+	;; Forth Word D*
+	db 0x02, 0x44, 0x2A
+	db 0x16, 0x00
+DSTAR:
 	push hl			;0cd6
 	push de			;0cd7
-	call sub_0c7bh		;0cd8
+	call MDSTAR		;0cd8
 	call sub_0b9bh		;0cdb
-	call sub_0cefh		;0cde
-	call sub_0b39h		;0ce1
+	call TWODROP		;0cde
+	call STACK_DE_HL	;0ce1
 	pop de			;0ce4
 	pop hl			;0ce5
+
 	ret			;0ce6
-	dec b			;0ce7
-	ld (05244h),a		;0ce8
-	ld c,a			;0ceb
-	ld d,b			;0cec
-	dec c			;0ced
-	nop			;0cee
-sub_0cefh:
+
+	;; Forth word 2DROP
+	;;
+	;; 
+	db 0x05, 0x32, 0x44, 0x52, 0x4F, 0x50
+	db 0x0D, 0x00
+TWODROP:
 	push hl			;0cef
 	rst 10h			;0cf0
 	rst 10h			;0cf1
@@ -3428,9 +3513,9 @@ sub_0cfbh:
 	push hl			;0cfb
 	push de			;0cfc
 	call sub_0b9bh		;0cfd
-	call sub_0b39h		;0d00
+	call STACK_DE_HL		;0d00
 	push iy		;0d03
-	call sub_0b39h		;0d05
+	call STACK_DE_HL		;0d05
 	pop hl			;0d08
 	push hl			;0d09
 	rl d		;0d0a
@@ -3478,35 +3563,53 @@ l0d39h:
 	rst 8			;0d3e
 	pop hl			;0d3f
 	ret			;0d40
-	inc b			;0d41
-	ld b,e			;0d42
-	ld b,h			;0d43
-	ld d,l			;0d44
-	ld d,b			;0d45
-	ld (0f500h),hl		;0d46
+
+	;; Forth word CDUP
+	;;
+	;; Duplicate string on character stack
+	;; 
+	db 0x04, 0x43, 0x44, 0x55, 0x50
+	db 0x22, 0x00
+
+	;; Save registers
+CDUP:	push af			;0d48
 	push hl			;0d49
-	rst 10h			;0d4a
-	rst 8			;0d4b
-	rst 8			;0d4c
+
+	;; Effectively DUP
+	rst 10h			;0d4a - Pop HL (length of string) onto
+				;       parameter stack
+	rst 8			;0d4b - Push HL from parameter stack
+	rst 8			;0d4c - Push HL from parameter stack
+
+	;; Get length of word and check if null
 	ld a,l			;0d4d
-	and 03fh		;0d4e
-	jr z,l0d60h		;0d50
+	and %00111111		;0d4e
+	jr z,CDUP_DONE		;0d50
+	
 	push bc			;0d52
-	ld b,a			;0d53
-	ld hl,(P_STACKC)	;0d54
+
+	ld b,a			;0d53 - B is length of string
+
+	;;  Point HL to end of current string on stack
+	ld hl,(P_STACKC)	;0d54 
 	dec a			;0d57
 	add a,l			;0d58
 	ld l,a			;0d59
-l0d5ah:
-	ld a,(hl)			;0d5a
-	rst 18h			;0d5b
-	dec hl			;0d5c
-	djnz l0d5ah		;0d5d
+
+CDUP_LOOP:
+	ld a,(hl)		;0d5a - Retrieve character
+	rst 18h			;0d5b - Push Character
+	dec hl			;0d5c - Next character
+	djnz CDUP_LOOP		;0d5d - Repeat unil done
+
 	pop bc			;0d5f
-l0d60h:
+
+CDUP_DONE:
 	pop hl			;0d60
 	pop af			;0d61
+
 	ret			;0d62
+
 	dec b			;0d63
 	ld b,e			;0d64
 	ld b,h			;0d65
@@ -3941,7 +4044,7 @@ l0f69h:
 	dec c			;0f7d
 	nop			;0f7e
 	ld hl,l0010h		;0f7f
-	ld (0fc86h),hl		;0f82
+	ld (BASE),hl		;0f82
 	ret			;0f85
 	inc bc			;0f86
 	ld b,c			;0f87
@@ -4028,7 +4131,7 @@ l0fdeh:
 	nop			;0fe7
 
 	call sub_0866h		;0fe8
-	ld hl,(SPC_STR_1)		;0feb
+	ld hl,(START_OF_DICT)		;0feb
 	set 6,(hl)		;0fee
 	ld hl,(0fc8ah)		;0ff0
 	ld de,l0005h		;0ff3
@@ -4129,7 +4232,7 @@ l1073h:	ld hl,RUN_DISPLAY	;1073
 	push hl			;1082
 	pop ix		;1083
 	call sub_108eh		;1085
-	call sub_0b39h		;1088
+	call STACK_DE_HL		;1088
 	pop ix		;108b
 	ret			;108d
 sub_108eh:
@@ -4409,8 +4512,8 @@ l11f2h:
 	ld de,l0002h		;121d
 	ld hl,0bf20h		;1220
 l1223h:
-	call sub_0b39h		;1223
-	jp sub_0cd6h		;1226
+	call STACK_DE_HL		;1223
+	jp DSTAR		;1226
 	ld (bc),a			;1229
 	ld d,h			;122a
 	ld b,h			;122b
@@ -4625,7 +4728,7 @@ sub_1305h:
 	nop			;1343
 	call sub_0b9bh		;1344
 	call sub_0b2dh		;1347
-	jp sub_0b39h		;134a
+	jp STACK_DE_HL		;134a
 	inc b			;134d
 	ld b,h			;134e
 	ld b,c			;134f
@@ -4635,7 +4738,7 @@ sub_1305h:
 l1354h:
 	call sub_0b9bh		;1354
 	call sub_0b28h		;1357
-	jp sub_0b39h		;135a
+	jp STACK_DE_HL		;135a
 	ld (bc),a			;135d
 	ld b,e			;135e
 	ld b,b			;135f
@@ -5358,12 +5461,12 @@ l16d5h:
 	ld d,h			;1737
 	rra			;1738
 	nop			;1739
-	ld hl,(SPC_STR_1)		;173a
+	ld hl,(START_OF_DICT)		;173a
 	ld de,sub_0008h		;173d
 l1740h:
 	call PUSH_STRING	;1740
 	call sub_1758h		;1743
-	call sub_0795h		;1746
+	call FIND_NEXT_WORD		;1746
 	call PRINT_STRING		;1749
 	xor a			;174c
 	cp h			;174d
@@ -5627,7 +5730,7 @@ l18aeh:
 	db 0x84, 0x42, 0x41, 0x53, 0x45
 	db 0x0E, 0x00
 	
-	ld hl,0fc86h		;18b6
+	ld hl,BASE		;18b6
 	push hl			;18b9
 	jp l1797h		;18ba
 
@@ -5642,7 +5745,7 @@ l18aeh:
 	ld c,h			;18c4
 	djnz l18c7h		;18c5
 l18c7h:
-	ld hl,0fc86h		;18c7
+	ld hl,BASE		;18c7
 	ld (hl),00ah		;18ca
 	ret			;18cc
 	inc b			;18cd
@@ -5749,8 +5852,8 @@ l195fh:
 l1974h:
 	ex de,hl		;1974
 	ld (0fc8eh),hl		;1975
-	call sub_0795h		;1978
-	ld (SPC_STR_1_DEF),hl	;197b
+	call FIND_NEXT_WORD	;1978
+	ld (START_OF_DICT_DEF),hl ;197b
 	jp sub_0765h		;197e
 
 	;; FORTH word TOFF
@@ -5812,7 +5915,7 @@ l19b4h:
 	ret			;19c9
 	ld bc,COLD_RESTART+1		;19ca
 	nop			;19cd
-	ld hl,SPC_STR_1		;19ce
+	ld hl,START_OF_DICT		;19ce
 	rst 8			;19d1
 	ret			;19d2
 	ld (bc),a			;19d3
@@ -5855,7 +5958,7 @@ l19f0h:
 	ld hl,(l000dh+1)		;1a07
 	call sub_0b9bh		;1a0a
 	call sub_0b3eh		;1a0d
-	jp sub_0b39h		;1a10
+	jp STACK_DE_HL		;1a10
 	dec b			;1a13
 	ld d,l			;1a14
 	cpl			;1a15
@@ -5870,7 +5973,7 @@ sub_1a1bh:
 	pop bc			;1a1d
 	call sub_0b9bh		;1a1e
 	call sub_0ba0h		;1a21
-	jp sub_0b39h		;1a24
+	jp STACK_DE_HL		;1a24
 	inc b			;1a27
 	ld d,l			;1a28
 	ld c,l			;1a29
@@ -6080,7 +6183,7 @@ l1b30h:
 l1b40h:
 	rst 10h			;1b40
 	ld a,l			;1b41
-	call sub_0677h		;1b42
+	call ATOI		;1b42
 	ld h,000h		;1b45
 	ld l,a			;1b47
 	rst 8			;1b48
@@ -6116,7 +6219,7 @@ l1b40h:
 sub_1b70h:
 	ld hl,(0fc8ah)		;1b70
 	ld (02006h),hl		;1b73
-	ld hl,(SPC_STR_1)	;1b76
+	ld hl,(START_OF_DICT)	;1b76
 	ld (02004h),hl		;1b79
 	ld hl,(0fc98h)		;1b7c
 	ld (02008h),hl		;1b7f
