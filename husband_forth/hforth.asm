@@ -98,6 +98,8 @@
 	;;        2 - Set to prevent printing to console
 	;;        4 - Machine stack in use (0/1)
 	;;        5 - Switch machine stack lock
+	;;        6 -
+	;;        7 - 0 - cursor is uninverted/ cursor is inverted
 
 	;; FCAE - Screen info (editor)
 	;;        0 - current col value
@@ -131,44 +133,48 @@
 	;; FCC0--FCFF -- Character stack (wraps around)
 	;; FD00--FFFF - video RAM
 
-TOP_BORDER_LINES:	equ 56	; H_FORTH uses 4Ah (30d) / better 54
+	include "hforth_chars.asm"
+	
+TOP_BORDER_LINES:	equ 56	; H_FORTH uses 4Ah (30d) / better 56
 BOT_BORDER_LINES:	equ 55	; H_FORTH uses 1Eh (74d) / better 55
 
-VARS:		equ 0xFC40	; Start of system variables
-RAM_SIZE:	equ 0xFC56	; Amount of RAM (in 256-byte pages)
+OFFSET:		equ 0xFB00 	; Offset to system memory
+	
+VARS:		equ OFFSET+0x0140	; Start of system variables
+RAM_SIZE:	equ OFFSET+0x0156	; Amount of RAM (in 256-byte pages)
 RAM_START:	equ 0xFC6C	; Start of RAM
-P_DBUFFER:	equ 0xFC6E	; Address of display buffer
+P_DBUFFER:	equ OFFSET+0x016E	; Address of display buffer
 PRINT_DRVR:	equ 0xFC74	; Address of printer driver
-P_MTASK:	equ 0xFC7C	; Location of multitasking scheduler???
-P_RUN_DISP:	equ 0xFC82	; Address of routine to produce main
+P_MTASK:	equ OFFSET+0x017C	; Location of multitasking scheduler???
+P_RUN_DISP:	equ OFFSET+0x0182	; Address of routine to produce main
 				; display
-P_STACKC:	equ 0xFC84	; Address of next entry in Char Stack
+P_STACKC:	equ OFFSET+0x0184	; Address of next entry in Char Stack
 BASE:		equ 0xFC86	; Base for numerical calculations
 START_OF_DICT:	equ 0xFC88	; Special string (used with expansion ROM)
 
-START_OF_DICT_DEF:	equ 0xFC8C
+START_OF_DICT_DEF:	equ OFFSET+0x018C
 
-STACKP_BASE:	equ 0xFC90	; Base offset of Char stack
+STACKP_BASE:	equ OFFSET+0x0190	; Base offset of Char stack
 
-MSTACK0:	equ 0xFC94
-MSTACK1:	equ 0xFC96
+MSTACK0:	equ OFFSET+0x0194
+MSTACK1:	equ OFFSET+0x0196
 POSSIBLE_KEY:	equ 0xFCAB
 LAST_KEY:	equ 0xFCAC
-FLAGS:		equ 0xFCAD
-STACK0_BASE:	equ 0xFB80
+FLAGS:		equ OFFSET+0x01AD
+STACK0_BASE:	equ OFFSET+0x0080
 PAD:		equ 0xFBC0	; Start of PAD
-FLAGS2:		equ 0xFCBE	; Further flags
-STACKC_BASE:	equ 0xFCC0
-STACK1_BASE:	equ 0xFC3E
-F_WARM_RESTART:	equ 0xFC78	; 0xFF indicates warm restart possible
+FLAGS2:		equ OFFSET+0x01BE	; Further flags
+STACKC_BASE:	equ OFFSET+0x01C0
+STACK1_BASE:	equ OFFSET+0x013E
+F_WARM_RESTART:	equ OFFSET+0x0178 ; 0xFF indicates warm restart possible
 NEXT_DISP_ROUTINE:	equ 0xFC80	
 SCR_INFO_ED:	equ 0xFCAE
 SCR_INFO_CO:	equ 0xFCB6
-KIB_R_OFFSET:	equ 0xFC7E
+KIB_R_OFFSET:	equ OFFSET+0x017E
 KIB_W_OFFSET:	equ 0xFC7F
-FLAGS3:		equ 0xFCA5	; Bits:
-				;  6 - 0 = stop tasks on restart; 1 =
-				;  continue multitasking
+FLAGS3:		equ OFFSET+0x01A5	; Bits: 6 - 0 = stop tasks on
+					;  restart; 1 = continue
+					;  multitasking
 TOKEN_LN:	equ 0xFCBF	; Track length of currently being entered token
 
 	org	00000h
@@ -406,7 +412,7 @@ RUN_DISPLAY:
 	ld hl,(P_DBUFFER)	; Point to start of display buffer
 				; (execution address in upper 32kB of
 				; memory)
-	;; set 7,h		; Switch address to upper memory
+	;; set 7,h			; Switch address to upper memory
 	
 	ld a,0xEA		; Sets a pause before the main display
 				; starts to execute. Used to set refresh
@@ -846,28 +852,38 @@ l0200h:	ret			;0200
 
 
 	;; Continuation of PUSHC_A (rst 18)
-l0201h:	ld a,(hl)		;0201
-	dec a			;0202
-	or 0c0h			;0203
-	ld (hl),a		;0205
-	ld l,a			;0206
-	pop af			;0207
-	ld (hl),a		;0208
-	pop hl			;0209
+	;; 
+	;; At this point
+	;; - HL contains PSTACK_C
+	;; - Character is top entry on machine stack
+l0201h:	ld a,(hl)		;0201 - Retrieve current offset 
+	dec a			;0202 - Decrement ready to add new value
+	or 0xC0			;0203 - Wrap round from 0xBF to 0xFF
+	ld (hl),a		;0205 - Store pointer
+	ld l,a			;0206 - Move character-stack pointer
+				;       into L to construct 16-bit address
+				;       (high byte is always FCh) 
+	pop af			;0207 - Retrieve character
+	ld (hl),a		;0208 - Store in stack
+	pop hl			;0209 - Restore registers
 
-	ret			;020a
+	ret			;020a - Done
 
 	;; Continuation of POPC_A (RST 20)
+	;;
+	;; At this point:
+	;;   HL contains PSTACK_C
+	;;   A contains current offset pointer (from PSTACK_C)
 l020bh:	ld l,a			; Move character-stack pointer
 				; into L to construct 16-bit address
 				; (high byte is always FCh)
 	inc a			;020c - Increase character stack pointer
-	or 0c0h			;020d - Wrap around from FF to C0
+	or 0c0h			;020d - Wrap around from 0x00 to 0xC0
 	ld (P_STACKC),a		;020f - Store new pointer value
-	ld a,(hl)		;0212 - Retrieve value from stack
-	pop hl			;0213 - Done
+	ld a,(hl)		;0212 - Retrieve character from stack
+	pop hl			;0213 - Restore registers
 
-	ret			;0214
+	ret			;0214 - Done
 
 	;; Move current row up by one row (part of screen-scroll)
 	;;
@@ -1039,7 +1055,7 @@ INVERT_CUR_CHAR:
 
 	call GET_SCR_POSN	;0279
 	ld a,(hl)		;027c
-	xor 080h		;027d
+	xor %10000000		;027d
 	ld (hl),a		;027f
 
 	pop hl			;0280
@@ -1228,7 +1244,7 @@ SCR_INV_CUR:
 	;; On exit:
 	;; 
 SCR_PR_CHR:
-	push af			;0333
+	push af			;0333 - Save registers
 	push hl			;0334
 	push de			;0335
 	push bc			;0336
@@ -1239,10 +1255,10 @@ SCR_PR_CHR:
 
 	;; Convert character to 7-bit ASCII (lowercase letters replaced
 	;; by uppercase)
-	and 07fh		;033a - Mask off Bit 7 of character to
+	and %01111111		;033a - Mask off Bit 7 of character to
 				;       print
 	cp "`"			;033c - Is it < "£" symbol (same as
-				;       ASCII `)
+				;       ASCII "`" or 60h)
 	jr c,SPC_CONT		;033e - Jump forward, if so
 
 	add a,"A"-"a"		;0340 - Values in 0x60 -- 0x7F (i.e., £,
@@ -1256,7 +1272,7 @@ SCR_PR_CHR:
 
 SPC_CONT:
 	cp " "			;0342 - Is it >= " " (printable
-					;ASCII char)
+				;       ASCII char)
 	jr nc,SPC_PRINT_IT	;0344 - Jump forward if so
 
 	;; Special character (0--1F)
@@ -1494,18 +1510,27 @@ l0478h:	res 0,(hl)		;0478
 
 	ret			;047b
 
-	;; Handle special character 0x1F
-	;;  Flip Bit 7 of FLAGS
+	;; ================================================================
+	;; Handle special character _FLASH (0x1F)
+	;; Flip Bit 7 of FLAGS to invert/ uninvert character at cursor
+	;; ================================================================
+	;; On entry:
+	;;   IX - points to screen information for current screen
+	;;
+	;; On exit:
+	;; ================================================================
+FLASH_CURSOR:	
 	push hl			;047c
 
-	ld hl,FLAGS		;047d
+	ld hl,FLAGS		;047d - Check if cursor is inverted
 	bit 7,(hl)		;0480
-	set 7,(hl)		;0482
-	jr z,l048bh		;0484
+	set 7,(hl)		;0482 - Assume not, and set as inverted
+	jr z,FC_DONE		;0484 - If not inverted, all done
 	res 7,(hl)		;0486
-	call INVERT_CUR_CHAR		;0488
+	call INVERT_CUR_CHAR	;0488 - Set cursor inverted
 
-l048bh:	pop hl			;048b
+FC_DONE:
+	pop hl			;048b
 
 	ret			;048c
 
@@ -1516,13 +1541,15 @@ sub_048dh:
 	jp (hl)			;0492
 
 
+	;; ================================================================
 	;; Print character (inc. control chars) to screen and printer
-	;; 
+	;; ================================================================
 	;; On entry:
 	;;   A = character to print
 	;;
 	;; On exit:
 	;;   CF - reset = success ; set = nothing printed
+	;; ================================================================
 PRINT_A:
 	push hl			;0493 - Save HL
 	
@@ -1531,12 +1558,12 @@ PRINT_A:
 	;; Check for special case of cursor flash (which is periodically
 	;; inserted into KIB, during periods of inactivity). Skip over
 	;; printer check, if so, as not needed.
-	cp 0x1F			; 
+	cp _FLASH		; 
 	jr z,PA_CONT		; Jump forward if so, as not for
 				; printer
 
 	;; Check if printer is enabled, and jump forward if not
-	bit 0,(hl)		;049b 
+	bit 0,(hl)		;049b - Bit 0 of FLAGS2 
 	jr z,PA_CONT		;049d
 
 	;; Send current character to printer
@@ -1566,12 +1593,12 @@ PA_CONT:
 
 	ld hl,FLAGS		;04b1
 	
-	cp 0x1E			;04b4 Check for EDIT (character 0x1E)
+	cp _EDIT		;04b4 Check for EDIT (character 0x1E)
 	jr z,PR_PRINT_A		;04b6 Jump forward, if so
 
-	bit 2,(hl)		;04b8 - If FLAGS(2) is non-zero, then do
-				;not print
-	set 2,(hl)		;04ba   
+	bit 2,(hl)		;04b8 If FLAGS(2) is non-zero, then do
+				;     not print
+	set 2,(hl)		;04ba Block further printing until done  
 
 PA_DONE_NP:
 	scf			;04bc
@@ -1901,8 +1928,9 @@ sub_062ch:
 	ret			;0636
 
 
+	;; ================================================================
 	;; Push string onto character stack (in reverse order)
-	;;
+	;; ================================================================
 	;; On entry:
 	;;   HL - pointer to countable string
 	;;
@@ -1910,17 +1938,19 @@ sub_062ch:
 	;;   Length of string on parameter stack
 	;;   String (reversed) on character stack
 	;;   AF - corrupted
+	;; ================================================================
 PUSH_STRING:
 	push hl			;0637 - Save address of string
 
 	ld a,(hl)		;0638 - Retrieve string length and limit
 	ld h,000h		;0639   to 63 bytes maximum
-	and 03fh		;063b 
-	ld l,a			;063d
+	and 03fh		;063b - Also sets Z, if zero-length string
+	ld l,a			;063d - HL = length of string
 	
-	rst 8			;063e - Push length (that is, HL) onto Param stack
+	rst 8			;063e - Push length (that is, HL) onto
+				;Param stack
 
-	jr z,l0650h		;063f - Jump forward if zero-length string
+	jr z,CS_DONE		;063f - Jump forward if zero-length string
 
 	pop hl			;0641 - Retrieve string address
 	push hl			;0642
@@ -1931,22 +1961,35 @@ PUSH_STRING:
 	;;  Find address of last character of string
 	add a,l			;0645 - Set HL to point to end of string
 	ld l,a			;0646   taking account of potential carry-over
-	jr nc,l064ah		;0647   from low byte to high
+	jr nc,CS_LOOP		;0647   from low byte to high
 	inc h			;0649
 
-	;;  Push string onto stack in reverse order, so can be pop'ed in right order
-l064ah:	ld a,(hl)		;064a - Retrieve next character
+	;;  Push string onto stack in reverse order (end of string is
+	;;  lowest on stack), so can be pop'ed in right order
+CS_LOOP:
+	ld a,(hl)		;064a - Retrieve next character
 	rst 18h			;064b - Push A onto character stack
 	dec hl			;064c - Decrement pointer and repeat,
-	djnz l064ah		;064d   if necessary
+	djnz CS_LOOP		;064d   if necessary
 
 	pop bc			;064f - Restore registers
-l0650h:	pop hl			;0650
+CS_DONE:
+	pop hl			;0650
 
 	ret			;0651 - Done
 
-	;; Print string (from character stack, based on length on
-	;; parameter stack)
+	;; ================================================================
+	;; Print string from character stack
+	;;
+	;; On entry:
+	;;   - String stored on character stack (first character at TOS)
+	;;   - Length of string stored on parameter stack (max 63 chars)
+	;;
+	;; On exit:
+	;;   - String removed from character stack (and length
+	;;     removed from parameter stack)
+	;;   - All registers preserved
+	;; ================================================================
 PRINT_STRING:
 	push af			;0652 - Save registers
 	push hl			;0653
@@ -1956,44 +1999,52 @@ PRINT_STRING:
 	ld a,l			;0655 - Max length of string is 63 characters
 	and 03fh		;0656   (assumes H is zero)
 
-	jr z,l0662h		;0658 - Exit routine, if empty string
+	jr z,PS_DONE		;0658 - Exit routine, if empty string
 
 	ld l,a			;065a - HL is length of string
 
-l065bh:	rst 20h			;065b - Retrieve next character from
+PS_LOOP:
+	rst 20h			;065b - Retrieve next character from
 				;       Character Stack into A
-	call PRINT_A		;065c - GOT THIS FAR
+	call PRINT_A		;065c - Print to screen
 
 	dec l			;065f - Decrement counter and repeat,
-	jr nz,l065bh		;0660   if necessary
+	jr nz,PS_LOOP		;0660   if necessary
 
-l0662h:	pop hl			;0662 - Restore registers
+PS_DONE:
+	pop hl			;0662 - Restore registers
 	pop af			;0663
 
 	ret			;0664 - Done
 
 
-	;; Print String pointed to by HL register (via character stack)
+	;; ================================================================
+	;; Print counted string pointed to by HL register (via character
+	;; stack)
+	;; ================================================================
 	;;
 	;; On entry:
-	;;  HL - address of string
+	;; 	HL - address of counted string
 	;;
 	;; On exit:
-	;; 
+	;;      HL - corrupted
+	;; ================================================================
+
 PRINT_STR_HL:
-	push af			;0665 - Save A
+	push af			;0665 - Save registers
 
 	call PUSH_STRING	;0666 - Push string onto character stack
-	call PRINT_STRING	;0669
+	call PRINT_STRING	;0669 - Print string from character stack
 
-	pop af			;066c
+	pop af			;066c - Restore registers
 
-	ret			;066d
+	ret			;066d - Done
 
+	
 sub_066eh:
 	push hl			;066e
 	ld hl,l1d60h		;066f
-	call PRINT_STR_HL		;0672
+	call PRINT_STR_HL	;0672
 	pop hl			;0675
 	ret			;0676
 
@@ -2241,8 +2292,8 @@ sub_0765h:
 	push hl			;0765
 	ld hl,(START_OF_DICT_DEF)		;0766
 	ld (START_OF_DICT),hl		;0769
-	ld hl,(0fc8eh)		;076c
-	ld (0fc8ah),hl		;076f
+	ld hl,(OFFSET+0x018E)		;076c
+	ld (OFFSET+0x018A),hl		;076f
 	pop hl			;0772
 	ret			;0773
 
@@ -2387,7 +2438,7 @@ PROCESS_TOKEN:
 	call jump_to_hl		;07f3
 
 	;; GOT THIS FAR
-	jr nc,l0803h		;07f6 - Skip forward if done
+	jr nc,PT_DONE		;07f6 - Skip forward if done
 
 	;; Deal with error?
 	call sub_06dah		;07f8
@@ -2535,19 +2586,19 @@ l08bbh:
 
 sub_08c2h:
 	ld hl,FLAGS		;08c2 - Flags
-	ld a,(hl)			;08c5
+	ld a,(hl)		;08c5
 	and 070h		;08c6
-	ld (hl),a			;08c8
+	ld (hl),a		;08c8
 	
 	ld hl,FLAGS3		;08c9
-	ld a,(hl)			;08cc
+	ld a,(hl)		;08cc
 	and 0c0h		;08cd
-	ld (hl),a			;08cf
+	ld (hl),a		;08cf
 
 	ld hl,FLAGS2		;08d0
-	ld a,(hl)			;08d3
+	ld a,(hl)		;08d3
 	and 0fch		;08d4
-	ld (hl),a			;08d6
+	ld (hl),a		;08d6
 
 	ret			;08d7
 
@@ -2756,55 +2807,71 @@ l094dh:	ld hl,F_WARM_RESTART	;094d - Check if warm restart is
 	jr z,WARM_RESTART		;0951 - Jump forward if warm restart
 
 	;; Continuation of cold-restart routine
-COLD_RESTART: im 1	   		; REPLACEMENT CODE ( as NMI generated
+COLD_RESTART:
+	im 1			; REPLACEMENT CODE ( as NMI generated
 				; already disabled ).
+	
 	;; out (0fdh),a		;0953 - Disable NMI Generator
 
 	;; 
 	;; Check memory configuation of machine (i.e., how much memory
 	;; there is)
 	;;
-	;; Start by checking for RAM above 0x4000
-	ld hl,040ffh		;0955 - Last byte of first page of
-				;       RAM. This is guaranteed to exist
-				;       on all RAM configurations
+;; 	;; Start by checking for RAM above 0x4000
+;; 	ld hl,040ffh		;0955 - Last byte of first page of
+;; 				;       RAM. This is guaranteed to exist
+;; 				;       on all RAM configurations
 
-	;; Write test data (high byte of address) to end of each 256-byte page
-l0958h:	ld (hl),h		;0958
-	inc h			;0959 - Move to next page
-	jr nz,l0958h		;095a - Repeat if address did not overflow 
+;; 	;; Write test data (high byte of address) to end of each 256-byte page
+;; l0958h:	ld (hl),h		;0958
+;; 	inc h			;0959 - Move to next page
+;; 	jr nz,l0958h		;095a - Repeat if address did not overflow 
 
-	;; Attempt to read back (oddly, this routine expects
-	;; differences, based on mirroring of main RAM area)
-	ld h,040h		;095c
-l095eh:	ld a,(hl)		;095e
-	cp h			;095f
-	jr z,l0965h		;0960 - If reads back same, means done
-	inc h			;0962
-	jr nz,l095eh		;0963
+;; 	;; Attempt to read back (oddly, this routine expects
+;; 	;; differences, based on mirroring of main RAM area)
+;; 	ld h,040h		;095c
+;; l095eh:	ld a,(hl)		;095e
+;; 	cp h			;095f
+;; 	jr z,l0965h		;0960 - If reads back same, means done
+;; 	inc h			;0962
+;; 	jr nz,l095eh		;0963
 
-	;; Calculate size of memory 
-l0965h:	cpl			;0965 - Calculate $10000-HL
-	ld h,a			;0966   and store in HL
-	inc hl			;0967
+;; 	;; Calculate size of memory 
+;; l0965h:	cpl			;0965 - Calculate $10000-HL
+;; 	ld h,a			;0966   and store in HL
+;; 	inc hl			;0967
 
+	ld hl, 0x6000
+
+	ds 0x0964-$
+	
 	;; Save current registers
 	exx			;0968
 
-	;; Zero RAM
-	ld hl,04000h		;0969
-	ld de,l0000h+1		;096c
-	xor a			;096f
-l0970h:	ld (hl),a		;0970
-	add hl,de		;0971
-	jr nc,l0970h		;0972
+;; 	;; Zero RAM (up to 0x8000)
+;; 	ld hl,04000h		;0969
+;; 	ld de,0x0001		;097c
+;; 	xor a			;096f
+;; l0970h:	ld (hl),a		;0970
+;; 	add hl,de
+	
+;; 	jr nc,l0970h		;0972
 
+	ld hl,0x4000
+	ld de,0x4001
+	ld bc,0x3FFE
+	xor a
+	ld (hl),a
+	ldir
+	
 	;; Initialise (Second half of) system variables
 	ld hl,DEFVARS		;0974
 	ld de,VARS+0x20		;0977
 	ld bc,l0060h		;097a
 	ldir			;097d
 
+	ds 0x097f-$
+	
 	;; Restore registers
 	exx			;097f
 
@@ -2821,7 +2888,7 @@ l0970h:	ld (hl),a		;0970
 	ld hl,0xBD00		;0988 - Need to adjust memory
 				;       configuration for 48k RAM.
 	ld (P_DBUFFER),hl	;098b - By default, these variables
-	ld (0fc76h),hl		;098e   contain FD00, so only need to
+	ld (OFFSET+0x0176),hl	;098e   contain FD00, so only need to
 				;       change if largest RAM
 				;       configuration
 
@@ -4339,7 +4406,7 @@ l10d7h:
 
 	;; Some kind of multi-tasking service routine. When multitasking
 	;; is off, $FC98 points to ROM, so this routine does nothing.
-	ld hl,($FC98)		;1128 - Initially contains 0x0000
+	ld hl,(OFFSET+0x0198)	;1128 - Initially contains 0x0000
 	ld de,$000A		; 
 	add hl,de		;112e
 	set 7,(hl)		;112f
@@ -6473,14 +6540,14 @@ l1ca8h:
 
 	;; Jump table of 32 service routines, corresponding to special
 	;; key presses
-SPECIAL_CHAR_TABLE:
+SPECIAL_CHAR_TABLE:		; 1CC0h
 	dw 0x0050		; 00 - No action, RET
 	dw 0x0297		; 01 - Home
 	dw 0x0050		; 02 - No action, RET
 	dw 0x0050		; 03 - No action, RET
 	dw 0x0050		; 04 - No action, RET
 	dw 0x0050		; 05 - No action, RET
-	dw 0x0050		; 06 - No action, RET
+	dw 0x0050		; 06 - No action, RET 
 	dw 0x0050		; 07 - No action, RET
 
 	dw 0x0308		; 08 - Left
@@ -6508,7 +6575,7 @@ SPECIAL_CHAR_TABLE:
 	dw 0x03DA		; 1C - Graphics mode
 	dw 0x03BD		; 1D - 
 	dw 0x0455		; 1E - Edit
-	dw 0x047C		; 1F - ? Flashing cursor
+	dw FLASH_CURSOR		; 1F - ? Flashing cursor
 
 	;; ZX81-FORTH BY DAVID HUSBAND  COPYRIGHT (C) 1983
 COPYRIGHT_MSG:
@@ -6576,14 +6643,14 @@ l1da7h:	nop			;1da7
 	nop			;1dac
 	ld b,b			;1dad
 l1daeh:
-	nop			;1dae
-	defb 0fdh,098h,0fch	;illegal sequence		;1daf
+	dw OFFSET+0x0200		; Default for P_DISPLAY
+	db 098h,0fch		;1daf
 l1db2h:
 	nop			;1db2
 	jr nz,l1d84h		;1db3
 	dec de			;1db5
-	nop			;1db6
-	defb 0fdh,0ffh,000h	;illegal sequence		;1db7
+	dw OFFSET+0x0200	; Also points display
+	db 0ffh,000h	;illegal sequence		;1db7
 	ld (hl),00ah		;1dba
 	ld d,b			;1dbc
 	nop			;1dbd
@@ -6592,7 +6659,8 @@ l1db2h:
 	dw RUN_VSYNC		; Initial display routine to call points 
 	ld (hl),c		;1dc2
 	nop			;1dc3
-	ret nz			;1dc4
+	db 0xC0			; Initial value of PSTACK_C - character
+				; stack pointer
 	call m,l000ah		;1dc5
 	ei			;1dc8
 	ld a,(bc)			;1dc9
@@ -6662,7 +6730,7 @@ CHARS:	db 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00 ; 00 Space
 	db 0x00, 0x04, 0x08, 0x00, 0x00, 0x00, 0x00, 0x00 ; 07 Quote
 	db 0x00, 0x04, 0x08, 0x08, 0x08, 0x08, 0x04, 0x00 ; 08 Left parenthesis
 	db 0x00, 0x20, 0x10, 0x10, 0x10, 0x10, 0x20, 0x00 ; 09 Right parenthesis
-	db 0x00, 0x00, 0x08, 0x2A, 0x1C, 0x2A, 0x08, 0x00 ; 0A Asterix
+	db 0x00, 0x00, 0x08, 0x2A, 0x1C, 0x2A, 0x08, 0x00 ; 0A Asterisk
 	db 0x00, 0x00, 0x08, 0x08, 0x3E, 0x08, 0x08, 0x00 ; 0B Plus
 	db 0x00, 0x00, 0x00, 0x00, 0x06, 0x06, 0x02, 0x00 ; 0C Comma
 	db 0x00, 0x00, 0x00, 0x00, 0x3C, 0x00, 0x00, 0x00 ; 0D Minus
@@ -6678,52 +6746,13 @@ CHARS:	db 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00 ; 00 Space
 	db 0x00, 0x7E, 0x02, 0x04, 0x08, 0x10, 0x20, 0x00 ; 17 '7'
 	db 0x00, 0x3C, 0x42, 0x3C, 0x42, 0x42, 0x3C, 0x00 ; 18 '8'
 	db 0x00, 0x3C, 0x42, 0x42, 0x3E, 0x02, 0x3C, 0x00 ; 19 '9'
+	db 0x00, 0x06, 0x06, 0x00, 0x00, 0x06, 0x06, 0x00 ; 1A Colon
+	db 0x00, 0x06, 0x06, 0x00, 0x06, 0x06, 0x02, 0x00 ; 1B Semicolon
+	db 0x00, 0x00, 0x04, 0x08, 0x10, 0x08, 0x04, 0x00 ; 1C Less than
+	db 0x00, 0x00, 0x00, 0x3C, 0x00, 0x3C, 0x00, 0x00 ; 1D Equals
+	db 0x00, 0x00, 0x10, 0x08, 0x04, 0x08, 0x10, 0x00 ; 1E Greater than
+	db 0x00, 0x3C, 0x42, 0x02, 0x0C, 0x00, 0x08, 0x00 ; 1F Question mark
 
-	nop			;1ed0
-	ld b,006h		;1ed1
-	nop			;1ed3
-	nop			;1ed4
-	ld b,006h		;1ed5
-	nop			;1ed7
-	nop			;1ed8
-	ld b,006h		;1ed9
-	nop			;1edb
-	ld b,006h		;1edc
-	ld (bc),a			;1ede
-l1edfh:
-	nop			;1edf
-	nop			;1ee0
-	nop			;1ee1
-	inc b			;1ee2
-	ex af,af'			;1ee3
-	djnz l1eeeh		;1ee4
-	inc b			;1ee6
-	nop			;1ee7
-	nop			;1ee8
-	nop			;1ee9
-	nop			;1eea
-	inc a			;1eeb
-	nop			;1eec
-	inc a			;1eed
-l1eeeh:
-	nop			;1eee
-	nop			;1eef
-	nop			;1ef0
-	nop			;1ef1
-	djnz l1efch		;1ef2
-	inc b			;1ef4
-	ex af,af'			;1ef5
-	djnz l1ef8h		;1ef6
-l1ef8h:
-	nop			;1ef8
-	inc a			;1ef9
-	ld b,d			;1efa
-	ld (bc),a			;1efb
-l1efch:
-	inc c			;1efc
-	nop			;1efd
-	ex af,af'			;1efe
-	nop			;1eff
 	nop			;1f00
 	inc a			;1f01
 	ld b,d			;1f02
@@ -6974,3 +7003,6 @@ l1ffdh:
 	nop			;1ffd
 	nop			;1ffe
 	rst 38h			;1fff
+
+HFORTH_END:
+	end
