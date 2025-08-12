@@ -1520,19 +1520,23 @@ l0478h:	res 0,(hl)		;0478
 	;; On exit:
 	;; ================================================================
 FLASH_CURSOR:	
-	push hl			;047c
+	push hl			;047c - Save registers
 
-	ld hl,FLAGS		;047d - Check if cursor is inverted
+	ld hl,FLAGS		;047d - Check if cursor needs inverting
 	bit 7,(hl)		;0480
-	set 7,(hl)		;0482 - Assume not, and set as inverted
-	jr z,FC_DONE		;0484 - If not inverted, all done
-	res 7,(hl)		;0486
-	call INVERT_CUR_CHAR	;0488 - Set cursor inverted
+
+	set 7,(hl)		;0482 - Assume not, and set to invert
+				;       next time
+
+	jr z,FC_DONE		;0484 - If not to invert, all done
+
+	res 7,(hl)		;0486 - Otherwise invert cursor
+	call INVERT_CUR_CHAR	;0488
 
 FC_DONE:
-	pop hl			;048b
+	pop hl			;048b - Restore registers
 
-	ret			;048c
+	ret			;048c - Done
 
 sub_048dh:
 	ld a,01fh		;048d
