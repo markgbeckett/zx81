@@ -142,6 +142,7 @@ OFFSET:		equ 0xFB00 	; Offset to system memory
 	
 VARS:		equ OFFSET+0x0140	; Start of system variables
 RAM_SIZE:	equ OFFSET+0x0156	; Amount of RAM (in 256-byte pages)
+TIME:		equ OFFSET+0x015C	; Time variable
 RAM_START:	equ 0xFC6C	; Start of RAM
 P_DBUFFER:	equ OFFSET+0x016E	; Address of display buffer
 PRINT_DRVR:	equ 0xFC74	; Address of printer driver
@@ -1480,12 +1481,13 @@ l03a3h:	ld a,(ix+003h)		;03a3
 	ld (ix+003h),a		;03b1
 	ret			;03b4
 
-sub_03b5h:
+CHECK_EDIT_MODE:
 	push hl			;03b5
 	ld hl,FLAGS		;03b6
 	bit 0,(hl)		;03b9
 	pop hl			;03bb
 	ret			;03bc
+
 sub_03bdh:
 	push hl			;03bd
 	push de			;03be
@@ -1512,7 +1514,7 @@ sub_03dah:
 	jp CR			;03eb
 	
 sub_03eeh:
-	call sub_03b5h		;03ee
+	call CHECK_EDIT_MODE		;03ee
 	ret z			;03f1
 	call CR		;03f2
 	call GET_SCR_POSN	;03f5
@@ -1545,7 +1547,7 @@ l0413h:	ld a,(hl)		;0413
 	pop hl			;041b
 	ret			;041c
 
-l041dh:	call sub_03b5h		;041d
+l041dh:	call CHECK_EDIT_MODE		;041d
 	ret z			;0420
 	call GET_SCR_SIZE		;0421
 	ld hl,(P_DBUFFER)		;0424
@@ -1562,11 +1564,11 @@ l041dh:	call sub_03b5h		;041d
 	ld b,c			;043c
 	call sub_0411h		;043d
 	ret			;0440
-	call sub_03b5h		;0441
+	call CHECK_EDIT_MODE		;0441
 	ret z			;0444
 	call sub_03eeh		;0445
 	jp l03a3h		;0448
-	call sub_03b5h		;044b
+	call CHECK_EDIT_MODE		;044b
 	ret z			;044e
 	call sub_03dah		;044f
 	jp l041dh		;0452
@@ -1581,9 +1583,9 @@ l041dh:	call sub_03b5h		;041d
 	ld l,0b9h		;0465
 	ld (hl),011h		;0467
 	ld a,011h		;0469
-	call sub_04cfh		;046b
+	call PROCESS_KEY		;046b
 	ld a,00ch		;046e
-	call sub_04cfh		;0470
+	call PROCESS_KEY		;0470
 	call SCR_PR_CHR		;0473
 
 l0476h:	pop hl			;0476
@@ -1714,10 +1716,10 @@ PA_DONE:
 	
 	;; Handle keypress?
 	;; On entry, A contains ASCII code of key press
-sub_04cfh:
+PROCESS_KEY:
 	push hl			;04cf
 	ld hl,FLAGS		;04d0 - Check entry mode
-	bit 0,(hl)		;04d3
+	bit 0,(hl)		;04d3 - Execution/ editing mode?
 	scf			;04d5
 	jr nz,l04e0h		;04d6 - Jump forward if editing mode
 
@@ -1877,30 +1879,38 @@ CL_WRITE_TO_KIB:
 
 	ret			;0589
 
-sub_058ah:
-	call sub_03b5h		;058a
+	;; Compile the contents of the Editor screen
+COMPILE_SCREEN:
+	;; Check if editor mode (i.e., not execution mode) and return,
+	;; if so
+	call CHECK_EDIT_MODE	;058a 
 	ret nz			;058d
+
 	ld hl,FLAGS3		;058e
-	bit 1,(hl)		;0591
+	bit 1,(hl)		;0591 - Check ???
 	res 1,(hl)		;0593
-	ret z			;0595
-	ld b,00fh		;0596
-	ld a,01eh		;0598
-	call sub_05b5h		;059a
-	ld a,001h		;059d
-	call sub_04cfh		;059f
-l05a2h:
-	ld a,018h		;05a2
-	call sub_04cfh		;05a4
-	ld a,00ah		;05a7
-	call sub_05b5h		;05a9
-	djnz l05a2h		;05ac
-	ld a,018h		;05ae
-	call sub_05b5h		;05b0
-	ld a,01eh		;05b3
-sub_05b5h:
-	call sub_04cfh		;05b5
-	jp l08efh		;05b8
+	ret z			;0595 - Return, if not
+
+	ld b,00fh		;0596 - Maximum 15 lines in editor window???
+	ld a,_EDIT		;0598 - Switch to editor window
+	call COMP_PROC_KIB	;059a
+	ld a,_HOME		;059d - Move cursor to home position
+	call PROCESS_KEY	;059f
+
+COMP_LOOP:
+	ld a,_COMPILE		;05a2 - Compile line
+	call PROCESS_KEY	;05a4
+	ld a,_DOWN		;05a7 - Advance to next line
+	call COMP_PROC_KIB	;05a9
+	djnz COMP_LOOP		;05ac
+	
+	ld a,_COMPILE		;05ae
+	call COMP_PROC_KIB	;05b0
+	ld a,_EDIT		;05b3
+
+COMP_PROC_KIB:
+	call PROCESS_KEY	;05b5
+	jp FLUSH_KIB		;05b8
 
 
 	;; Switch machine stack
@@ -2157,9 +2167,9 @@ PRINT_STR_HL:
 	ret			;066d - Done
 
 	
-sub_066eh:
+PRINT_OK:
 	push hl			;066e
-	ld hl,l1d60h		;066f
+	ld hl,OK_MSG		;066f
 	call PRINT_STR_HL	;0672
 	pop hl			;0675
 	ret			;0676
@@ -2264,7 +2274,7 @@ MS_DONE:
 	;; Routine to handle user error (Part 2)
 sub_06c9h:
 	push hl			;06c9
-	ld hl,l1d66h		;06ca
+	ld hl,ERR_MSG		;06ca
 	call PRINT_STR_HL		;06cd
 	call PRINT_A		;06d0
 	ld a,020h		;06d3
@@ -2553,7 +2563,6 @@ PROCESS_TOKEN:
 	ld hl,(0xFC7A)		;07f0 - Contains 0A36
 	call jump_to_hl		;07f3
 
-	;; GOT THIS FAR
 	jr nc,PT_DONE		;07f6 - Skip forward if done
 
 	;; Deal with error?
@@ -2718,37 +2727,39 @@ sub_08c2h:
 
 	ret			;08d7
 
-	;; Kernel of context 0 loop (GOT THIS FAR)
+	;; Kernel of context 0 loop
 C0_KERNEL:
 	call READ_TOKEN		;08d8 - Read and parse token from
-				;       keyboard
+				;       keyboard input buffer
 	rst 10h			;08db - Pop string length from Parameter
 				;       stack into HL
 
 	;; Check if L is zero
 	xor a			;08dc - Token length zero?
 	cp l			;08dd
-	jr z,l08e4h		;08de
+	jr z,C0_SKIP		;08de
 
 	rst 8			;08e0 - Push HL onto Parameter stack
 				;       (restore previous state)
 	
 	call PROCESS_TOKEN	;08e1
 
-l08e4h:	ld hl,FLAGS3		;08e4
+C0_SKIP:
+	ld hl,FLAGS3		;08e4
 	bit 0,(hl)		;08e7
 	res 0,(hl)		;08e9
 
-	call nz,sub_066eh	;08eb
+	call nz,PRINT_OK	;08eb
 
 	ret			;08ee
 
-	;;	
-l08efh:	call READ_FROM_KIB	;08ef
-	ret c			;08f2
-	call PARSE_KIB_ENTRY	;08f3
+	;; Flush KIB
+FLUSH_KIB:
+	call READ_FROM_KIB	;08ef - retrieve next entry 
+	ret c			;08f2 - return if done
+	call PARSE_KIB_ENTRY	;08f3 - Process entry
 
-	jr l08efh		;08f6
+	jr FLUSH_KIB		;08f6
 
 	;; ================================================================
 	;; Routines to handle Keyboard Input Buffer, which is a circular
@@ -2779,7 +2790,7 @@ l08efh:	call READ_FROM_KIB	;08ef
 	;; On exit:
 	;;   Carry reset to indicate success
 	;; ================================================================
-sub_08f8h:
+WRITE_TO_KIB:
 	push hl			;08f8 - Save register
 	push af			;08f9 - Save key value
 
@@ -3131,7 +3142,7 @@ sub_0a11h:
 
 	jr l09f0h		;0a19 - Jump to address in 0x2002
 
-	;; Main loop (Context 1 - ???)
+	;; Main loop (Context 1)
 C1_MAIN_LOOP:
 	call CHECK_STACKP	; Check for Parameter Stack underflow
 	call READ_FROM_KIB	; Read next value from KIB (carry set if none)
@@ -3140,7 +3151,7 @@ C1_MAIN_LOOP:
 				;       keyboard buffer (and if FLAG(3)
 				;       is set)
 
-	call sub_058ah		;0a24
+	call COMPILE_SCREEN	;0a24
 
 	ld hl,(P_MTASK)		;0a27
 	call jump_to_hl		;0a2a
@@ -3827,19 +3838,20 @@ l0d77h:
 	ret z			;0d84
 	rst 8			;0d85
 	ret			;0d86
-	inc bc			;0d87
-	ld b,h			;0d88
-	ld d,l			;0d89
-	ld d,b			;0d8a
-	inc d			;0d8b
-	nop			;0d8c
+
+	;; Forth word DUP (0x0D87)
+	db 0x03, _D, _U, _P
+	dw 0x0014
+
 sub_0d8dh:
 	push hl			;0d8d
-	rst 10h			;0d8e
-	rst 8			;0d8f
-	rst 8			;0d90
+	rst 10h			;0d8e - Pop Parameter Stack to HL
+	rst 8			;0d8f - Push HL to Parameter Stack 
+	rst 8			;0d90 - Push HL to Parameter Stack
 	pop hl			;0d91
+	
 	ret			;0d92
+
 sub_0d93h:
 	ld a,l			;0d93
 	or h			;0d94
@@ -3850,42 +3862,47 @@ sub_0d98h:
 	ld a,l			;0d98
 	or h			;0d99
 	ret			;0d9a
-	dec b			;0d9b
-	ld b,h			;0d9c
-	ld d,e			;0d9d
-	ld d,a			;0d9e
-	ld b,c			;0d9f
-	ld d,b			;0da0
-	ld hl,0e500h		;0da1
+
+	;; Forth word DSWAP (0x0D9B)
+	db 0x05, _D, _S, _W, _A, _P
+	dw 0x0021
+
+	push hl			;0da5 - Save registers
 	push de			;0da4
 	push bc			;0da5
-	rst 10h			;0da6
-	push hl			;0da7
-	rst 10h			;0da8
-	push hl			;0da9
-	rst 10h			;0daa
-	push hl			;0dab
-	rst 10h			;0dac
-	pop bc			;0dad
-	pop de			;0dae
-	ex de,hl			;0daf
-	rst 8			;0db0
-	pop hl			;0db1
-	rst 8			;0db2
-	ex de,hl			;0db3
-	rst 8			;0db4
-	push bc			;0db5
+
+	;; Retrieve four bytes (two words) from stack
+	rst 10h			;0da6 - Pop parameter stack to HL
+	push hl			;0da7   and save it
+	rst 10h			;0da8 - Pop parameter stack to HL
+	push hl			;0da9   and save it
+	rst 10h			;0daa - Pop parameter stack to HL
+	push hl			;0dab   and save it
+	rst 10h			;0dac - Pop parameter stack to HL
+
+	pop bc			;0dad - 2OS in BCHL
+	pop de			;0dae - TOS(L) in DE
+	ex de,hl		;0daf - 2OS in BCDE
+	rst 8			;0db0 - Push TOS(L) onto Parameter stack
+	pop hl			;0db1 - Retrieve TOS(H)
+	rst 8			;0db2 - Push TOS(H) onto Parameter stack
+	ex de,hl		;0db3 - 2OS in BCHL
+	rst 8			;0db4 - Push 2OS(L) onto Parameter stack
+	push bc			;0db5 - Move 2OS(H) into HL
 	pop hl			;0db6
-	rst 8			;0db7
-	pop bc			;0db8
+	rst 8			;0db7 - Push 2OS(H) onto Parameter stack
+
+	pop bc			;0db8 - Restore registers
 	pop de			;0db9
 	pop hl			;0dba
+
 	ret			;0dbb
-	add a,d			;0dbc
-	ld b,h			;0dbd
-	ld c,a			;0dbe
-	ld hl,02100h		;0dbf
-	adc a,00dh		;0dc2
+
+	;; Forth Word DO (0x0DBC)
+	db 0x02+0x80, _D, _O
+	dw 0x0021
+
+	ld hl,0x0DCE		;0dc1
 	call sub_07d3h		;0dc4
 	ld hl,(0fc8ah)		;0dc7
 	push hl			;0dca
@@ -3894,34 +3911,30 @@ sub_0d98h:
 	ld bc,08000h		;0dcf
 	call sub_0e41h		;0dd2
 	rst 10h			;0dd5
-	add hl,bc			;0dd6
+	add hl,bc		;0dd6
 	push hl			;0dd7
 	rst 10h			;0dd8
-	add hl,bc			;0dd9
+	add hl,bc		;0dd9
 	push hl			;0dda
-	ex de,hl			;0ddb
+	ex de,hl		;0ddb
 	jp (hl)			;0ddc
-	add a,l			;0ddd
-	dec hl			;0dde
-	ld c,h			;0ddf
-	ld c,a			;0de0
-	ld c,a			;0de1
-	ld d,b			;0de2
-	jr z,l0de5h		;0de3
-l0de5h:
-	pop hl			;0de5
+
+	;; Forth word +LOOP (0x0DDD)
+	db 0x05+0x80, _PLUS, _L, _O, _O, _P
+	dw 0x0028
+
+l0de5h:	pop hl			;0de5
 	pop hl			;0de6
 	pop hl			;0de7
 	ld hl,l0deeh		;0de8
 	jp l0e12h		;0deb
-l0deeh:
-	pop bc			;0dee
+l0deeh:	pop bc			;0dee
 	pop de			;0def
 	rst 10h			;0df0
-	bit 7,h		;0df1
+	bit 7,h			;0df1
 	jr nz,l0dffh		;0df3
-	add hl,de			;0df5
-	ex de,hl			;0df6
+	add hl,de		;0df5
+	ex de,hl		;0df6
 	pop hl			;0df7
 	push hl			;0df8
 	push de			;0df9
@@ -3931,31 +3944,27 @@ l0dfah:
 	push bc			;0dfd
 	ret			;0dfe
 l0dffh:
-	add hl,de			;0dff
+	add hl,de		;0dff
 	pop de			;0e00
 	push de			;0e01
 	push hl			;0e02
 	jr l0dfah		;0e03
-	add a,h			;0e05
-	ld c,h			;0e06
-	ld c,a			;0e07
-	ld c,a			;0e08
-	ld d,b			;0e09
-	daa			;0e0a
-	nop			;0e0b
+
+	;; Forth word (LOOP) (0x0E05)
+LOOP:	db 0x04+0x80, _L, _O, _O, _P
+	dw 0x0027
+
 	pop hl			;0e0c
 	pop hl			;0e0d
 	pop hl			;0e0e
 	ld hl,l0e21h		;0e0f
-l0e12h:
-	call sub_07d3h		;0e12
+l0e12h:	call sub_07d3h		;0e12
 	pop hl			;0e15
 	ld a,0d2h		;0e16
 	call l07d5h		;0e18
 	ld hl,0e1e1h		;0e1b
 	jp sub_07c4h		;0e1e
-l0e21h:
-	pop de			;0e21
+l0e21h:	pop de			;0e21
 	pop bc			;0e22
 	pop hl			;0e23
 	push hl			;0e24
@@ -3963,9 +3972,10 @@ l0e21h:
 	push bc			;0e26
 	scf			;0e27
 	sbc hl,bc		;0e28
-	ex de,hl			;0e2a
-l0e2bh:
-	jp (hl)			;0e2b
+	ex de,hl		;0e2a
+l0e2bh:	jp (hl)			;0e2b
+
+
 	dec b			;0e2c
 	ld c,h			;0e2d
 	ld b,l			;0e2e
@@ -4360,15 +4370,16 @@ l102dh:
 	ld hl,FLAGS3		;1030
 	res 7,(hl)		;1033
 	ret			;1035
+
 sub_1036h:
 	ld hl,FLAGS3		;1036
 	bit 7,(hl)		;1039
 	ret nz			;103b
 	ld de,l0000h		;103c
 	ld hl,(0fc54h)		;103f
-	ex de,hl			;1042
+	ex de,hl		;1042
 	ld (0fc54h),hl		;1043
-	ex de,hl			;1046
+	ex de,hl		;1046
 	call sub_0d98h		;1047
 	jr z,l1060h		;104a
 	ld de,l0100h		;104c
@@ -4755,8 +4766,7 @@ l127dh:
 	inc hl			;1288
 	ld (hl),d			;1289
 	ret			;128a
-l128bh:
-	pop hl			;128b
+l128bh:	pop hl			;128b
 	ld e,(hl)			;128c
 	inc hl			;128d
 	ld d,(hl)			;128e
@@ -4772,20 +4782,22 @@ l128bh:
 	pop de			;129b
 	add hl,de			;129c
 	jp JP_ADDR_HL		;129d
-l12a0h:
-	pop hl			;12a0
+
+l12a0h:	pop hl			;12a0
 	ret			;12a1
+
 sub_12a2h:
 	push hl			;12a2
 	or a			;12a3
 	sbc hl,de		;12a4
 	pop hl			;12a6
 	ret			;12a7
+
 l12a8h:
 	ld hl,l0000h		;12a8
-	add hl,sp			;12ab
-l12ach:
-	ld de,0fc5ch		;12ac
+	add hl,sp		;12ab
+
+l12ach:	ld de,TIME		;12ac
 	or a			;12af
 	call sub_12d7h		;12b0
 	jp nc,l11c2h		;12b3
@@ -4793,6 +4805,7 @@ l12ach:
 	ld e,068h		;12b9
 	call sub_12e7h		;12bb
 	jr l12ach		;12be
+
 sub_12c0h:
 	call sub_12f8h		;12c0
 sub_12c3h:
@@ -6124,7 +6137,7 @@ l19b4h:
 	ret z			;19ef
 l19f0h:
 	rst 20h			;19f0
-	call sub_08f8h		;19f1
+	call WRITE_TO_KIB	;19f1
 	dec l			;19f4
 	jr nz,l19f0h		;19f5
 	ret			;19f7
@@ -6136,9 +6149,9 @@ l19f0h:
 	nop			;19fe
 	ld hl,01d6eh		;19ff
 	jp PRINT_STR_HL		;1a02
-	ld (bc),a			;1a05
+	ld (bc),a		;1a05
 	ld d,l			;1a06
-	ld hl,(l000dh+1)		;1a07
+	ld hl,(l000dh+1)	;1a07
 	call sub_0b9bh		;1a0a
 	call sub_0b3eh		;1a0d
 	jp STACK_DE_HL		;1a10
@@ -6290,16 +6303,15 @@ l1ac2h:
 	call MATCH_STRING	;1adb
 l1adeh:
 	jr l1a96h		;1ade
-	inc b			;1ae0
-	ld d,h			;1ae1
-	ld c,c			;1ae2
-	ld c,l			;1ae3
-	ld b,l			;1ae4
-	inc c			;1ae5
-	nop			;1ae6
-	ld hl,0fc5ch		;1ae7
-	rst 8			;1aea
+
+	db 0x04, _T, _I, _M, _E
+	dw 0x000C
+	ld hl,TIME		;1ae7
+	rst 8			;1aea - Push HL onto Parameter Stack
+
 	ret			;1aeb
+
+
 	inc bc			;1aec
 	ld d,b			;1aed
 	ld b,l			;1aee
@@ -6715,14 +6727,15 @@ l1d50h: db "C"
 l1d52h: db "R", "4", "7"
 l1d55h: db "U", "J", "N", "V"
 	db "G", "T", "5", "6", "Y", "H"
-l1d5fh: db "B"
-l1d60h: db 0x05 		; First 40 keys
+l1d5fh: db "B"		; First 40 keys
 
-	db " ", "O", "K"
-l1d64h:	db 0x0D, 0x0A
-l1d66h: db 0x07, " ", "E", "R", "R"
-	db "O", "R", " ", 0x09, 0x0D, 0x0A, "Z", "X"
-	db "-", "Z", "8", "0", " "
+OK_MSG: db 0x05, _SPACE, _O, _K, _ENTER, _DOWN
+	
+ERR_MSG:
+	db 0x07, _SPACE, _E, _R, _R, _O, _R, _SPACE
+
+	db 0x09, _ENTER, _DOWN, _Z, _X, _MINUS, _Z, _8
+	db _0, _SPACE
 
 	;; Shifted versions of keys
 	db 0x00
@@ -6807,8 +6820,7 @@ l1db2h:
 	nop			;1de5
 	rst 8			;1de6
 	inc b			;1de7
-	ret m			;1de8
-	ex af,af'			;1de9
+	dw WRITE_TO_KIB		; Address of routine to enter value into KIB
 	inc bc			;1dea
 	nop			;1deb
 	add a,b			;1dec
