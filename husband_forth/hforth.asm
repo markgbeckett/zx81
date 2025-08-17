@@ -323,7 +323,8 @@ I_NEXT_SCANLINE:
 l004bh:	dec iy			;004b
 	ld (iy+000h),l		;004d
 
-l0050h:	ret			;0050 - also used for null routine (just
+NO_ACTION:
+	ret			;0050 - also used for null routine (just
 				;       RET)
 
 	;; Continuation of POP_HL routine (RST 10)
@@ -944,28 +945,42 @@ l0226h:	ld (hl),a		;0226
 
 	ret			;022c
 
-	;; Retrieve offset of cursor location into current screen
+	;; Retrieve offset of either top-left corner of current screen
+	;; or of current cursor position (depending on IX).
+	;;
+	;; For current cursor offset (the screen-info pointer is
+	;; incremented twice, so this routine works with cursor
+	;; coordinates rather than top-left of screen)
 	;;
 	;; On entry:
 	;;   IX - pointer to coordinates of current location
 	;;
 	;; On exit:
 	;;   HL - offset
-sub_022dh:
+GET_SCR_OFFSET:
 	push af			;022d - Save A
 
 	ld a,(ix+001h)		;022e - Retrieve row coordinate and
 	rrca			;0231   multiply by 32 (equiv of five
 	rrca			;0232   rotate-left operations)
 	rrca			;0233
-	ld h,a			;0234 - Store row offset
+	ld h,a			;0234 - At this point, bits 5-7 are in
+				;       their correct place and bits
+				;       0--4 need to be moved to high
+				;       byte. Largest row number is
+				;       23d=17h which. when multipled by
+				;       32 gives 2E0 (which is
+				;       represented by E2 at the end of
+				;       the above rotations)
 
-	;; Work out column offset
-	and 0e0h		;0235
-	or (ix+000h)		;0237
+	;; Include column offset
+	and %11100000		;0235 - Zero low five bits, which were
+				;       overflow into high byte
+	or (ix+000h)		;0237   and integrate column offset (max
+				;       of 31d = %00011111)
 	ld l,a			;023a
 
-	;; Normalise high-byte of address
+	;; Normalise high-byte of address (only need low two bits
 	ld a,h			;023b
 	and 003h		;023c
 	ld h,a			;023e
@@ -974,7 +989,14 @@ sub_022dh:
 	
 	ret			;0240 - Done
 
-	;; Retrieve address of current screen
+	;; Retrieve address of current screen location
+	;;
+	;; On entry:
+	;;   IX - current-screen information
+	;;
+	;; On exit:
+	;;   HL - address of current screen location
+	;;   All other registers preserved
 GET_SCR_ADDR:
 	push ix			;0241
 	push de			;0243
@@ -985,10 +1007,14 @@ GET_SCR_ADDR:
 
 	;; Retrieve address of current screen into DE (preserving HL)
 	ex de,hl		;0249
-	ld hl,(P_DBUFFER)		;024a
+	ld hl,(P_DBUFFER)	;024a
 	ex de,hl		;024d
 
-	call sub_022dh		;024e - Retrieve offset of current screen
+	call GET_SCR_OFFSET	;024e - Retrieve offset of current
+				;       location into HL. Note by
+				;       changing IX we effectively work
+				;       with two subsequent bytes of
+				;       screen information
 	
 	add hl,de		;0251 - Work out address
 	
@@ -1008,9 +1034,9 @@ GET_SCR_POSN:
 	push de			;0256 - Save DE
 
 	call GET_SCR_ADDR	;0257 - Retrieve start of current screen
-				;       into HL?
+				;       into HL
 	ex de,hl		;025a - Move to DE
-	call sub_022dh		;025b - Retrieve offset to current
+	call GET_SCR_OFFSET	;025b - Retrieve offset to current
 				;       screen location into HL
 	add hl,de		;025e - Compute address of current
 				;       screen location
@@ -1063,25 +1089,46 @@ INVERT_CUR_CHAR:
 
 	ret			;0282
 
-	call GET_SCR_SIZE	;0283
-	ret c			;0286 - Return if zero screen
-	
-	call GET_SCR_ADDR		;0287
 
-	ld de,l0020h		;028a
+	;; Cleanr screen
+	;;
+	;; On entry:
+	;;   IX - screen info
+CLS:	call GET_SCR_SIZE	;0283 - BC = width, height of screen
+	ret c			;0286 - Return if zero-sized screen
+	
+	call GET_SCR_ADDR	;0287 - HL = start of screen
+
+	ld de,l0020h		;028a - DE = row length
 	ld a,(ix+007h)		;028d - Retrieve blank character for screen
 
-l0290h:	call SCR_BLANK_ROW	;0290
-	add hl,de		;0293
-	dec c			;0294
-	jr nz,l0290h		;0295
-	call CR			;0297
-	ld (ix+001h),000h	;029a
-	ret			;029e
+CLS_LOOP:
+	call SCR_BLANK_ROW	;0290
+	add hl,de		;0293 - Advance to next row
+
+	dec c			;0294 - Check if more rows to deal with
+	jr nz,CLS_LOOP		;0295 
+
+	;; Proceed to move cursor to home position
+	
+	;; Move cursor to home position
+	;;
+	;; On entry:
+	;;   IX - screen info
+	;;
+	;; On exit:
+GO_HOME:
+	call CR			;0297 - Advance to start of next line
+				;       (*** could save space by
+				;       dropping this call and simply
+				;       removing subsequent return
+				;       statement)
+	ld (ix+001h),0x00	;029a - Set current row to zero
+	
+	ret			;029e - Done
 
 	;; Carriage return (no line feed)
-CR:
-	ld (ix+000h),000h		;029f
+CR:	ld (ix+000h),000h	;029f
 	ret			;02a3
 
 	;; Deal with cursor moving off bottom of screen
@@ -1119,9 +1166,10 @@ l02c2h:	pop bc			;02c2
 
 	ret			;02c5
 
-	
-	push hl			;02c6 - NB Don't think this is ever
-	push de			;02c7   executed
+
+	;; Move cursor down (prefix for LINE_FEED)
+DOWN:	push hl			;02c6 - Save registers
+	push de			;02c7   
 	push bc			;02c8
 
 	;; Advance cursor to next row
@@ -1155,8 +1203,16 @@ LF_DONE:
 
 	ret			;02e2
 
-	;; Advance current character position
+	;; Advance current character position (also used for cursor
+	;; right)
+	;;
+	;; On entry:
+	;;   IX - screen information
+	;; 
+	;; On exit:
+	;; 
 ADVANCE_CUR:
+RIGHT:	
 	push hl			;02e3
 	push de			;02e4
 	push bc			;02e5
@@ -1182,25 +1238,39 @@ AC_DONE:
 
 	ret			;02fe
 
-sub_02ffh:
-	ld a,(ix+001h)		;02ff
-	or a			;0302
+UP:	ld a,(ix+001h)		;02ff - Retrieve current row 
+	or a			;0302 - No action, if top of screen
 	ret z			;0303
-	dec (ix+001h)		;0304
+	
+	dec (ix+001h)		;0304 - Otherwise decrement
+
 	ret			;0307
-	ld a,(ix+000h)		;0308
-	or a			;030b
+
+	;;
+	;; Move cursor left
+	;;
+	;; On entry:
+	;;   IX - screen info
+	;; 
+	;; On exit:
+	;; 
+LEFT:	ld a,(ix+000h)		;0308 - Retrieve current colmn
+	or a			;030b - Check if beginning of line
 	ld b,a			;030c
-	jr nz,l0317h		;030d
-	call sub_02ffh		;030f
+	jr nz,LEFT_CONT		;030d - and skip forward if not
+	
+	call UP			;030f - Start of line, so move up
 	nop			;0312
-	call GET_SCR_SIZE		;0313
+	call GET_SCR_SIZE	;0313 - Set B to last column
 	ret c			;0316
 
-l0317h:	dec b			;0317
+LEFT_CONT:
+	dec b			;0317 - Decrease column index 
 	ld (ix+000h),b		;0318
-	ret			;031b
-	call GET_SCR_SIZE		;031c
+
+	ret			;031b - Done
+	
+	call GET_SCR_SIZE	;031c
 	dec c			;031f
 	ld (ix+001h),c		;0320
 	ret			;0323
@@ -1295,7 +1365,7 @@ SPC_DONE:
 	;; Handle printable character (20--5F, with codes 60--7F shifted
 	;; down to 40--5F)
 SPC_PRINT_IT:
-	add a,0e0h		;0357 - Shift character code to 00--3F
+	add a,0xE0		;0357 - Shift character code to 00--3F
 	call GET_SCR_POSN	;0359 - Get current screen location
 				;       (into HL)
 	xor (ix+006h)		;035c - Apply cursor mask
@@ -1306,7 +1376,7 @@ SPC_PRINT_IT:
 
 	jr SPC_DONE		;0363 - Done
 
-	;; Jump to address for to which HL points
+	;; Jump to address to which HL points
 	;; 
 	;; On entry:
 	;;   HL - location of address
@@ -1314,7 +1384,8 @@ SPC_PRINT_IT:
 	;; On exit
 	;;   A corrupt
 	;;   HL = HL+1
-JP_ADDR_HL:ld a,(hl)		;0365
+JP_ADDR_HL:
+	ld a,(hl)		;0365
 	inc hl			;0366
 	ld h,(hl)		;0367
 	ld l,a			;0368
@@ -1331,7 +1402,7 @@ JP_ADDR_HL:ld a,(hl)		;0365
 	;;   DE - next cursor position
 	;;   BC - length of row to right of cursor
 	;; 
-sub_036ah:
+INSERT_CHAR:
 	push hl			;036a
 	push de			;036b
 	push bc			;036c
@@ -1340,7 +1411,7 @@ sub_036ah:
 	;; Check if inserting/ deleting character
 	or a			;036e
 	sbc hl,de		;036f
-	jr nc,l037eh		;0371 - Jump forward, if deleting
+	jr nc,IC_DEL		;0371 - Jump forward, if deleting
 
 	;; Find end of current line (and store in DE)
 	ex de,hl		;0373
@@ -1356,40 +1427,51 @@ sub_036ah:
 	dec de			;0379
 	lddr			;037a
 
-	jr l0381h		;037c - Done
+	jr IC_DONE		;037c - Done
 
 	;; Shift tail of line left
-l037eh:	pop hl			;037e
+IC_DEL:	pop hl			;037e
 
 	ldir			;037f
 
-l0381h:	pop bc			;0381
+IC_DONE:
+	pop bc			;0381
 	pop de			;0382
 	pop hl			;0383
 
 	ret			;0384
 
-	call GET_SCR_POSN	;0385
-	call GET_SCR_SIZE	;0388
-	ld a,b			;038b
-	ld b,000h		;038c
-	sub (ix+000h)		;038e
-	dec a			;0391
-	ld c,a			;0392
-	jr z,l039bh		;0393
-	push hl			;0395
-	pop de			;0396
+	;; Delete character under cursor (Editor mode)
+	;;
+	;; On entry:
+	;;   IX - screen information
+RUBOUT:	call GET_SCR_POSN	;0385 - HL contains address of cursor
+	call GET_SCR_SIZE	;0388 - BC = width, height
+
+	ld a,b			;038b - Retrieve width
+	ld b,000h		;038c - Zero upper byte of BC for later
+	sub (ix+000h)		;038e - Subtract current column value to
+	dec a			;0391   give number of chars to end of
+				;       line
+	ld c,a			;0392 - BC contains remaining character
+	jr z,RO_CONT		;0393 - Jump forward if at end of line
+
+	push hl			;0395 - Move current position into 
+	pop de			;0396   DE and set HL to next position
 	inc hl			;0397
-	call sub_036ah		;0398
-l039bh:
-	ld a,c			;039b
+	call INSERT_CHAR	;0398 - Will delete character
+
+	;; Inset rubout character
+RO_CONT:
+	ld a,c			;039b - Length of line end to A
 	add a,e			;039c
 	ld l,a			;039d
-	ld a,(ix+007h)		;039e
-	ld (hl),a			;03a1
-	ret			;03a2
-l03a3h:
-	ld a,(ix+003h)		;03a3
+	ld a,(ix+007h)		;039e - Retrieve rubout character
+	ld (hl),a		;03a1   and replace
+	
+	ret			;03a2 - Done
+
+l03a3h:	ld a,(ix+003h)		;03a3
 	push af			;03a6
 	add a,(ix+001h)		;03a7
 	ld (ix+003h),a		;03aa
@@ -1397,6 +1479,7 @@ l03a3h:
 	pop af			;03b0
 	ld (ix+003h),a		;03b1
 	ret			;03b4
+
 sub_03b5h:
 	push hl			;03b5
 	ld hl,FLAGS		;03b6
@@ -1417,6 +1500,7 @@ sub_03bdh:
 	ld (ix+003h),a		;03d1
 	ld de,0ffe0h		;03d4
 	jp l02b2h		;03d7
+	
 sub_03dah:
 	ld a,(ix+003h)		;03da
 	push af			;03dd
@@ -1425,7 +1509,8 @@ sub_03dah:
 	call sub_03bdh		;03e4
 	pop af			;03e7
 	ld (ix+003h),a		;03e8
-	jp CR		;03eb
+	jp CR			;03eb
+	
 sub_03eeh:
 	call sub_03b5h		;03ee
 	ret z			;03f1
@@ -1441,7 +1526,7 @@ l0400h:	ex de,hl		;0400
 	call GET_SCR_SIZE		;0402
 	ld c,b			;0405
 	ld b,000h		;0406
-	call sub_036ah		;0408
+	call INSERT_CHAR		;0408
 	ex de,hl		;040b
 	ld b,c			;040c
 	call sub_0411h		;040d
@@ -1473,7 +1558,7 @@ l041dh:	call sub_03b5h		;041d
 	ex de,hl			;0435
 	ld c,b			;0436
 	ld b,000h		;0437
-	call sub_036ah		;0439
+	call INSERT_CHAR		;0439
 	ld b,c			;043c
 	call sub_0411h		;043d
 	ret			;0440
@@ -1669,10 +1754,10 @@ l04fah:	cp 0x0D			;04fa - Check for Enter
 l0503h:	call SCR_PR_CHR		;0503
 	jr l04f3h		;0506
 
-l0508h:	cp 018h			;0508 - Check for Shift-Q (Compile Line)
+l0508h:	cp _COMPILE		;0508 - Check for Shift-Q (Compile Line - 018h)
 	jr nz,l0503h		;050a   and jump if not
 
-	call sub_0539h		;050c
+	call COMPILE_LN		;050c
 
 	jr l04f3h		;050f - Done
 
@@ -1694,7 +1779,7 @@ sub_0511h:
 	push hl			;0528
 	pop de			;0529
 	inc de			;052a
-	call sub_036ah		;052b
+	call INSERT_CHAR		;052b
 l052eh:	call INVERT_CUR_CHAR		;052e
 	pop af			;0531
 	call SCR_PR_CHR		;0532
@@ -1706,65 +1791,92 @@ l052eh:	call INVERT_CUR_CHAR		;052e
 	ret			;0538
 
 
-	;; Shift-Q -- Compile line (editor mode)
-sub_0539h:
+	;; Shift-Q -- Compile line (editor mode) by copying it into the
+	;; KIB
+	;;
+	;; On entry:
+	;;   IX - screen info
+COMPILE_LN:
 	push hl			;0539
 	push de			;053a
 	push bc			;053b
-	call SCR_INV_CUR	;053c
-	call CR			;053f
-	call GET_SCR_POSN	;0542
-	call GET_SCR_SIZE	;0545
-	dec b			;0548
-	push hl			;0549
-	ld a,b			;054a
+
+	call SCR_INV_CUR	;053c - Uninvert cursor and move 
+	call CR			;053f   to start of line
+	call GET_SCR_POSN	;0542 - HL point to start of current line
+	call GET_SCR_SIZE	;0545 - B = width ; C = height
+
+	dec b			;0548 - Decrement width
+	push hl			;0549 - Save screen position
+
+	;; Update HL to point to end of line
+	ld a,b			;054a - Set HL to end of line
 	add a,l			;054b
 	ld l,a			;054c
-	jr nc,l0550h		;054d
+	jr nc,CL_CONT		;054d
 	inc h			;054f
-l0550h:
-	ld a,(hl)			;0550
-	and 07fh		;0551
-	jr nz,l0568h		;0553
-l0555h:
+
+CL_CONT:
+	ld a,(hl)		;0550 - Retrieve character at end of
+	and 07fh		;0551   line and check if actionable
+	jr nz,CL_FULL_LINE		;0553 - Skip forward if so
+
+	;; Scan left along line to be compiled until find an actionable
+	;; character
+CL_LOOP:
 	dec hl			;0555
-	ld a,(hl)			;0556
+	ld a,(hl)		;0556
 	and 07fh		;0557
-	jr nz,l055dh		;0559
-	djnz l0555h		;055b
+	jr nz,CL_COPY_LINE	;0559
+	djnz CL_LOOP		;055b
 
-l055dh:	pop hl			;055d
-	call sub_0574h		;055e
-	ld a,00dh		;0561
-	call sub_0581h		;0563
-	jr l056dh		;0566
+CL_COPY_LINE:
+	pop hl			;055d - Retrieve start of line
+	call CL_LINE_TO_KIB	;055e
+	ld a,_ENTER		;0561 - Add carriage return
+	call CL_WRITE_TO_KIB	;0563
+	jr CL_DONE		;0566
 
-l0568h:	pop hl			;0568
-	inc b			;0569
-	call sub_0574h		;056a
+	;; Last character cell contains an actionable value, so line is
+	;; full (no ENTER character needed)
+CL_FULL_LINE:
+	pop hl			;0568
+	inc b			;0569 - Increment row length
+	call CL_LINE_TO_KIB	;056a
 
-l056dh:	call INVERT_CUR_CHAR	;056d
+CL_DONE:
+	call INVERT_CUR_CHAR	;056d
+	
 	pop bc			;0570
 	pop de			;0571
 	pop hl			;0572
+
 	ret			;0573
-sub_0574h:
-	xor a			;0574
+
+	;; Transfer line to KIB
+CL_LINE_TO_KIB:
+	xor a			;0574 - Check if done?
 	cp b			;0575
 	ret z			;0576
-l0577h:
-	ld a,(hl)			;0577
+l0577h:	ld a,(hl)		;0577
 	add a,020h		;0578
-	call sub_0581h		;057a
+	call CL_WRITE_TO_KIB		;057a - Write to KKIB
 	inc hl			;057d
 	djnz l0577h		;057e
+	
 	ret			;0580
-sub_0581h:
+
+CL_WRITE_TO_KIB:
 	push hl			;0581
-	ld hl,(0fca8h)		;0582
+
+	ld hl,(0fca8h)		;0582 - Retrieve address of routine to
+				;       write to keyboard input buffer
 	call jump_to_hl		;0585
+
 	pop hl			;0588
+
 	ret			;0589
+
 sub_058ah:
 	call sub_03b5h		;058a
 	ret nz			;058d
@@ -2785,7 +2897,7 @@ sub_0934h:
 	ret nz			;0939 - Return if so
 
 	;; Disable multitasking?
-	ld hl,l0050h		;093a - Points to RET statement 
+	ld hl,NO_ACTION		;093a - Points to RET statement 
 	ld (P_MTASK),hl		;093d - Store for later use in
 				;       jump_to_hl at $0A27
 
@@ -3505,7 +3617,7 @@ MDSTAR:
 	push iy		;0c87
 	pop de			;0c89
 	pop hl			;0c8a
-	call sub_036ah		;0c8b
+	call INSERT_CHAR		;0c8b
 	push de			;0c8e
 	ld b,004h		;0c8f
 	pop ix		;0c91
@@ -4897,7 +5009,7 @@ l13b6h: rst 10h			;13b6
 	ex de,hl		;13b7
 	rst 10h			;13b8
 	pop bc			;13b9
-	jp sub_036ah		;13ba
+	jp INSERT_CHAR		;13ba
 
 	call sub_13d2h		;13bd
 	call CHECK_KIB		;13c0
@@ -6515,13 +6627,13 @@ l1c85h:
 	nop			;1c9d
 	call 00da3h		;1c9e
 	jr l1ca8h		;1ca1
-	ld (bc),a			;1ca3
+	ld (bc),a		;1ca3
 	ld b,h			;1ca4
 	inc a			;1ca5
 	ld e,l			;1ca6
-	ex (sp),hl			;1ca7
-l1ca8h:
-	call sub_12c0h		;1ca8
+	ex (sp),hl		;1ca7
+
+l1ca8h:	call sub_12c0h		;1ca8
 	rst 10h			;1cab
 	rst 10h			;1cac
 	rst 10h			;1cad
@@ -6545,37 +6657,37 @@ l1ca8h:
 	;; Jump table of 32 service routines, corresponding to special
 	;; key presses
 SPECIAL_CHAR_TABLE:		; 1CC0h
-	dw 0x0050		; 00 - No action, RET
-	dw 0x0297		; 01 - Home
-	dw 0x0050		; 02 - No action, RET
-	dw 0x0050		; 03 - No action, RET
-	dw 0x0050		; 04 - No action, RET
-	dw 0x0050		; 05 - No action, RET
-	dw 0x0050		; 06 - No action, RET 
-	dw 0x0050		; 07 - No action, RET
+	dw NO_ACTION		; 00 - No action, RET
+	dw GO_HOME		; 01 - Home
+	dw NO_ACTION		; 02 - No action, RET
+	dw NO_ACTION		; 03 - No action, RET
+	dw NO_ACTION		; 04 - No action, RET
+	dw NO_ACTION		; 05 - No action, RET
+	dw NO_ACTION		; 06 - No action, RET 
+	dw NO_ACTION		; 07 - No action, RET
 
-	dw 0x0308		; 08 - Left
-	dw 0x02E3		; 09 - Right
-	dw 0x02C6		; 0A - Down
+	dw LEFT			; 08 - Left
+	dw RIGHT		; 09 - Right
+	dw DOWN			; 0A - Down
 	dw 0x02FF		; 0B - Up
-	dw 0x0283		; 0C - Clear screen
+	dw CLS			; 0C - Clear screen
 	dw 0x029F		; 0D
-	dw 0x0050		; 0E - No action, RET
-	dw 0x0050		; 0F - No action, RET
+	dw NO_ACTION		; 0E - No action, RET
+	dw NO_ACTION		; 0F - No action, RET
 
-	dw 0x0050		; 10 - No action, RET
+	dw NO_ACTION		; 10 - No action, RET
 	dw 0x03EE		; 11 - Put PAD
 	dw 0x041D		; 12 -
 	dw 0x0441		; 13 -
 	dw 0x044B		; 14 - Fetch PAD
-	dw 0x0050		; 15 - No action, RET
-	dw 0x0050		; 16 - No action, RET
-	dw 0x0050		; 17 - No action, RET
+	dw NO_ACTION		; 15 - No action, RET
+	dw NO_ACTION		; 16 - No action, RET
+	dw NO_ACTION		; 17 - No action, RET
 	
-	dw 0x0050		; 18 - No action, RET
-	dw 0x0050		; 19 - No action, RET
+	dw NO_ACTION		; 18 - No action, RET
+	dw NO_ACTION		; 19 - No action, RET
 	dw 0x03A3		; 1A - Delete line
-	dw 0x0385		; 1B - Rubout
+	dw RUBOUT		; 1B - Rubout
 	dw 0x03DA		; 1C - Graphics mode
 	dw 0x03BD		; 1D - 
 	dw 0x0455		; 1E - Edit
