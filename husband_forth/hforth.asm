@@ -98,7 +98,7 @@
 	;;        2 - Set to prevent printing to console
 	;;        4 - Machine stack in use (0/1)
 	;;        5 - Switch machine stack lock
-	;;        6 -
+	;;        6 - Editor screen is visible
 	;;        7 - 0 - cursor is uninverted/ cursor is inverted
 
 	;; FCAE - Screen info (editor)
@@ -119,6 +119,7 @@
 	;;        +5 - bottommost row (window)
 	;;        +6 - XOR'ed with character before displaying ???
 	;;        +7 - blank character for screen
+	;; FCB9 - Edit-screen status
 	;; FCBE - FLAGS2 , passed into main loop (context 0) as HL
 	;;        0 - printer disabled/ enabled
 
@@ -141,6 +142,7 @@ BOT_BORDER_LINES:	equ 55	; H_FORTH uses 1Eh (74d) / better 55
 OFFSET:		equ 0xFB00 	; Offset to system memory
 	
 VARS:		equ OFFSET+0x0140	; Start of system variables
+COUNTER:	equ OFFSET+0x0154	; Some kind of counter
 RAM_SIZE:	equ OFFSET+0x0156	; Amount of RAM (in 256-byte pages)
 TIME:		equ OFFSET+0x015C	; Time variable
 RAM_START:	equ 0xFC6C	; Start of RAM
@@ -1342,7 +1344,7 @@ SCR_PR_CHR:
 				;       and more common symbols.
 
 SPC_CONT:
-	cp " "			;0342 - Is it >= " " (printable
+	cp _SPACE		;0342 - Is it >= " " (printable
 				;       ASCII char)
 	jr nc,SPC_PRINT_IT	;0344 - Jump forward if so
 
@@ -1512,87 +1514,130 @@ sub_03dah:
 	pop af			;03e7
 	ld (ix+003h),a		;03e8
 	jp CR			;03eb
-	
-sub_03eeh:
-	call CHECK_EDIT_MODE		;03ee
-	ret z			;03f1
-	call CR		;03f2
-	call GET_SCR_POSN	;03f5
-	push hl			;03f8
-	ld hl,(P_DBUFFER)		;03f9
-	ld de,l0200h		;03fc
-	add hl,de		;03ff
 
-l0400h:	ex de,hl		;0400
-	pop hl			;0401
-	call GET_SCR_SIZE		;0402
-	ld c,b			;0405
+	;; Insert current line from (editor) screen into display pad.
+	;;
+	;; Note this is different from PAD
+	;;
+	;; On entry:
+	;;
+	;; On exit:
+	;; 
+PUT_DPAD:
+	;; Put pad only works in editor mode
+	call CHECK_EDIT_MODE	;03ee
+	ret z			;03f1
+	
+	call CR			;03f2
+	call GET_SCR_POSN	;03f5 - Get current screen position
+	push hl			;03f8 - Save it
+	
+	ld hl,(P_DBUFFER)	;03f9 - Retrieve start of display buffer
+	ld de,l0200h		;03fc - 16 screen lines?
+	add hl,de		;03ff - Point to display copy of PAD
+
+l0400h:	ex de,hl		;0400 - DE points to display copy of pad
+	pop hl			;0401 - HL points to current screen position
+	call GET_SCR_SIZE	;0402 - B=width; C=height
+	ld c,b			;0405 - BC = width
 	ld b,000h		;0406
-	call INSERT_CHAR		;0408
-	ex de,hl		;040b
-	ld b,c			;040c
-	call sub_0411h		;040d
+	call INSERT_CHAR	;0408 - This routine will copy current
+				;       line into display copy of PAD
+
+	ex de,hl		;040b - DE points to current screen
+				;       position; HL points to display
+				;       copy of pad
+	ld b,c			;040c - B contains length of screen line
+	call INVERT_LINE	;040d
+	
 	ret			;0410
 
-sub_0411h:
+	;; Invert a sequence of cells of display buffer
+	;;
+	;; On entry:
+	;;   HL - address of start of sequence
+	;;   B  - number of characters
+	;;
+	;; On exit:
+	;;   A - corrupted
+INVERT_LINE:
 	push hl			;0411
 	push bc			;0412
 
-l0413h:	ld a,(hl)		;0413
+IL_LOOP:
+	ld a,(hl)		;0413
 	xor 080h		;0414
 	ld (hl),a		;0416
 	inc hl			;0417
-	djnz l0413h		;0418
+	djnz IL_LOOP		;0418
+	
 	pop bc			;041a
 	pop hl			;041b
+
 	ret			;041c
 
-l041dh:	call CHECK_EDIT_MODE		;041d
+l041dh:	call CHECK_EDIT_MODE	;041d
 	ret z			;0420
-	call GET_SCR_SIZE		;0421
-	ld hl,(P_DBUFFER)		;0424
+	call GET_SCR_SIZE	;0421
+	ld hl,(P_DBUFFER)	;0424
 	ld de,l0200h		;0427
-	add hl,de			;042a
-	call sub_0411h		;042b
-	ex de,hl			;042e
-	call CR		;042f
-	call GET_SCR_POSN		;0432
-	ex de,hl			;0435
+	add hl,de		;042a
+	call INVERT_LINE	;042b
+	ex de,hl		;042e
+	call CR			;042f
+	call GET_SCR_POSN	;0432
+	ex de,hl		;0435
 	ld c,b			;0436
 	ld b,000h		;0437
-	call INSERT_CHAR		;0439
+	call INSERT_CHAR	;0439
 	ld b,c			;043c
-	call sub_0411h		;043d
+	call INVERT_LINE	;043d
 	ret			;0440
-	call CHECK_EDIT_MODE		;0441
+	call CHECK_EDIT_MODE	;0441
 	ret z			;0444
-	call sub_03eeh		;0445
+	call PUT_DPAD		;0445
 	jp l03a3h		;0448
-	call CHECK_EDIT_MODE		;044b
+	call CHECK_EDIT_MODE	;044b
 	ret z			;044e
 	call sub_03dah		;044f
 	jp l041dh		;0452
-	push hl			;0455
+
+
+	;; Switch between editor and console screens and, if not
+	;; previously activated, activate editor screen.
+EDIT:	push hl			;0455
+
 	ld hl,FLAGS		;0456
-	bit 0,(hl)		;0459
-	jr nz,l0478h		;045b
-	set 0,(hl)		;045d
-	bit 6,(hl)		;045f
-	jr nz,l0476h		;0461
+	bit 0,(hl)		;0459 - Check if console/ editor mode
+	jr nz,E_TO_CONSOLE	;045b - Jump forward if editor
+
+	set 0,(hl)		;045d - Set new mode to be editor
+	bit 6,(hl)		;045f - Check if Editor screen is visible
+	jr nz,E_DONE		;0461 - Jump forward, if so
+
 	set 6,(hl)		;0463
-	ld l,0b9h		;0465
-	ld (hl),011h		;0467
-	ld a,011h		;0469
-	call PROCESS_KEY		;046b
-	ld a,00ch		;046e
-	call PROCESS_KEY		;0470
+	
+	ld l,0xB9		;0465 - HL points into Editor screen
+				;       info   (would be IX+3)
+	ld (hl),0x11		;0467 - Set current coordinate to
+				;       top-left corner
+
+	ld a,_PUTPAD		;0469 - Copy first line of screen
+				;       (copyright) into PAD
+	call PROCESS_KEY	;046b
+
+	ld a,_CLS		;046e
+	call PROCESS_KEY	;0470
+
 	call SCR_PR_CHR		;0473
 
-l0476h:	pop hl			;0476
+E_DONE:	pop hl			;0476
 
 	ret			;0477
 
-l0478h:	res 0,(hl)		;0478
+E_TO_CONSOLE:
+	res 0,(hl)		;0478
+
 	pop hl			;047a
 
 	ret			;047b
@@ -1714,76 +1759,101 @@ PA_DONE:
 	ret			;04ce
 
 	
-	;; Handle keypress?
+	;; Handle keypress
+	;; 
 	;; On entry, A contains ASCII code of key press
 PROCESS_KEY:
 	push hl			;04cf
 	ld hl,FLAGS		;04d0 - Check entry mode
 	bit 0,(hl)		;04d3 - Execution/ editing mode?
 	scf			;04d5
-	jr nz,l04e0h		;04d6 - Jump forward if editing mode
+	jr nz,PK_EDITOR		;04d6 - Jump forward if editor mode
 
 	ld hl,(0fca8h)		;04d8 - Likely 0x08f8 - Add to keyboard
-				;       input buffer ???
-	call jump_to_hl		;04db
+	call jump_to_hl		;04db   input buffer ???
 
-l04deh:	pop hl			;04de
+PK_DONE:
+	pop hl			;04de
 	
 	ret			;04df
 
-	;; Handle keypress in edit mode
-l04e0h:	bit 1,(hl)		;04e0 - Check FLAGS(1) and skip printing if set
+	;; Handle keypress in Editor mode
+PK_EDITOR:
+	bit 1,(hl)		;04e0 - Check FLAGS(1) and skip printing
+				;       if set
 	set 1,(hl)		;04e2
-	jr nz,l04deh		;04e4
+	jr nz,PK_DONE		;04e4
 	
 	push ix			;04e6
+
 	ld ix,SCR_INFO_ED	;04e8
-	cp 020h			;04ec - Check for printable character
-	jr c,l04fah		;04ee   and jump forward if not
-	call sub_0511h		;04f0
+	cp _SPACE		;04ec - Check for printable character
+	jr c,PK_E_CTRL		;04ee   and jump forward if not
+	call PK_E_CHR_PRNT	;04f0
 
-l04f3h:	res 1,(hl)		;04f3
+PK_NEARLY_DONE:
+	res 1,(hl)		;04f3
+
 	pop ix			;04f5
-	or a			;04f7
-	jr l04deh		;04f8 - Done
+	
+	or a			;04f7 - Reset carry
+	
+	jr PK_DONE		;04f8 - Done
 
-	;; Handle control characters in EDIT mode
-l04fah:	cp 0x0D			;04fa - Check for Enter
-	jr nz,l0508h		;04fc   and jump forward if not
+	;; Handle control characters in Editor mode
+PK_E_CTRL:
+	cp _ENTER		;04fa - Check for Enter
+	jr nz,PK_E_CONT		;04fc   and jump forward if not
+
 	call SCR_PR_CHR		;04fe
-	ld a,00ah		;0501
+	ld a,_DOWN		;0501
+PK_E_PRNT:
+	call SCR_PR_CHR		;0503
+	jr PK_NEARLY_DONE	;0506
 
-l0503h:	call SCR_PR_CHR		;0503
-	jr l04f3h		;0506
-
-l0508h:	cp _COMPILE		;0508 - Check for Shift-Q (Compile Line - 018h)
-	jr nz,l0503h		;050a   and jump if not
+PK_E_CONT:
+	cp _COMPILE		;0508 - Check for Shift-Q (Compile Line - 018h)
+	jr nz,PK_E_PRNT		;050a   and jump if not
 
 	call COMPILE_LN		;050c
 
-	jr l04f3h		;050f - Done
+	jr PK_NEARLY_DONE	;050f - Done
 
+	
 	;; Print character to editor window
-sub_0511h:
+PK_E_CHR_PRNT:
 	push hl			;0511
 	push de			;0512
 	push bc			;0513
 	push af			;0514
+
 	call SCR_INV_CUR	;0515
 	call GET_SCR_POSN	;0518 - HL = screen position
 	call GET_SCR_SIZE	;051b - B = width ; C = height
+
+	;; Set BC to be number of characters to right of cursor
 	ld a,b			;051e - Retrieve width
 	ld b,000h		;051f
+
+	;; Check if end of line
 	sub (ix+000h)		;0521 - Current column value
 	dec a			;0524
-	ld c,a			;0525
-	jr z,l052eh		;0526
+	ld c,a			;0525 - BC set to right-length of row
+	jr z,PK_E_CONT2		;0526
+
+	;; Set DE to next cursor position
 	push hl			;0528
 	pop de			;0529
 	inc de			;052a
-	call INSERT_CHAR		;052b
-l052eh:	call INVERT_CUR_CHAR		;052e
+
+	;; Insert character in current line
+	call INSERT_CHAR	;052b
+
+PK_E_CONT2:
+	call INVERT_CUR_CHAR	;052e
+
 	pop af			;0531
+
 	call SCR_PR_CHR		;0532
 
 	pop bc			;0535
@@ -1997,29 +2067,39 @@ sub_05ebh:
 	ret			;05fe
 
 	;; Handle most recent Keyboard Input Buffer Entry
+	;;
+	;; On entry:
+	;;   A - keyboard entry
+	;;
+	;; On exit:
+	;;   
 PARSE_KIB_ENTRY:
-	cp 01eh			;05ff
+	cp _EDIT		;05ff
 	jp z,PRINT_A		;0601
-	set 7,a			;0604 
+	set 7,a			;0604
+	
 	push hl			;0606 - Save KIB offset
 
 	;; Check which context is active and, unless FLAG 3 is set,
-	;; switch to Execution context
+	;; switch to Context 0
 	ld hl,FLAGS		;0607
 	bit 4,(hl)		;060a
 	jr z,l061eh		;060c - Jump forward, if execution stack
+
 	bit 3,(hl)		;060e
 	set 3,(hl)		;0610
 	jr nz,l061eh		;0612
+
 	call SWITCH_MSTACK	;0614 - Change execution context
+
 	res 3,(hl)		;0617
 	or a			;0619
 	bit 7,a			;061a
 	jr z,l061fh		;061c
-l061eh:
-	scf			;061e
-l061fh:
-	pop hl			;061f
+
+l061eh:	scf			;061e
+
+l061fh:	pop hl			;061f
 
 	ret			;0620
 
@@ -2046,11 +2126,16 @@ SWITCH_TO_MSTACK1:
 				; switched back to Execution Stack
 
 sub_062ch:
+
 	push hl			;062c
+
 	ld hl,FLAGS3		;062d
 	set 0,(hl)		;0630
-	call sub_06dah		;0632
+
+	call PRINT_NEW_LINE	;0632
+
 	pop hl			;0635
+	
 	ret			;0636
 
 
@@ -2283,11 +2368,14 @@ sub_06c9h:
 
 	ret			;06d9
 
-sub_06dah:
+PRINT_NEW_LINE:
 	push hl			;06da
-	ld hl,l1d34h		;06db - Message 02, 0D, 0A
+	
+	ld hl,NEW_LINE_MSG	;06db - Message 02, 0D, 0A
 	call PRINT_STR_HL	;06de
+
 	pop hl			;06e1
+
 	ret			;06e2
 
 
@@ -2300,7 +2388,8 @@ sub_06e3h:
 	jp l0d6bh		;06ee
 
 
-	;; Read a token into screen from keyboard
+	;; Read key sequence (corresponding to white-space-separated
+	;; token) from keyboard and assemble for parsing.
 	;;
 	;; Read token from keyboard, echoing key entries to screen
 	;;
@@ -2321,13 +2410,13 @@ RT_GET_CHAR:
 	;; At this point, A contains most recent entry in KIB + 0x80
 	and %01111111		;06fb - Mask off bit 7
 
-	cp 0x1E			; Check if control character (other than
+	cp _EDIT		; Check if control character (other than
 	jr c,RT_CTRL		; EDIT (1E) or FLASH (1F): branch if so
 
 	call PRINT_A		;0701 - Print character
 
-	cp 020h			;0704 - Check for SPACE (triggers parser
-				;       in console ???)
+	cp _SPACE		;0704 - Check for SPACE (triggers parser
+				;       in console window)
 	jr z,RT_PARSE_TOKEN	;0706 - Parse token
 	
 	call nc,STR_ADD_CHR	;0708
@@ -2566,7 +2655,7 @@ PROCESS_TOKEN:
 	jr nc,PT_DONE		;07f6 - Skip forward if done
 
 	;; Deal with error?
-	call sub_06dah		;07f8
+	call PRINT_NEW_LINE	;07f8
 	call PRINT_STRING	;07fb
 
 	ld a,055h		;07fe
@@ -2632,7 +2721,8 @@ l0848h:
 	;; Routine to handle user error (Part 1)
 sub_084dh:
 	push af			;084d - Save error code
-	call sub_06dah		;084e
+
+	call PRINT_NEW_LINE	;084e
 	call CDUP		;0851 - Duplicate string on character stack
 	call PRINT_STRING	;0854
 
@@ -3144,7 +3234,7 @@ sub_0a11h:
 
 	;; Main loop (Context 1)
 C1_MAIN_LOOP:
-	call CHECK_STACKP	; Check for Parameter Stack underflow
+	call CHECK_STACKP	;0a1b - Check for Parameter Stack underflow
 	call READ_FROM_KIB	; Read next value from KIB (carry set if none)
 
 	call nc,PARSE_KIB_ENTRY	;0a21 - Switch context, if new entry in
@@ -3156,9 +3246,9 @@ C1_MAIN_LOOP:
 	ld hl,(P_MTASK)		;0a27
 	call jump_to_hl		;0a2a
 
-	ld hl,(0fc54h)		;0a2d
+	ld hl,(COUNTER)		;0a2d
 	inc hl			;0a30
-	ld (0fc54h),hl		;0a31
+	ld (COUNTER),hl		;0a31
 	jr C1_MAIN_LOOP		;0a34
 
 	;; Part of processing word entered at keyboard (e.g., called
@@ -4107,7 +4197,7 @@ l0ea2h:
 	ld d,d			;0ec9
 	ex af,af'			;0eca
 	nop			;0ecb
-	jp sub_06dah		;0ecc
+	jp PRINT_NEW_LINE	;0ecc
 	inc b			;0ecf
 	ld b,l			;0ed0
 	ld c,l			;0ed1
@@ -4376,9 +4466,9 @@ sub_1036h:
 	bit 7,(hl)		;1039
 	ret nz			;103b
 	ld de,l0000h		;103c
-	ld hl,(0fc54h)		;103f
+	ld hl,(COUNTER)		;103f
 	ex de,hl		;1042
-	ld (0fc54h),hl		;1043
+	ld (COUNTER),hl		;1043
 	ex de,hl		;1046
 	call sub_0d98h		;1047
 	jr z,l1060h		;104a
@@ -6214,27 +6304,30 @@ l1a53h:
 	ccf			;1a61
 	jr l1a50h		;1a62
 
-	db 0x03, 0x50, 0x41, 0x44 ; PAD
-	db 0x0b, 0x00
+	;; Forth word PAD
+	db 0x03, _P, _A, _D  	; 1a64
+	dw 0x000B
 
 	ld hl,PAD		;1a6a
 	rst 8			;1a6d - UPUSH
+
 	ret			;1a6e
 
+
+	;; Forth word U# (1a6f)
+	db 0x02, _U, _HASH
+	dw 0x0010
 	
-	ld (bc),a			;1a6f
-	ld d,l			;1a70
-	inc hl			;1a71
-	djnz l1a74h		;1a72
-l1a74h:
-	rst 10h			;1a74
+l1a74h:	rst 10h			;1a74
 	ld de,l0000h		;1a75
-	ex de,hl			;1a78
+	ex de,hl		;1a78
 	rst 8			;1a79
-	ex de,hl			;1a7a
+	ex de,hl		;1a7a
 	rst 8			;1a7b
 	jp sub_0a96h		;1a7c
-	ld (bc),a			;1a7f
+
+
+	ld (bc),a		;1a7f
 	ld d,l			;1a80
 	ld l,00bh		;1a81
 	nop			;1a83
@@ -6688,7 +6781,7 @@ SPECIAL_CHAR_TABLE:		; 1CC0h
 	dw NO_ACTION		; 0F - No action, RET
 
 	dw NO_ACTION		; 10 - No action, RET
-	dw 0x03EE		; 11 - Put PAD
+	dw PUT_DPAD		; 11 - Put PAD
 	dw 0x041D		; 12 -
 	dw 0x0441		; 13 -
 	dw 0x044B		; 14 - Fetch PAD
@@ -6707,14 +6800,16 @@ SPECIAL_CHAR_TABLE:		; 1CC0h
 
 	;; ZX81-FORTH BY DAVID HUSBAND  COPYRIGHT (C) 1983
 COPYRIGHT_MSG:
-	db 0x33, 0x0C
-	dm "ZX81-FORTH BY DAVID HUSBAND"
-	db 0x0D, 0x0A
-	dm "COPYRIGHT (C) 1983"
-	db 0x0D, 0x0A, 0x0A
+	db 0x33, _CLS, _Z, _X, _8, _1, _MINUS, _F
+	db _O, _R, _T, _H, _SPACE, _B, _Y, _SPACE
+	db _D, _A, _V, _I, _D, _SPACE, _H, _U
+	db _S, _B, _A, _N, _D, _ENTER, _DOWN, _C
+	db _O, _P, _Y, _R, _I, _G, _H, _T
+	db _SPACE, _LEFTPARENTH, _C, _RIGHTPARENTH, _SPACE, _1, _9, _8
+	db _3, _ENTER, _DOWN, _DOWN
 	
-
-l1d34h:	db 0x02, 0x0D, 0x0A
+NEW_LINE_MSG:
+	db 0x02, _ENTER, _DOWN
 	
 l1d37h: db 0x20
 KEY_CODES:
