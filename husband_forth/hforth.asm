@@ -34,7 +34,7 @@
 	;;     things -- in this case, servicing the multi-tasking queue
 	;;     mechanism and interpreting any key presses.
 	;; 
-	;; The system variable, NEXT_DISP_ROUTINE, is used to determine
+	;; The system variable, NEXT_DISP_ROUT, is used to determine
 	;; which is the next display routine to run. It will either
 	;; point at 0x0098 or the content of 0xFC82 (either 0x0071 or
 	;; ???)
@@ -49,85 +49,17 @@
 	;;   NMI generated every 64 microseconds
 	;;   R register increments (lower 7 bits) every instruction fetch
 	;;   A6 is tied to Maskable Interrupt
-
+	;; 
 	;;   Maskable interrupt is generated whenever A6 goes
 	;;   low. Therefore, in normal operation it should be
 	;;   disabled. The mechanism for triggering maskable interrupts
 	;;   is when the the R register causes A6 to go low at the end
 	;;   of executing a display line.
 	;; 
-	;; System variables
-	;;
-	;; FC40 - interrogated at end of restart
-	;; FC54 - frame counter???
-	;; FC56 - RAMSIZE (in 256k pages)
-	;; FC57 - RAM-related
-	;; FC5C - TIME - system clock (see Ch 15 of manual)
-	;; FC68 - PERiod - tic limit at which clock resets (see Ch 15 of manual)
-	;; FC6C - Start of RAM 
-	;; FC6E - Pointer to DFILE - Set to BD00/ FD00 during
-	;;        initialisation, based on memory test
-	;; FC76 - Set to BD00/ FD00 during initialisation, based on memory test
-	;; FC78 - Set to FF during restart, to indicate warm restart is
-	;;        possible
-	;; FC7C - Location of task scheduler ??? (Set to 0050 during restart)
-	;; FC7E - Offset to most recently read entry in Keyboard Input Buffer
-	;; FC7F - Offset to most recently  written value in keyboard input buffer
-	;; FC80 - Next video handling routine
-	;; FC82 - Particular video handling routine (0x57 or 0x71)
-	;; FC84 - Pointer to character stack
-	;; FC86 - BASE (16-bit base for processing numbers)
-	;; FC88 - Counted string (two characters) to check for when
-	;;        parsing token, potentially triggers extended
-	;;        functionality?
-	;; FC8A - HERE
-	;; FC8C - Default value for 0xFC8C (that is, 0x0AFB)
-	;; FC8E - Init value of FC8A
-	;; FC90 - Start of parameter stack
-	;; FC94 - MSTACK0: Pointer to machine-stack 0 (grows down from FB80)
-	;; FC96 - MSTACK1: Pointer to machine-stack 1 (FC3E)
-	;; FC98 - Address of multi-tasking-related routine
-	;; FC9A...FC9D/ FC9E...FCA1/FCA2...FCA5 are 4-byte buffers
-	;; FCA5 - Flags (Bit 0 - ; Bit 6 - tested at 0937 ; Bit 7 - set at 1071
-	;; FCAB - POSSIBLE_KEY
-	;; FCAC - LAST_KEY
-
-	;; FCAD - FLAGS(Bit 0 ; Bit 4 -
-	;;        0 - Execution / Editor mode
-	;;        1 - Set to prevent printing to editor window
-	;;        2 - Set to prevent printing to console
-	;;        4 - Machine stack in use (0/1)
-	;;        5 - Switch machine stack lock
-	;;        6 - Editor screen is visible
-	;;        7 - 0 - cursor is uninverted/ cursor is inverted
-
-	;; FCAE - Screen info (editor)
-	;;        0 - current col value
-	;;        1 - current row value
-	;;        2 - leftmost column (window)
-	;;        3 - top-most row (window)
-	;;        4 - rightmost column (window)
-	;;        5 - bottommost row (window)
-	;;        6 - XOR'ed with character before displaying ???
-	;;        7 - blank character for screen
-	;; FCB6 - Screen info (console)
-	;;        +0 - current col value
-	;;        +1 - current row value
-	;;        +2 - leftmost column (window)
-	;;        +3 - top-most row (window)
-	;;        +4 - rightmost column (window)
-	;;        +5 - bottommost row (window)
-	;;        +6 - XOR'ed with character before displaying ???
-	;;        +7 - blank character for screen
-	;; FCB9 - Edit-screen status
-	;; FCBE - FLAGS2 , passed into main loop (context 0) as HL
-	;;        0 - printer disabled/ enabled
-
-	;; FCBF - Character count for current token in input string
-
+	;; 
 	;; Memory map
 	;; 
-	;; FB80 - top of machine stack 0
+	;; FB80 - Top of machine stack 0
 	;; FB80--FBBF - Keyboard Input Buffer
 	;; FBC0 - PAD
 	;; FC3E - top of machine stack 1
@@ -135,61 +67,110 @@
 	;; FD00--FFFF - video RAM
 
 	include "hforth_chars.asm"
-	
+
+	;; ROM configuration options
 TOP_BORDER_LINES:	equ 56	; H_FORTH uses 4Ah (30d) / better 56
 BOT_BORDER_LINES:	equ 55	; H_FORTH uses 1Eh (74d) / better 55
 
-OFFSET:		equ 0xFB00 	; Offset to system memory
-	
+OFFSET:		equ 0x7B00 	; Offset to system memory
+
+	;; H Forth System Variables and Stacks
+STACK0_BASE:	equ OFFSET+0x0080 	; Start of machine stack 0
+PAD:		equ OFFSET+0x00C0	; Start of PAD
+STACK1_BASE:	equ OFFSET+0x013E	; Start of machine stack 1
 VARS:		equ OFFSET+0x0140	; Start of system variables
+UNKNOWN9:	equ OFFSET+0x0150	; ???
+UNKNOWN6:	equ OFFSET+0x0152	; ???
 COUNTER:	equ OFFSET+0x0154	; Some kind of counter
 RAM_SIZE:	equ OFFSET+0x0156	; Amount of RAM (in 256-byte pages)
-TIME:		equ OFFSET+0x015C	; Time variable
-RAM_START:	equ 0xFC6C	; Start of RAM
-P_DBUFFER:	equ OFFSET+0x016E	; Address of display buffer
+RAM_STATS:	equ OFFSET+0x0157	; RAM-related
+UNKNOWN4:	equ OFFSET+0x0158	; ???
+TIME:		equ OFFSET+0x015C	; Time variable (see Ch 15 of manual)
+UNKNOWN5:	equ OFFSET+0x0160	; ???
+UNKNOWN8:	equ OFFSET+0x0168	; ???
+RAM_START:	equ OFFSET+0x016C	; Start of RAM
+P_DBUFFER:	equ OFFSET+0x016E	; Address of display buffer. Set
+					; to BD00/ FD00 during
+					; initialisation.
+MTASK_1:	equ OFFSET+0x0170	; Multi-tasking-related
+UNKNOWN7:	equ OFFSET+0x0172	; ???
 PRINT_DRVR:	equ OFFSET+0x0174	; Address of printer driver
-PARSE_NUM_ROUTINE:	equ OFFSET+0x017A ; Routine to parse number from
-					  ; character buffer
+P_DISP_2:	equ OFFSET+0x0176	; Also points to display???
+F_WARM_RESTART:	equ OFFSET+0x0178 	; Set to FF during restart, to
+					; indicate warm restart is
+					; possible
+PARSE_NUM_ROUT:	equ OFFSET+0x017A 	; Routine to parse number from
+					; character buffer
 P_MTASK:	equ OFFSET+0x017C	; Location of multitasking scheduler???
+KIB_R_OFFSET:	equ OFFSET+0x017E	; Offset to most recently read
+					; entry in Keyboard Input Buffer
+KIB_W_OFFSET:	equ OFFSET+0x017F	; Offset to most recently
+					; written value in keyboard
+					; input buffer
+NEXT_DISP_ROUT:	equ OFFSET+0x0180	; Next display-handling routine
 P_RUN_DISP:	equ OFFSET+0x0182	; Address of routine to produce
-					; main display
-P_STACKC:	equ OFFSET+0x0184	; Address of next entry in Char
+					; main display (points to RET,
+					; in FAST mode)
+P_STACKC:	equ OFFSET+0x0184	; Address of next entry in Character
 					; Stack
-BASE:		equ OFFSET+0x0186	; Base for numerical
-					; calculations
+BASE:		equ OFFSET+0x0186	; 16-bit base for processing numbers
 START_OF_DICT:	equ OFFSET+0x0188	; Special string (used with
 					; expansion ROM)
-P_HERE:		equ OFFSET+0x018A ; Current entry point in dictionary
-START_OF_DICT_DEF:	equ OFFSET+0x018C
-
-STACKP_BASE:	equ OFFSET+0x0190	; Base offset of Char stack
-
-MSTACK0:	equ OFFSET+0x0194
-MSTACK1:	equ OFFSET+0x0196
+P_HERE:		equ OFFSET+0x018A 	; Current entry point in
+					; dictionary
+START_DICT_DEF:	equ OFFSET+0x018C
+UNKNOWN2:	equ OFFSET+0x018E 	; ???
+STACKP_BASE:	equ OFFSET+0x0190	; Base location for Paramater
+					; Stack
+UNKNOWN3:	equ OFFSET+0x0192	; ???
+MSTACK0:	equ OFFSET+0x0194	; Pointer to machine-stack 0
+MSTACK1:	equ OFFSET+0x0196	; Pointer to machine-stack 1
+UNKNOWN1:	equ OFFSET+0x0198	; ???
+FLAGS3:		equ OFFSET+0x01A5	; 0 - Set if PRINT OK required;
+					; 6 - Reset to stop multitasking
+					; on restart/ set to continue
+					; multitasking; 7 - Speed
+					; setting (0 - AUTO; 1 - Manual
+					; (FAST/SLOW))
+CONTEXT:	equ OFFSET+0x01A6	; Address of handler for Editor/
+					; Console ???
+KEYBD_ROUT:	equ OFFSET+0x01A8	; Keyboard handler
 POSSIBLE_KEY:	equ OFFSET+0x01AB
-LAST_KEY:	equ OFFSET+0x01AC
-FLAGS:		equ OFFSET+0x01AD
-STACK0_BASE:	equ OFFSET+0x0080
-PAD:		equ 0xFBC0	; Start of PAD
+LAST_KEY:	equ OFFSET+0x01AC 	
+FLAGS:		equ OFFSET+0x01AD	; System flags:
+					; 0 - Execution / Editor mode
+					; 1 - Editor screen print lock
+					; 2 - Console print lock
+					; 3 - ???
+					; 4 - Machine stack in use (0/1)
+					; 5 - Switch-machine-stack lock
+					; 6 - Editor screen visible
+					; 7 - cursor-inversion state
+SCR_INFO_ED:	equ OFFSET+0x01AE 	; Screen info (editor)
+					; +00 - current col value
+					; +01 - current row value
+					; +02 - leftmost column (window)
+					; +03 - top-most row (window)
+					; +04 - rightmost column (window)
+					; +05 - bottommost row (window)
+					; +06 - Character bitmap mask
+					; +07 - Blank character
+SCR_INFO_CO:	equ OFFSET+0x01B6 	; Screen info (Console)
+					; +00 - current col value
+					; +01 - current row value
+					; +02 - leftmost column (window)
+					; +03 - top-most row (window)
+					; +04 - rightmost column (window)
+					; +05 - bottommost row (window)
+					; +06 - Character bitmap mask
+					; +07 - Blank character
 FLAGS2:		equ OFFSET+0x01BE	; Further flags
-STACKC_BASE:	equ OFFSET+0x01C0
-STACK1_BASE:	equ OFFSET+0x013E
-F_WARM_RESTART:	equ OFFSET+0x0178 ; 0xFF indicates warm restart possible
-NEXT_DISP_ROUTINE:	equ 0xFC80	
-SCR_INFO_ED:	equ 0xFCAE
-SCR_INFO_CO:	equ 0xFCB6
-KIB_R_OFFSET:	equ OFFSET+0x017E
-KIB_W_OFFSET:	equ 0xFC7F
-FLAGS3:		equ OFFSET+0x01A5	; Bits:
-					;   0 - Set if PRINT OK required
-					;   6 - 0 = stop tasks on
-					;     restart; 1 = continue
-					;     multitasking
-					;   7 - Speed setting (0 - AUTO;
-					;       1 - Manual (FAST/SLOW))
+					; 0 - printer disabled/ enabled
+TOKEN_LN:	equ OFFSET+0x01BF	; Track length of currently
+					; being entered token
+STACKC_BASE:	equ OFFSET+0x01C0	; Base of Character stack
 
-TOKEN_LN:	equ 0xFCBF	; Track length of currently being entered token
-
+	
 	org	00000h
 
 	;;
@@ -350,7 +331,7 @@ l0051h:	ld h,(iy+000h)		;0051
 SKIP_DISPLAY:	ld a,0xFF		;0057 - E4h in 60 Hz version
 	ex af,af'		;0059
 	ld hl,RUN_VSYNC		;005a - Set routine for video handling
-	ld (NEXT_DISP_ROUTINE),hl	;005d
+	ld (NEXT_DISP_ROUT),hl	;005d
 
 l0060h:	pop hl			;0060
 
@@ -373,7 +354,7 @@ jump_to_hl:
 	;; On entry:
 	;;   A' - counter of how many scanlines still required for
 	;;        currently being generated border
-	;;   (NEXT_DISP_ROUTINE) - address of routine to call, when countdown
+	;;   (NEXT_DISP_ROUT) - address of routine to call, when countdown
 	;;                    reaches zero
 	;;
 	;; On exit:
@@ -399,7 +380,7 @@ NMI:	ex af, af'		; Retrieve and decrement cycle counter
 NMI_DONE: ; 0x006C
 	push hl 		; Save register
 
-	ld hl,(NEXT_DISP_ROUTINE) ; Proceed to next routine (either
+	ld hl,(NEXT_DISP_ROUT) ; Proceed to next routine (either
 	jp (hl)			  ; RUN_VSYNC or RUN_DISPLAY)
 
 	;; Continuation of NMI cycle when top border has been
@@ -421,11 +402,12 @@ RUN_DISPLAY:
 
 	ld bc,0x1809		; 24 rows and 8 scan lines + 1
 	ld hl, RUN_VSYNC	; Store address of next but one display
-	ld (NEXT_DISP_ROUTINE), hl ; routine (VSync)
+	ld (NEXT_DISP_ROUT), hl ; routine (VSync)
 
-	ld hl,(P_DBUFFER)	; Point to start of display buffer
-				; (execution address in upper 32kB of
-				; memory)
+	ld hl, 0xFD00
+	;; ld hl,(P_DBUFFER)	; Point to start of display buffer
+	;; 			; (execution address in upper 32kB of
+	;; 			; memory)
 	;; set 7,h			; Switch address to upper memory
 	
 	ld a,0xEA		; Sets a pause before the main display
@@ -500,7 +482,7 @@ VS_ON:	in a,(0FEh)		;009a - Turn on VSync
 
 	;; Set next display routine
 	ld hl,(P_RUN_DISP)	; (16) 009f - Usually contains 0071h
-	ld (NEXT_DISP_ROUTINE),hl ; (16)
+	ld (NEXT_DISP_ROUT),hl ; (16)
 
 	;; Timing = 42 T states for prep
 	push bc			; (11) 00a5
@@ -698,7 +680,7 @@ l012bh:	inc hl			;012b - HL -> LASTKEY
 	ld (hl),c		;012d - Store keypress
 
 	;; Handle multitasking
-l012eh:	ld hl,(0fc70h)		;012e
+l012eh:	ld hl,(MTASK_1)		;012e
 	push hl			;0131
 	jr l0139h		;0132
 
@@ -738,12 +720,11 @@ l0153h:
 	jr nz,l0136h		;0164
 	inc (ix+004h)		;0166
 	jr l0136h		;0169
-l016bh:
-	pop hl			;016b
+l016bh:	pop hl			;016b
 	push hl			;016c
 	ld bc,l0400h		;016d
-l0170h:
-	inc (hl)		;0170
+
+l0170h:	inc (hl)		;0170
 	jr nz,l0134h		;0171
 
 	inc hl			;0173
@@ -851,7 +832,7 @@ l01dbh:	pop hl			;01db
 	bit 7,a			;01ed
 	jp nz,l094dh		;01ef - Warm restart
 
-	ld hl,(0fca6h)		;01f2 - $04CF for Execution Context/
+	ld hl,(CONTEXT)		;01f2 - $04CF for Execution Context/
 				;       Editor Context
 	call jump_to_hl		;01f5
 
@@ -1514,7 +1495,7 @@ sub_03bdh:
 	call GET_SCR_ADDR	;03cd
 	pop af			;03d0
 	ld (ix+003h),a		;03d1
-	ld de,0ffe0h		;03d4
+	ld de,OFFSET+0x04E0	;03d4
 	jp l02b2h		;03d7
 	
 sub_03dah:
@@ -1684,7 +1665,7 @@ FC_DONE:
 
 sub_048dh:
 	ld a,01fh		;048d
-	ld hl,(0fca6h)		;048f
+	ld hl,(CONTEXT)		;048f
 
 	jp (hl)			;0492
 
@@ -1781,7 +1762,7 @@ PROCESS_KEY:
 	scf			;04d5
 	jr nz,PK_EDITOR		;04d6 - Jump forward if editor mode
 
-	ld hl,(0fca8h)		;04d8 - Likely 0x08f8 - Add to keyboard
+	ld hl,(KEYBD_ROUT)		;04d8 - Likely 0x08f8 - Add to keyboard
 	call jump_to_hl		;04db   input buffer ???
 
 PK_DONE:
@@ -1953,7 +1934,7 @@ l0577h:	ld a,(hl)		;0577
 CL_WRITE_TO_KIB:
 	push hl			;0581
 
-	ld hl,(0fca8h)		;0582 - Retrieve address of routine to
+	ld hl,(KEYBD_ROUT)	;0582 - Retrieve address of routine to
 				;       write to keyboard input buffer
 	call jump_to_hl		;0585
 
@@ -2528,7 +2509,7 @@ STR_ADD_CHR:
 
 sub_0744h:
 	ld hl,(02008h)		;0744
-	ld (0fc98h),hl		;0747
+	ld (UNKNOWN1),hl		;0747
 	ld hl,(02006h)		;074a
 	ld (P_HERE),hl		;074d
 
@@ -2539,16 +2520,16 @@ l0750h:	ld hl,(02004h)		;0750 - Jump address in ROM
 sub_0756h:
 	push hl			;0756
 	ld hl,(START_OF_DICT)	;0757
-	ld (START_OF_DICT_DEF),hl	;075a
+	ld (START_DICT_DEF),hl	;075a
 	ld hl,(P_HERE)		;075d
-	ld (0fc8eh),hl		;0760
+	ld (UNKNOWN2),hl		;0760
 	pop hl			;0763
 
 	ret			;0764
 
 sub_0765h:
 	push hl			;0765
-	ld hl,(START_OF_DICT_DEF)		;0766
+	ld hl,(START_DICT_DEF)		;0766
 	ld (START_OF_DICT),hl		;0769
 	ld hl,(OFFSET+0x018E)		;076c
 	ld (OFFSET+0x018A),hl		;076f
@@ -2741,7 +2722,7 @@ PROCESS_TOKEN:
 				;       points to word)
 
 	;; Attempt to parse as a number
-	ld hl,(PARSE_NUM_ROUTINE)
+	ld hl,(PARSE_NUM_ROUT)
 				;07f0 - Contains 0A36
 	call jump_to_hl		;07f3
 
@@ -2786,7 +2767,7 @@ PT_IMM_WORD:
 
 	call DICT_ADD_RET		;081c
 
-	ld hl,(0fc8eh)		;081f
+	ld hl,(UNKNOWN2)		;081f
 	call jump_to_hl		;0822
 
 	call sub_0765h		;0825
@@ -2944,7 +2925,7 @@ DAW_CHECK_NUM:	rst 10h		;089c - Retrieve token length
 
 	rst 8			;08a1 - Push token length back onto
 				;       Parameter Stack
-	ld hl,(PARSE_NUM_ROUTINE)
+	ld hl,(PARSE_NUM_ROUT)
 				;08a2 - Retrieve address of and call
 	call jump_to_hl		;08a5   PARSE_NUM routine
 
@@ -3233,7 +3214,7 @@ COLD_RESTART:
 ;; 	inc hl			;0967
 
 	ld hl, 0x6000
-
+	ld iy,  $8000
 	ds 0x0964-$
 	
 	;; Save current registers
@@ -3320,7 +3301,7 @@ l09a9h:	call sub_0934h		;09a9 - Service multitasking (and setup
 				;       display handling (Note AF' (used
 				;       to count NMI signals) has not
 				;       been set). Initially,
-				;       NEXT_DISP_ROUTINE is set to be
+				;       NEXT_DISP_ROUT is set to be
 				;       0x0098
 	
 	;; Check if system variables are corrupted (assumed if value at
@@ -3355,7 +3336,7 @@ CHECK_FP_ROM:
 	push af			;09d5
 
 	;; Update RAM stats
-	ld hl,0fc57h		;09d6 - Some measure of RAM
+	ld hl,RAM_STATS		;09d6 - Some measure of RAM
 
 	;; Update RAM start
 	ld a,020h		;09d9 - 32 256-byte pages / also high
@@ -3384,7 +3365,7 @@ l09f4h:	ld hl,02000h		;09f4
 	ld (hl),0a5h		;09f7
 	ld hl,02010h		;09f9
 	ld (P_HERE),hl		;09fc
-	ld (0fc8eh),hl		;09ff
+	ld (UNKNOWN2),hl		;09ff
 	call sub_1b70h		;0a02
 	ld hl,NUL		;0a05
 	ld (02002h),hl		;0a08
@@ -4647,14 +4628,14 @@ l100dh:
 	inc hl			;1017
 	ld (hl),d			;1018
 	pop de			;1019
-	ld hl,(0fc92h)		;101a
+	ld hl,(UNKNOWN3)		;101a
 	out (0fdh),a		;101d
 	ld (hl),e			;101f
 	inc hl			;1020
 	ld (hl),d			;1021
 	out (0feh),a		;1022
 	ex de,hl			;1024
-	ld (0fc92h),hl		;1025
+	ld (UNKNOWN3),hl		;1025
 	ret			;1028
 
 	;; Forth word AUTO
@@ -4836,7 +4817,7 @@ l10d7h:
 	ld c,e			;1138
 	inc de			;1139
 	nop			;113a
-	ld hl,(0fc98h)		;113b
+	ld hl,(UNKNOWN1)		;113b
 l113eh:
 	ld de,l000ah		;113e
 	add hl,de			;1141
@@ -4911,7 +4892,7 @@ l1190h:
 	push de			;1198
 	push hl			;1199
 	rst 10h			;119a
-	ld de,0fffah		;119b
+	ld de,OFFSET+0x04FA		;119b
 	add hl,de			;119e
 	jr c,l11a9h		;119f
 	add hl,hl			;11a1
@@ -5327,8 +5308,8 @@ l13b6h: rst 10h			;13b6
 sub_13d2h:
 	push hl			;13d2
 	push de			;13d3
-	ld hl,0fc58h		;13d4
-	ld de,0xFC60		;13d7
+	ld hl,UNKNOWN4		;13d4
+	ld de,UNKNOWN5		;13d7
 	call sub_12d7h		;13da
 	ld l,05ch		;13dd
 	ld e,064h		;13df
@@ -5447,7 +5428,7 @@ l1443h:	pop ix			;1443
 	ld a,04eh		;1474
 	jr l1478h		;1476
 l1478h:
-	ld de,0ffffh		;1478
+	ld de,OFFSET+0x04FF	;1478
 	xor a			;147b
 	rst 10h			;147c
 	add hl,de			;147d
@@ -5600,7 +5581,7 @@ sub_153fh:
 	ld de,l0200h		;153f
 	push bc			;1542
 	push hl			;1543
-	ld bc,0ffffh		;1544
+	ld bc,OFFSET+0x04FF	;1544
 l1547h:
 	call sub_1519h		;1547
 	inc hl			;154a
@@ -5619,7 +5600,7 @@ sub_1553h:
 	ret			;155b
 sub_155ch:
 	push hl			;155c
-	ld hl,0fc52h		;155d
+	ld hl,UNKNOWN6		;155d
 	call sub_1519h		;1560
 	inc hl			;1563
 	call sub_1519h		;1564
@@ -5637,11 +5618,11 @@ sub_155ch:
 	bit 6,(hl)		;1574
 	ret z			;1576
 	rst 10h			;1577
-	ld (0fc52h),hl		;1578
+	ld (UNKNOWN6),hl		;1578
 
 l157bh:	out (0fdh),a		;157b
 
-	ld hl,(0fc76h)		;157d
+	ld hl,(P_DISP_2)		;157d
 	call sub_152eh		;1580
 	call sub_1553h		;1583
 	call sub_155ch		;1586
@@ -5746,10 +5727,10 @@ sub_15fah:
 	bit 6,(hl)		;160a
 	ret z			;160c
 	rst 10h			;160d
-	ld (0fc52h),hl		;160e
+	ld (UNKNOWN6),hl		;160e
 l1611h:
 	out (0fdh),a		;1611
-	ld hl,(0fc76h)		;1613
+	ld hl,(P_DISP_2)	;1613
 	push hl			;1616
 	call sub_15d8h		;1617
 	call l1592h		;161a
@@ -5760,15 +5741,15 @@ l1611h:
 	ld h,a			;1626
 	or l			;1627
 	jr nz,l162dh		;1628
-	ld (0fc52h),hl		;162a
+	ld (UNKNOWN6),hl		;162a
 l162dh:
 	ex de,hl			;162d
-	ld hl,(0fc52h)		;162e
+	ld hl,(UNKNOWN6)		;162e
 	ld a,l			;1631
 	or h			;1632
 	jr nz,l163bh		;1633
 	ex de,hl			;1635
-	ld (0fc52h),hl		;1636
+	ld (UNKNOWN6),hl		;1636
 	jr l163dh		;1639
 l163bh:
 	sbc hl,de		;163b
@@ -5805,12 +5786,12 @@ l1651h:
 
 
 sub_166bh:
-	ld hl,(0fc52h)		;166b
+	ld hl,(UNKNOWN6)		;166b
 	ld a,l			;166e
 	or h			;166f
 	ret z			;1670
 	inc hl			;1671
-	ld (0fc52h),hl		;1672
+	ld (UNKNOWN6),hl		;1672
 
 	ret			;1675
 
@@ -6063,7 +6044,7 @@ l176eh:
 	inc c			;1775
 	nop			;1776
 l1777h:
-	ld hl,(0fc8eh)		;1777
+	ld hl,(UNKNOWN2)		;1777
 	set 7,(hl)		;177a
 	ret			;177c
 
@@ -6341,10 +6322,10 @@ sub_18fah:
 	bit 3,(hl)		;18fd
 	ret nz			;18ff
 	call sub_18e6h		;1900
-	ld de,0ffe0h		;1903
-	add hl,de			;1906
-	ex de,hl			;1907
-	ld hl,(RAM_SIZE)		;1908
+	ld de,OFFSET+0x04E0	;1903 - Was ffe0h ***
+	add hl,de		;1906
+	ex de,hl		;1907
+	ld hl,(RAM_SIZE)	;1908
 	sbc hl,de		;190b
 	ret nc			;190d
 	ld hl,FLAGS3		;190e
@@ -6359,7 +6340,7 @@ sub_18fah:
 	ld b,l			;191d
 	ld e,000h		;191e
 	call sub_1927h		;1920
-	ld (0fc72h),hl		;1923
+	ld (UNKNOWN7),hl		;1923
 	ret			;1926
 
 sub_1927h:
@@ -6381,7 +6362,7 @@ sub_1927h:
 	nop			;193e
 	call sub_1927h		;193f
 	ex de,hl		;1942
-	ld hl,(0fc72h)		;1943
+	ld hl,(UNKNOWN7)	;1943
 	call sub_12a2h		;1946
 	ld a,046h		;1949
 	jp nc,PRINT_ERR_MSG	;194b
@@ -6391,11 +6372,11 @@ sub_1927h:
 	ld hl,NUL		;1956
 	ld (P_MTASK),hl		;1959
 l195ch:
-	ld hl,(0fc70h)		;195c
+	ld hl,(MTASK_1)		;195c
 l195fh:
 	push hl			;195f
 	pop bc			;1960
-	ld (0fc92h),hl		;1961
+	ld (UNKNOWN3),hl		;1961
 	ld a,(hl)		;1964
 	inc hl			;1965
 	ld h,(hl)		;1966
@@ -6410,9 +6391,9 @@ l195fh:
 	ld (bc),a		;1973
 l1974h:
 	ex de,hl		;1974
-	ld (0fc8eh),hl		;1975
+	ld (UNKNOWN2),hl	;1975
 	call FIND_NEXT_WORD	;1978
-	ld (START_OF_DICT_DEF),hl ;197b
+	ld (START_DICT_DEF),hl ;197b
 	jp sub_0765h		;197e
 
 	;; FORTH word TOFF
@@ -6689,7 +6670,7 @@ l1adeh:
 	ld d,d			;1aef
 	dec bc			;1af0
 	nop			;1af1
-	ld hl,0fc68h		;1af2
+	ld hl,UNKNOWN8		;1af2
 	rst 8			;1af5
 	ret			;1af6
 	inc b			;1af7
@@ -6698,7 +6679,7 @@ l1adeh:
 	ld d,d			;1afa
 	ld b,a			;1afb
 	ld c,000h		;1afc
-	ld de,0fc50h		;1afe
+	ld de,UNKNOWN9		;1afe
 	rst 10h			;1b01
 	add hl,de			;1b02
 	rst 8			;1b03
@@ -6709,7 +6690,7 @@ l1adeh:
 	ld c,e			;1b08
 	dec c			;1b09
 	nop			;1b0a
-	ld hl,0fc76h		;1b0b
+	ld hl,P_DISP_2		;1b0b
 l1b0eh:
 	push hl			;1b0e
 	jp l1797h		;1b0f
@@ -6720,7 +6701,7 @@ l1b0eh:
 	ld b,l			;1b16
 	inc c			;1b17
 	nop			;1b18
-	ld hl,0fc52h		;1b19
+	ld hl,UNKNOWN6		;1b19
 	jr l1b0eh		;1b1c
 	add a,e			;1b1e
 	ld e,e			;1b1f
@@ -6787,7 +6768,7 @@ sub_1b70h:
 	ld (02006h),hl		;1b73
 	ld hl,(START_OF_DICT)	;1b76
 	ld (02004h),hl		;1b79
-	ld hl,(0fc98h)		;1b7c
+	ld hl,(UNKNOWN1)		;1b7c
 	ld (02008h),hl		;1b7f
 	ret			;1b82
 	add a,h			;1b83
@@ -7148,8 +7129,8 @@ l1da7h:	nop			;1da7
 	nop			;1dac
 	ld b,b			;1dad
 l1daeh:
-	dw OFFSET+0x0200		; Default for P_DISPLAY
-	db 098h,0fch		;1daf
+	dw OFFSET+0x0200	; Default for P_DISPLAY
+	dw UNKNOWN1		;1daf
 l1db2h:
 	nop			;1db2
 	jr nz,l1d84h		;1db3
@@ -7175,8 +7156,9 @@ l1db2h:
 	ld a,(bc)			;1dcd
 	nop			;1dce
 	ld b,b			;1dcf
-	add a,b			;1dd0
-	jp m,0fc98h		;1dd1
+
+	dw OFFSET-0x0080	; 0xFA80
+	dw OFFSET+0x0198
 	nop			;1dd4
 	nop			;1dd5
 	ld (hl),0fch		;1dd6
