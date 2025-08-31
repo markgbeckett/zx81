@@ -1,7 +1,12 @@
 ; z80dasm.1.6
 ; command line: z80dasm -g 0 -a -l -o hforth.asm husband_forth.bin
 
-
+	;; To do
+	;; - Check START_OF_WORDIONARY is what I think it is
+	;; - Reinstate memory-checking routine
+	;; - Initialise IY before parameter stack is called
+	;;
+	;; 
 	;; Display mechanism
 	;;
 	;; As with Sinclair's BASIC ROM for the ZX81, much of the
@@ -66,13 +71,21 @@
 	;; FCC0--FCFF -- Character stack (wraps around)
 	;; FD00--FFFF - video RAM
 
+MINSTREL3:	equ 0x01
+
 	include "hforth_chars.asm"
 
 	;; ROM configuration options
-TOP_BORDER_LINES:	equ 56	; H_FORTH uses 4Ah (30d) / better 56
-BOT_BORDER_LINES:	equ 55	; H_FORTH uses 1Eh (74d) / better 55
-
+	if MINSTREL3=1
 OFFSET:		equ 0x7B00 	; Offset to system memory
+TOP_BORDER_LINES:	equ 55	; H_FORTH uses 4Ah (30d) / better 56
+BOT_BORDER_LINES:	equ 58	; H_FORTH uses 1Eh (74d) / better 55
+	else
+OFFSET:		equ 0xFB00 	; Offset to system memory
+TOP_BORDER_LINES:	equ 31	; H_FORTH uses 4Ah (30d) / better 56
+BOT_BORDER_LINES:	equ 73	; H_FORTH uses 1Eh (74d) / better 55
+	endif
+	
 
 	;; H Forth System Variables and Stacks
 STACK0_BASE:	equ OFFSET+0x0080 	; Start of machine stack 0
@@ -87,12 +100,13 @@ RAM_STATS:	equ OFFSET+0x0157	; RAM-related
 UNKNOWN4:	equ OFFSET+0x0158	; ???
 TIME:		equ OFFSET+0x015C	; Time variable (see Ch 15 of manual)
 UNKNOWN5:	equ OFFSET+0x0160	; ???
-UNKNOWN8:	equ OFFSET+0x0168	; ???
+TIC_COUNTER:	equ OFFSET+0x0164	; Increment counter for timer
+PER:		equ OFFSET+0x0168	; System clock limit value
 RAM_START:	equ OFFSET+0x016C	; Start of RAM
 P_DBUFFER:	equ OFFSET+0x016E	; Address of display buffer. Set
 					; to BD00/ FD00 during
 					; initialisation.
-MTASK_1:	equ OFFSET+0x0170	; Multi-tasking-related
+MTASK_LIST_HEAD:	equ OFFSET+0x0170	; Multi-tasking-related
 UNKNOWN7:	equ OFFSET+0x0172	; ???
 PRINT_DRVR:	equ OFFSET+0x0174	; Address of printer driver
 P_DISP_2:	equ OFFSET+0x0176	; Also points to display???
@@ -114,7 +128,7 @@ P_RUN_DISP:	equ OFFSET+0x0182	; Address of routine to produce
 P_STACKC:	equ OFFSET+0x0184	; Address of next entry in Character
 					; Stack
 BASE:		equ OFFSET+0x0186	; 16-bit base for processing numbers
-START_OF_DICT:	equ OFFSET+0x0188	; Special string (used with
+START_OF_WORD:	equ OFFSET+0x0188	; Special string (used with
 					; expansion ROM)
 P_HERE:		equ OFFSET+0x018A 	; Current entry point in
 					; dictionary
@@ -122,7 +136,7 @@ START_DICT_DEF:	equ OFFSET+0x018C
 UNKNOWN2:	equ OFFSET+0x018E 	; ???
 STACKP_BASE:	equ OFFSET+0x0190	; Base location for Paramater
 					; Stack
-UNKNOWN3:	equ OFFSET+0x0192	; ???
+PCUR_TASK_STRUCT:	equ OFFSET+0x0192	; ???
 MSTACK0:	equ OFFSET+0x0194	; Pointer to machine-stack 0
 MSTACK1:	equ OFFSET+0x0196	; Pointer to machine-stack 1
 UNKNOWN1:	equ OFFSET+0x0198	; ???
@@ -178,8 +192,13 @@ STACKC_BASE:	equ OFFSET+0x01C0	; Base of Character stack
 	;; 
 l0000h:	out (0xFD),a		;0000 - Disable NMI Generator
 l0002h:	ld sp,STACK0_BASE	;0002 - Reset stack pointer
-l0005h:	jp RESTART		;0005 - Continue with reset
 
+	if MINSTREL3=1
+l0005h:	jp RESTART_NEW		;0005 - Continue with reset
+
+	else
+l0005h:	jp RESTART		;0005 - Continue with reset
+	endif
 
 	;; Push HL onto parameter stack
 	;; IY points to parameter stack
@@ -404,11 +423,15 @@ RUN_DISPLAY:
 	ld hl, RUN_VSYNC	; Store address of next but one display
 	ld (NEXT_DISP_ROUT), hl ; routine (VSync)
 
+	if MINSTREL3=1
 	ld hl, 0xFD00
-	;; ld hl,(P_DBUFFER)	; Point to start of display buffer
-	;; 			; (execution address in upper 32kB of
-	;; 			; memory)
+
+	else
+	ld hl,(P_DBUFFER)	; Point to start of display buffer
+				; (execution address in upper 32kB of
+				; memory)
 	;; set 7,h			; Switch address to upper memory
+	endif
 	
 	ld a,0xEA		; Sets a pause before the main display
 				; starts to execute. Used to set refresh
@@ -680,104 +703,170 @@ l012bh:	inc hl			;012b - HL -> LASTKEY
 	ld (hl),c		;012d - Store keypress
 
 	;; Handle multitasking
-l012eh:	ld hl,(MTASK_1)		;012e
-	push hl			;0131
+
+	;;  Service the timing routines for active tasks
+l012eh:	ld hl,(MTASK_LIST_HEAD)	;012e - Retrieve address of link field
+	push hl			;0131   for task at head of task list list
+				;       and save it
 	jr l0139h		;0132
 
-l0134h:	ex (sp),ix		;0134
-l0136h:	pop ix			;0136
-	pop hl			;0138
+	;; Entry point from 0x0171 (end of routine to increment task
+	;; timer). At this point, the start of the task's counter is on
+	;; the stack and needs discarding
+l0134h:	ex (sp),ix		;0134 - Discard top of stack (with
+				;       subsequent POP command) without
+				;       affecting any registers
 
-l0139h:	push hl			;0139
+	;; Entry point from 0x015E and 0x0169 (having completed
+	;; maintenance of task's counter)
+l0136h:	pop ix			;0136 - Restore IX 
+	pop hl			;0138 - Retrieve address of link field
+				;       for next task
+
+l0139h:	push hl			;0139 - Save address of current task
+				;       link field
+
+	;; Retrieve address of link field of next task in list. Current
+	;; link-field address could be zero, in which case the address
+	;; received will be nonesense. However, a check is made later to
+	;; see if the link field address is zero and the value read here
+	;; is ignored, if so
 	ld a,(hl)		;013a
-	inc hl			;013b
-	ld h,(hl)		;013c
+	inc hl			;013b   
+	ld h,(hl)		;013c   
 	ld l,a			;013d
-	xor a			;013e
-	ex (sp),hl		;013f
-	cp h			;0140
-	jr z,l0178h		;0141
-	inc hl			;0143
-	inc hl			;0144
-	ld bc,004ffh		;0145
-	push hl			;0148
-l0149h:
-	cp (hl)			;0149
-	jr nz,l016bh		;014a
-	inc hl			;014c
+
+	;; Check if current task is end of list (i.e., link field
+	;; contains zero)
+	xor a			;013e - Clear A 
+
+	;; Place address of next link field on stack (which could be
+	;; nonesense) and restore current link field
+	ex (sp),hl		;013f - Retrieve address in MTASK
+
+	cp h			;0140 - If high byte is zero, assume zero
+	jr z,l0178h		;0141   and skip forward, if so
+
+	inc hl			;0143 - Otherwise advance to byte 2
+	inc hl			;0144   of task structure
+
+	ld bc,004ffh		;0145 - B is counter for timer update
+				;       and C is a status flag
+
+	;; Check if current task's counter (bytes 2, ..., 5) is zero
+	;; (Note, A is zero from earlier)
+	push hl			;0148 - Save address of start of counter
+l0149h:	cp (hl)			;0149 - Check if byte is zero
+	jr nz,l016bh		;014a   and skip forward, if so
+	inc hl			;014c - Try next digit, unless done
 	djnz l0149h		;014d
-l014fh:
-	ex (sp),ix		;014f
+
+	;; Counter is zero
+l014fh:	ex (sp),ix		;014f - Retrieve address of start of
+				;       task counter into IX, saving IX
+				;       in the process
+
+	;; Reset counter (copying start value from bits 6,...,9 of
+	;; structure into bits 2,...,5
 	ld b,004h		;0151
-l0153h:
-	ld a,(ix+004h)		;0153
+l0153h:	ld a,(ix+004h)		;0153
 	ld (ix+000h),a		;0156
 	inc ix			;0159
 	djnz l0153h		;015b
-	inc c			;015d
+
+	inc c			;015d - Check if ready to move on to
+				;       next task
 	jr z,l0136h		;015e
+
+	;; Check if change to counter limit is required ???
 	bit 6,(ix+004h)		;0160
 	jr nz,l0136h		;0164
 	inc (ix+004h)		;0166
 	jr l0136h		;0169
-l016bh:	pop hl			;016b
+
+	;; Task's time is non-zero, so increment and done
+l016bh:	pop hl			;016b - Retrieve base address of task's timer
 	push hl			;016c
-	ld bc,l0400h		;016d
+	ld bc,l0400h		;016d - Timer is 32-bit, LSB, so will
+				;       have up to four bytes to increment
+ 
+l0170h:	inc (hl)		;0170 - Increase digit
+	jr nz,l0134h		;0171   Done, if not rolled over
+	inc hl			;0173 - Move to next digit
+	djnz l0170h		;0174 - Repeat, if not done
 
-l0170h:	inc (hl)		;0170
-	jr nz,l0134h		;0171
+	jr l014fh		;0176 - All digits have rolled over, so
+				;       reset counter?
 
-	inc hl			;0173
-	djnz l0170h		;0174
-	jr l014fh		;0176
+	;; Arrive here, once at the end of task list (indicated by
+	;; current task's link field address being zero)
+l0178h:	pop hl			;0178 - Discard address of next-task's
+				;       link field, as is nonsense
+l0179h:	pop hl			;0179 - Retrieve address of start of
+	push hl			;017a   task list and save it again
 
-	
-l0178h:	pop hl			;0178
-l0179h:	pop hl			;0179
-	push hl			;017a
+	;; Retrieve address of link field of next task
 	ld a,(hl)		;017b
 	inc hl			;017c
 	ld h,(hl)		;017d
 	ld l,a			;017e
-	ex (sp),hl		;017f
-	ld a,l			;0180
+
+	;; Retrieve current link-field (saving address of next link
+	;; field to stack)
+	ex (sp),hl		;017f - Retrieve MTASK base
+
+	;;  Advance to byte 10 of task structure
+	ld a,l			;0180 
 	add a,00ah		;0181
 	ld l,a			;0183
 	ld a,000h		;0184
 	adc a,h			;0186
 	ld h,a			;0187
-	or a			;0188
-	jr z,l01dbh		;0189 - Move on to check for keypress
 	
-l018bh:
-	ld a,(hl)		;018b
-	bit 7,a			;018c
-	jr nz,l01dbh		;018e
-	bit 6,a			;0190
-	jr nz,l0179h		;0192
-	or a			;0194
+	or a			;0188 - Check if high byte of address is
+				;       zero, in which case we've reached
+	jr z,l01dbh		;0189 - the end of the list, so can move
+				;       on to check for keypress, if so
+	
+l018bh:	ld a,(hl)		;018b - Check if bit 7 is set and move
+	bit 7,a			;018c   on to check for keypress, if 
+	jr nz,l01dbh		;018e   not
+
+	bit 6,a			;0190 - Check bit 6 and move on to next
+	jr nz,l0179h		;0192   task if set
+	
+	or a			;0194   Also, move on if A=0
 	jr z,l0179h		;0195
+
 	dec (hl)		;0197
 	set 7,(hl)		;0198
+
+	;; Save registers
 	push hl			;019a
 	push de			;019b
 	exx			;019c
 	push hl			;019d
 	push de			;019e
 	push bc			;019f
-	push ix		;01a0
+	push ix			;01a0
 	exx			;01a2
+
+	;; Retrieve task address
 	inc hl			;01a3
-	ld a,(hl)			;01a4
+	ld a,(hl)		;01a4
 	inc hl			;01a5
-	ld h,(hl)			;01a6
+	ld h,(hl)		;01a6
 	ld l,a			;01a7
+
 	push hl			;01a8
 	ld hl,FLAGS		;01a9
 	bit 4,(hl)		;01ac
 	jr nz,l01b6h		;01ae
+
+	;; Run task
 	pop hl			;01b0
 	call jump_to_hl		;01b1
+
 	jr l01cfh		;01b4
 
 l01b6h:	res 4,(hl)		;01b6
@@ -788,7 +877,7 @@ l01b6h:	res 4,(hl)		;01b6
 	ld (MSTACK1),sp		;01bb 
 	ld sp,(MSTACK0)		;01bf
 
-	call jump_to_hl		;01c3
+	call jump_to_hl		;01c3 - This is where clock is updated 
 	
 	ld sp,(MSTACK1)		;01c6 - Switch back to Stack 1 (discard
 				;Stack 0 pointer)
@@ -797,7 +886,8 @@ l01b6h:	res 4,(hl)		;01b6
 	res 5,(hl)		;01cb
 l01cdh:	set 4,(hl)		;01cd
 
-l01cfh:	pop ix		;01cf
+	;; Restore registers
+l01cfh:	pop ix			;01cf
 	pop bc			;01d1
 	pop de			;01d2
 	pop hl			;01d3
@@ -2515,11 +2605,11 @@ sub_0744h:
 
 	;; Deal with recognised ROM
 l0750h:	ld hl,(02004h)		;0750 - Jump address in ROM
-	ld (START_OF_DICT),hl		;0753
+	ld (START_OF_WORD),hl		;0753
 
 sub_0756h:
 	push hl			;0756
-	ld hl,(START_OF_DICT)	;0757
+	ld hl,(START_OF_WORD)	;0757
 	ld (START_DICT_DEF),hl	;075a
 	ld hl,(P_HERE)		;075d
 	ld (UNKNOWN2),hl		;0760
@@ -2530,7 +2620,7 @@ sub_0756h:
 sub_0765h:
 	push hl			;0765
 	ld hl,(START_DICT_DEF)		;0766
-	ld (START_OF_DICT),hl		;0769
+	ld (START_OF_WORD),hl		;0769
 	ld hl,(OFFSET+0x018E)		;076c
 	ld (OFFSET+0x018A),hl		;076f
 	pop hl			;0772
@@ -2542,7 +2632,7 @@ ADD_LINK_FIELD:
 	push de			;0774
 	
 	ex de,hl		;0775 - Move entry point to DE
-	ld hl,(START_OF_DICT)	;0776 - Head of existing dictionary
+	ld hl,(START_OF_WORD)	;0776 - Head of existing dictionary
 
 	or a			;0779 
 	sbc hl,de		;077a
@@ -2573,7 +2663,7 @@ GET_WORD:
 	;;   CF - reset (matched) / set (no match)
 	;;   HL - matching word / corrupt
 CHECK_FOR_WORD:
-	ld hl,(START_OF_DICT)	;0785
+	ld hl,(START_OF_WORD)	;0785
 
 CW_LOOP:
 	call MATCH_STRING	;0788
@@ -2870,7 +2960,7 @@ INIT_NEW_WORD:
 
 	call ADD_LINK_FIELD	;0871
 
-	ld (START_OF_DICT),hl	;0874 - Update head of dictionary
+	ld (START_OF_WORD),hl	;0874 - Update head of dictionary
 
 	ret			;0877
 
@@ -2881,10 +2971,12 @@ INIT_NEW_WORD:
 	;;
 	;; On exit:
 	;;   
-ERR_RESTART:	call OUTPUT_ERR		;0878
+ERR_RESTART:
+	call OUTPUT_ERR		;0878
 	jp WARM_RESTART		;087b
 
-DAW_ADD_CALL:	call DICT_ADD_CALL_HL		;087e
+DAW_ADD_CALL:
+	call DICT_ADD_CALL_HL		;087e
 
 	;; Add a sequence of predefined words and numbers to the
 	;; dictionary
@@ -3180,61 +3272,63 @@ l094dh:	ld hl,F_WARM_RESTART	;094d - Check if warm restart is
 
 	;; Continuation of cold-restart routine
 COLD_RESTART:
-	im 1			; REPLACEMENT CODE ( as NMI generated
-				; already disabled ).
-	
-	;; out (0fdh),a		;0953 - Disable NMI Generator
+	out (0fdh),a		;0953 - Disable NMI Generator
 
 	;; 
 	;; Check memory configuation of machine (i.e., how much memory
 	;; there is)
 	;;
-;; 	;; Start by checking for RAM above 0x4000
-;; 	ld hl,040ffh		;0955 - Last byte of first page of
-;; 				;       RAM. This is guaranteed to exist
-;; 				;       on all RAM configurations
-
-;; 	;; Write test data (high byte of address) to end of each 256-byte page
-;; l0958h:	ld (hl),h		;0958
-;; 	inc h			;0959 - Move to next page
-;; 	jr nz,l0958h		;095a - Repeat if address did not overflow 
-
-;; 	;; Attempt to read back (oddly, this routine expects
-;; 	;; differences, based on mirroring of main RAM area)
-;; 	ld h,040h		;095c
-;; l095eh:	ld a,(hl)		;095e
-;; 	cp h			;095f
-;; 	jr z,l0965h		;0960 - If reads back same, means done
-;; 	inc h			;0962
-;; 	jr nz,l095eh		;0963
-
-;; 	;; Calculate size of memory 
-;; l0965h:	cpl			;0965 - Calculate $10000-HL
-;; 	ld h,a			;0966   and store in HL
-;; 	inc hl			;0967
-
+	if MINSTREL3=1
 	ld hl, 0x6000
-	ld iy,  $8000
 	ds 0x0964-$
+
+	else
+	;; Start by checking for RAM above 0x4000
+	ld hl,040ffh		;0955 - Last byte of first page of
+				;       RAM. This is guaranteed to exist
+				;       on all RAM configurations
+
+	;; Write test data (high byte of address) to end of each 256-byte page
+l0958h:	ld (hl),h		;0958
+	inc h			;0959 - Move to next page
+	jr nz,l0958h		;095a - Repeat if address did not overflow 
+
+	;; Attempt to read back (oddly, this routine expects
+	;; differences, based on mirroring of main RAM area)
+	ld h,040h		;095c
+l095eh:	ld a,(hl)		;095e
+	cp h			;095f
+	jr z,l0965h		;0960 - If reads back same, means done
+	inc h			;0962
+	jr nz,l095eh		;0963
+
+	;; Calculate size of memory 
+l0965h:	cpl			;0965 - Calculate $10000-HL
+	ld h,a			;0966   and store in HL
+	inc hl			;0967
+	endif
 	
 	;; Save current registers
 	exx			;0968
 
 ;; 	;; Zero RAM (up to 0x8000)
-;; 	ld hl,04000h		;0969
-;; 	ld de,0x0001		;097c
-;; 	xor a			;096f
-;; l0970h:	ld (hl),a		;0970
-;; 	add hl,de
-	
-;; 	jr nc,l0970h		;0972
-
+	if MINSTREL3=1 		
 	ld hl,0x4000
 	ld de,0x4001
 	ld bc,0x3FFE
 	xor a
 	ld (hl),a
 	ldir
+
+	else
+	ld hl,04000h		;0969
+	ld de,0x0001		;097c
+	xor a			;096f
+l0970h:	ld (hl),a		;0970
+	add hl,de
+	
+	jr nc,l0970h		;0972
+	endif
 	
 	;; Initialise (Second half of) system variables
 	ld hl,DEFVARS		;0974
@@ -3242,7 +3336,9 @@ COLD_RESTART:
 	ld bc,l0060h		;097a
 	ldir			;097d
 
+	if MINSTREL3=1
 	ds 0x097f-$
+	endif
 	
 	;; Restore registers
 	exx			;097f
@@ -3793,11 +3889,14 @@ sub_0bf2h:
 	ld d,000h		;0c11
 
 	;; ( XX -- XX FLAG )
+	;;
+	;; Including handle TT (ticks) scheduler
 sub_0c13h:
 	push de			;0c13
 	push hl			;0c14
 	
 	rst 10h			;0c15 - Pop from stack into HL
+				;(determines frequency)
 	ld a,h			;0c16 - Move upper byte to A
 	rla			;0c17 - Bit 7 into carry
 	ex de,hl		;0c18
@@ -3903,7 +4002,7 @@ l0c9fh:
 	push bc			;0c9f
 	or a			;0ca0
 	bit 0,(ix+000h)		;0ca1
-	call nz,sub_12d7h		;0ca5
+	call nz,TIC		;0ca5
 	ld b,c			;0ca8
 	push ix		;0ca9
 l0cabh:
@@ -4473,13 +4572,15 @@ l0f2ah:
 	ld d,h			;0f32
 	ld (de),a			;0f33
 	nop			;0f34
-sub_0f35h:
+
+DICT_ALLOT:
 	ld hl,(P_HERE)		;0f35
 	ex de,hl			;0f38
 	rst 10h			;0f39
 	add hl,de			;0f3a
 	ld (P_HERE),hl		;0f3b
 	ret			;0f3e
+
 	add a,h			;0f3f
 	ld b,e			;0f40
 	ld c,a			;0f41
@@ -4601,41 +4702,68 @@ l0fdeh:
 	db 0x04, _T, _A, _S, _K
 	dw 0x0048
 
-	call INIT_NEW_WORD		;0fe8
-	ld hl,(START_OF_DICT)	;0feb
+	call INIT_NEW_WORD	;0fe8
+
+	;; Set word to be a task
+	ld hl,(START_OF_WORD)	;0feb - Indicates a Task word
 	set 6,(hl)		;0fee
-	ld hl,(P_HERE)		;0ff0
-	ld de,l0005h		;0ff3
-	add hl,de			;0ff6
+
+	ld hl,(P_HERE)		;0ff0 - Skip forward five bytes
+	ld de,0x0005		;0ff3
+	add hl,de		;0ff6
+
+	;; Populate task word header
 	push hl			;0ff7
-	call DICT_ADD_HL		;0ff8
+	call DICT_ADD_HL	;0ff8
 	ld hl,l1190h		;0ffb
-	call DICT_ADD_CALL_HL		;0ffe
-	ld hl,l000dh		;1001
+	call DICT_ADD_CALL_HL	;0ffe
+
+	;; Advance dictionary pointer by 14 bytes
+	ld hl,0x000d		;1001 - Push 0x0D onto stack
 	rst 8			;1004
-	call sub_0f35h		;1005
-	ld bc,sub_0b00h		;1008
-	pop hl			;100b
-	push hl			;100c
-l100dh:
-	ld (hl),c			;100d
+	call DICT_ALLOT		;1005
+
+	ld bc,0x0B00		;1008
+	pop hl			;100b - Retrieve start of
+	push hl			;100c   parameter field
+
+	;; Initialise task info (14 bytes initialised to zero)
+l100dh:	ld (hl),c		;100d
 	inc hl			;100e
 	djnz l100dh		;100f
-	ex de,hl			;1011
-	call TICK_WORD		;1012
-	ex de,hl			;1015
-	ld (hl),e			;1016
+
+	ex de,hl		;1011 - Save address of next entry in
+				;       parameter field
+
+	call TICK_WORD		;1012 - Retrieve action word for task
+				;       (parameter field address)
+
+	;; Store address into task word
+	ex de,hl		;1015
+	ld (hl),e		;1016
 	inc hl			;1017
-	ld (hl),d			;1018
+	ld (hl),d		;1018
+
+	;; Retrieve address of parameter field
 	pop de			;1019
-	ld hl,(UNKNOWN3)		;101a
+
+	ld hl,(PCUR_TASK_STRUCT)	;101a
+
+	;; Temporarily disable NMI generator
 	out (0fdh),a		;101d
-	ld (hl),e			;101f
+
+	;; Store address of parameter field in previous task field
+	ld (hl),e		;101f
 	inc hl			;1020
-	ld (hl),d			;1021
+	ld (hl),d		;1021
+
+	;; Reenable NMI generator
 	out (0feh),a		;1022
-	ex de,hl			;1024
-	ld (UNKNOWN3),hl		;1025
+
+	;; Update location of task parameter field
+	ex de,hl		;1024
+	ld (PCUR_TASK_STRUCT),hl	;1025
+
 	ret			;1028
 
 	;; Forth word AUTO
@@ -4834,19 +4962,18 @@ l113eh:
 	rst 8			;1150
 	rst 8			;1151
 	ret			;1152
-	dec b			;1153
-	ld d,e			;1154
-	ld d,h			;1155
-	ld b,c			;1156
-	ld d,d			;1157
-	ld d,h			;1158
-	rrca			;1159
-	nop			;115a
-	ld hl,l0002h+2		;115b
+
+	;; Forth word START
+	;;
+	db 0x05, _S, _T, _A, _R, _T
+	dw 0x000F
+	
+	ld hl,0x0004		;115b
 	rst 8			;115e
 	rst 8			;115f
 	rst 8			;1160
 	ret			;1161
+
 	ld (bc),a			;1162
 	ld c,c			;1163
 	ld c,(hl)			;1164
@@ -4855,55 +4982,59 @@ l113eh:
 	ld hl,l0000h		;1167
 	rst 8			;116a
 	ret			;116b
-	dec b			;116c
-	ld b,l			;116d
-	ld d,(hl)			;116e
-	ld b,l			;116f
-	ld d,d			;1170
-	ld e,c			;1171
-	dec c			;1172
-	nop			;1173
-	ld hl,l0000h+1		;1174
+
+	;; Forth word EVERY
+	db 0x05, _E, _V, _E, _R, _Y
+	dw 0x000D
+
+	;; Push 0x0001 onto the Parameter Stack
+	ld hl,0x0001		;1174
 	rst 8			;1177
+	
 	ret			;1178
-	ld (bc),a			;1179
-	ld b,c			;117a
-	ld d,h			;117b
-	ld a,(bc)			;117c
-	nop			;117d
-	ld hl,l0002h		;117e
+
+	;; Forth word AT
+	db 0x02, _A, _T
+	dw 0x000A
+
+	;; Push 0x0002 onto the Parameter Stack
+	ld hl,0x0002		;117e
 	rst 8			;1181
+	
 	ret			;1182
-	inc bc			;1183
-	ld d,d			;1184
-	ld d,l			;1185
-	ld c,(hl)			;1186
-	ld (hl),d			;1187
-	nop			;1188
-	ld hl,l0005h		;1189
+
+	;; Forth word RUN
+	db 0x03, _R, _U, _N
+	dw 0x0072
+
+	;; Put 5 on the stack three times
+	ld hl,0x0005		;1189
 	rst 8			;118c
 	rst 8			;118d
 	rst 8			;118e
+
 	ret			;118f
-l1190h:
-	ex (sp),ix		;1190
+
+	;; Run task?
+l1190h:	ex (sp),ix		;1190
 	call sub_0b9bh		;1192
 	call sub_0b2dh		;1195
 	push de			;1198
 	push hl			;1199
 	rst 10h			;119a
-	ld de,OFFSET+0x04FA		;119b
-	add hl,de			;119e
+	ld de,OFFSET+0x04FA	;119b
+	add hl,de		;119e
 	jr c,l11a9h		;119f
-	add hl,hl			;11a1
+	add hl,hl		;11a1
 	ld de,011bah		;11a2
-	add hl,de			;11a5
+	add hl,de		;11a5
 	jp JP_ADDR_HL		;11a6
-l11a9h:
-	pop hl			;11a9
+
+l11a9h:	pop hl			;11a9
 	pop hl			;11aa
-	pop ix		;11ab
+	pop ix			;11ab
 	ret			;11ad
+
 	jp nz,0ce11h		;11ae
 	ld de,l12a8h		;11b1
 	push de			;11b4
@@ -4944,21 +5075,23 @@ l11deh:
 l11f2h:
 	pop ix		;11f2
 	ret			;11f4
-	ld (bc),a			;11f5
-	ld d,h			;11f6
-	ld d,h			;11f7
-	ex af,af'			;11f8
-	nop			;11f9
+
+	;; Forth word TT
+	db 0x02, _T, _T
+	dw 0x0008
+	
 	jp sub_0c13h		;11fa
-	ld (bc),a			;11fd
-	ld d,h			;11fe
-	ld d,e			;11ff
-	inc c			;1200
-	nop			;1201
-	ld hl,00032h		;1202
+
+	;; Forth word TS
+	db 0x02, _T, _S
+	dw 0x000C
+	
+	ld hl,0x00032		;1202
 	rst 8			;1205
 	jp sub_0b00h		;1206
-	ld (bc),a			;1209
+
+
+	ld (bc),a		;1209
 	ld d,h			;120a
 	ld c,l			;120b
 	inc c			;120c
@@ -5068,7 +5201,7 @@ l12a8h:
 
 l12ach:	ld de,TIME		;12ac
 	or a			;12af
-	call sub_12d7h		;12b0
+	call TIC		;12b0
 	jp nc,l11c2h		;12b3
 	call sub_12e7h		;12b6
 	ld e,068h		;12b9
@@ -5097,22 +5230,26 @@ l12d4h:	pop de			;12d4
 	pop hl			;12d5
 	ret			;12d6
 
-	;; Handles system clock?
-sub_12d7h:
-	push hl			;12d7
+	;; Increment time counter
+TIC:	push hl			;12d7 - Save registers
 	push de			;12d8
 	push bc			;12d9
-	ld b,004h		;12da
-l12dch:	ld a,(de)			;12dc
-	adc a,(hl)			;12dd
-	ld (hl),a			;12de
+
+	ld b,004h		;12da - Time held in four bytes
+TIC_LOOP:
+	ld a,(de)		;12dc
+	adc a,(hl)		;12dd
+	ld (hl),a		;12de
 	inc hl			;12df
 	inc de			;12e0
-	djnz l12dch		;12e1
+	djnz TIC_LOOP		;12e1
+
 	pop bc			;12e3
 	pop de			;12e4
 	pop hl			;12e5
+
 	ret			;12e6
+	
 sub_12e7h:
 	push hl			;12e7
 	push de			;12e8
@@ -5145,7 +5282,7 @@ sub_1305h:
 	push hl			;1305
 	push de			;1306
 	call sub_12f8h		;1307
-	call sub_12d7h		;130a
+	call TIC		;130a
 	rst 10h			;130d
 	rst 10h			;130e
 	pop de			;130f
@@ -5256,10 +5393,9 @@ l137ah:
 	ld c,l			;1393
 	rst 10h			;1394
 	ex de,hl			;1395
-l1396h:
-	rst 10h			;1396
-l1397h:
-	ld (hl),c			;1397
+l1396h:	rst 10h			;1396
+
+l1397h:	ld (hl),c			;1397
 	inc hl			;1398
 	dec de			;1399
 	ld a,e			;139a
@@ -5293,7 +5429,7 @@ l13b6h: rst 10h			;13b6
 	pop bc			;13b9
 	jp INSERT_CHAR		;13ba
 
-	call sub_13d2h		;13bd
+	call SERVICE_CLOCK	;13bd
 	call CHECK_KIB		;13c0
 	call z,sub_048dh	;13c3
 	call sub_18fah		;13c6
@@ -5305,20 +5441,23 @@ l13b6h: rst 10h			;13b6
 
 	ret			;13d1
 
-sub_13d2h:
+SERVICE_CLOCK:
 	push hl			;13d2
 	push de			;13d3
+
 	ld hl,UNKNOWN4		;13d4
 	ld de,UNKNOWN5		;13d7
-	call sub_12d7h		;13da
+	call TIC		;13da
 	ld l,05ch		;13dd
 	ld e,064h		;13df
-	call sub_12d7h		;13e1
+	call TIC		;13e1
 	ld e,068h		;13e4
 	call sub_12c3h		;13e6
 	call nc,sub_12e7h		;13e9
+
 	pop de			;13ec
 	pop hl			;13ed
+
 	ret			;13ee
 
 	;; Forth word SCREEN
@@ -5982,7 +6121,7 @@ l16d5h:	jr z,GT_CONT_2		;16d5 - Jump if TOS <= 20S
 	db 0x05, _V, _L, _I, _S, _T
 	dw 0x001F
 	
-VLIST:	ld hl,(START_OF_DICT)	;173a
+VLIST:	ld hl,(START_OF_WORD)	;173a
 	ld de,0x0008		;173d - Routine to push HL onto
 				;       Parameter Stack
 
@@ -6287,14 +6426,15 @@ l18c7h:
 	ld hl,BASE		;18c7
 	ld (hl),00ah		;18ca
 	ret			;18cc
-	inc b			;18cd
-	ld b,d			;18ce
-	ld b,c			;18cf
-	ld b,e			;18d0
-	ld c,e			;18d1
-	ld c,000h		;18d2
+
+	;; Forth word BACK
+	;;
+	db 0x04, _B, _A, _C, _K
+	dw 0x000E
+
 	call TICK_WORD		;18d4
 	ld (P_MTASK),hl		;18d7
+
 	ret			;18da
 
 	db 0x03, 0x4D, 0x45, 0x4D	; MEM
@@ -6372,11 +6512,12 @@ sub_1927h:
 	ld hl,NUL		;1956
 	ld (P_MTASK),hl		;1959
 l195ch:
-	ld hl,(MTASK_1)		;195c
+	ld hl,(MTASK_LIST_HEAD)	;195c
 l195fh:
 	push hl			;195f
 	pop bc			;1960
-	ld (UNKNOWN3),hl		;1961
+	ld (PCUR_TASK_STRUCT),hl
+				;1961
 	ld a,(hl)		;1964
 	inc hl			;1965
 	ld h,(hl)		;1966
@@ -6452,7 +6593,7 @@ H:	db 0x01, _H
 	db 0x01, _T
 	dw 0x0009
 	
-T:	ld hl,START_OF_DICT	;19ce - Retrieve address
+T:	ld hl,START_OF_WORD	;19ce - Retrieve address
 	rst 8			;19d1 - Push onto Parameter Stack
 
 	ret			;19d2
@@ -6670,7 +6811,7 @@ l1adeh:
 	ld d,d			;1aef
 	dec bc			;1af0
 	nop			;1af1
-	ld hl,UNKNOWN8		;1af2
+	ld hl,PER		;1af2
 	rst 8			;1af5
 	ret			;1af6
 	inc b			;1af7
@@ -6766,7 +6907,7 @@ l1b40h:
 sub_1b70h:
 	ld hl,(P_HERE)		;1b70
 	ld (02006h),hl		;1b73
-	ld hl,(START_OF_DICT)	;1b76
+	ld hl,(START_OF_WORD)	;1b76
 	ld (02004h),hl		;1b79
 	ld hl,(UNKNOWN1)		;1b7c
 	ld (02008h),hl		;1b7f
@@ -7006,6 +7147,17 @@ l1ca8h:	call sub_12c0h		;1ca8
 	ccf			;1caf
 	jp GT_CONT_2		;1cb0
 
+	
+	if MINSTREL3=1
+RESTART_NEW:
+	im 1
+	ld iy,  $7A80
+
+	jp RESTART
+	
+	ds 0x1CC0-$
+	
+	else
 	nop			;1cb3
 	nop			;1cb4
 	nop			;1cb5
@@ -7019,7 +7171,7 @@ l1ca8h:	call sub_12c0h		;1ca8
 	nop			;1cbd
 	nop			;1cbe
 	nop			;1cbf
-
+	endif
 	;; Jump table of 32 service routines, corresponding to special
 	;; key presses
 SPECIAL_CHAR_TABLE:		; 1CC0h
@@ -7158,7 +7310,7 @@ l1db2h:
 	ld b,b			;1dcf
 
 	dw OFFSET-0x0080	; 0xFA80
-	dw OFFSET+0x0198
+	dw OFFSET+0x0198 	; Multitasking 
 	nop			;1dd4
 	nop			;1dd5
 	ld (hl),0fch		;1dd6
