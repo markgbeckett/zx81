@@ -71,19 +71,34 @@
 	;; FCC0--FCFF -- Character stack (wraps around)
 	;; FD00--FFFF - video RAM
 
+	;; Choose your configuration Minstrel 3 compatibility and NTSC
+	;; (Tree Forth original) vs PAL (David Husband's port)
 MINSTREL3:	equ 0x01
-
+NTSC:		equ 0x00
+	
 	include "hforth_chars.asm"
 
 	;; ROM configuration options
 	if MINSTREL3=1
 OFFSET:		equ 0x7B00 	; Offset to system memory
+
+	if NTSC=1
+TOP_BORDER_LINES:	equ 31	; H_FORTH uses 4Ah (30d) / better 56
+BOT_BORDER_LINES:	equ 34	; H_FORTH uses 1Eh (74d) / better 55
+	else
 TOP_BORDER_LINES:	equ 55	; H_FORTH uses 4Ah (30d) / better 56
 BOT_BORDER_LINES:	equ 58	; H_FORTH uses 1Eh (74d) / better 55
+	endif
+
 	else
 OFFSET:		equ 0xFB00 	; Offset to system memory
+	if NTSC=1
+TOP_BORDER_LINES:	equ 31	; H_FORTH uses 4Ah (30d) / better 56
+BOT_BORDER_LINES:	equ 34	; H_FORTH uses 1Eh (74d) / better 55
+	else
 TOP_BORDER_LINES:	equ 31	; H_FORTH uses 4Ah (30d) / better 56
 BOT_BORDER_LINES:	equ 73	; H_FORTH uses 1Eh (74d) / better 55
+	endif
 	endif
 	
 
@@ -347,7 +362,13 @@ l0051h:	ld h,(iy+000h)		;0051
 	ret			;0056
 
 	;; Routine to transition between display modes
-SKIP_DISPLAY:	ld a,0xFF		;0057 - E4h in 60 Hz version
+SKIP_DISPLAY:
+	if NTSC=1
+	ld a,0xE4
+	else
+	ld a,0xFF		;0057 - E4h in 60 Hz version
+	endif
+	
 	ex af,af'		;0059
 	ld hl,RUN_VSYNC		;005a - Set routine for video handling
 	ld (NEXT_DISP_ROUT),hl	;005d
@@ -3054,7 +3075,12 @@ sub_08c2h:
 	
 	ld hl,FLAGS3		;08c9
 	ld a,(hl)		;08cc
+
+	if NTSC=1
+	and %11010000		;08cd
+	else
 	and %11000000		;08cd
+	endif
 	ld (hl),a		;08cf
 
 	ld hl,FLAGS2		;08d0
@@ -3660,7 +3686,7 @@ l0addh:	rst 8			;0add
 	db 0x02, 0x4D, 0x2A
 	db 0x64, 0x00
 
-sub_0b00h:
+MSTAR:
 	push hl			;0b00
 	push de			;0b01
 	xor a			;0b02
@@ -3753,7 +3779,7 @@ l0b55h:
 
 	push hl			;0b63
 
-	call sub_0b00h		;0b64
+	call MSTAR		;0b64
 
 	rst 10h			;0b67
 
@@ -3841,7 +3867,7 @@ l0bbdh:
 	ld c,a			;0bc9
 	ld b,h			;0bca
 	ld de,0d700h		;0bcb
-	call sub_0b00h		;0bce
+	call MSTAR		;0bce
 	rst 8			;0bd1
 	call MSLASH		;0bd2
 	ret			;0bd5
@@ -5084,12 +5110,20 @@ l11f2h:
 	jp sub_0c13h		;11fa
 
 	;; Forth word TS
+	;;
+	;; Push number of frames in a second onto Parameter Stack
 	db 0x02, _T, _S
 	dw 0x000C
-	
-	ld hl,0x00032		;1202
+
+	if NTSC=1
+	ld hl,0x003C		;1202 - 60 frames in a second
+	else
+	ld hl,0x0032		;1202 - 50 frames in a second
+	endif
+
 	rst 8			;1205
-	jp sub_0b00h		;1206
+	
+	jp MSTAR		;1206
 
 
 	ld (bc),a		;1209
@@ -5097,17 +5131,30 @@ l11f2h:
 	ld c,l			;120b
 	inc c			;120c
 	nop			;120d
-	ld hl,00bb8h		;120e
+
+	if NTSC
+	ld hl,0x0E10		;120e
+	else
+	ld hl,0x0BB8		;120e
+	endif
+
 	rst 8			;1211
-	jp sub_0b00h		;1212
+	jp MSTAR		;1212
 	ld (bc),a			;1215
 	ld d,h			;1216
 	ld c,b			;1217
 	inc d			;1218
 	nop			;1219
 	call sub_0c13h		;121a
-	ld de,l0002h		;121d
-	ld hl,0bf20h		;1220
+
+	if NTSC=1
+	ld de,0x0003		;121d
+	ld hl,0x4BC0		;1220
+	else
+	ld de,0x0002		;121d
+	ld hl,0xBF20		;1220
+	endif
+	
 l1223h:
 	call STACK_DE_HL		;1223
 	jp DSTAR		;1226
@@ -5117,26 +5164,47 @@ l1223h:
 	djnz l122eh		;122c
 l122eh:
 	call sub_0c13h		;122e
+	if NTSC=1
+	ld de,0x004F		;1231
+	ld hl,01A00h		;1234
+	else
 	ld de,0x0041		;1231
 	ld hl,0eb00h		;1234
+	endif
 	jr l1223h		;1237
 	ld (bc),a			;1239
 	ld d,h			;123a
 	ld d,a			;123b
 	djnz l123eh		;123c
-l123eh:
-	call sub_0c13h		;123e
-	ld de,l01cdh		;1241
-	ld hl,06d00h		;1244
+
+l123eh:	call sub_0c13h		;123e
+	if NTSC=1
+	ld de,0x0229		;1241
+	else
+	ld de,0x01CD		;1241
+	endif
+	
+	if NTSC=1
+	ld hl,0xB600		;1244
+	else
+	ld hl,0x6D00		;1244
+	endif
+	
 	jr l1223h		;1247
-	ld (bc),a			;1249
+	ld (bc),a		;1249
 	ld d,h			;124a
 	ld e,c			;124b
 	djnz l124eh		;124c
 l124eh:
 	call sub_0c13h		;124e
-	ld de,05dfch		;1251
-	ld hl,l0f00h		;1254
+	if NTSC=1
+	ld de,0x70C8		;1251
+	ld hl,0x1200		;1254
+	else
+	ld de,0x5DFC		;1251
+	ld hl,0x0F00		;1254
+	endif
+	
 	jr l1223h		;1257
 	add a,h			;1259
 	ld b,e			;125a
@@ -6071,13 +6139,20 @@ l16d5h:	jr z,GT_CONT_2		;16d5 - Jump if TOS <= 20S
 	inc d			;1704
 	nop			;1705
 	rst 10h			;1706
-	bit 7,h		;1707
+	bit 7,h			;1707
 	push af			;1709
 	rst 10h			;170a
 	call sub_0b19h		;170b
 	pop af			;170e
+
+	if NTSC=1
+	nop
+	call nz,0x0B1E
+	else
 	ret z			;170f - BUG fix - `nop`
 	call sub_0b1eh		;1710 - BUG fix - `call nz, ...`
+	endif
+
 	rst 8			;1713
 	ret			;1714
 
@@ -7214,10 +7289,19 @@ SPECIAL_CHAR_TABLE:		; 1CC0h
 
 	;; ZX81-FORTH BY DAVID HUSBAND  COPYRIGHT (C) 1983
 COPYRIGHT_MSG:
+	if NTSC=1
+	db 0x33, _CLS, _T, _R, _E, _E, _MINUS, _F
+	else
 	db 0x33, _CLS, _Z, _X, _8, _1, _MINUS, _F
+	endif
 	db _O, _R, _T, _H, _SPACE, _B, _Y, _SPACE
+	if NTSC=1
+	db _T, _R, _E, _E, _SPACE, _S, _Y, _S
+	db _T, _E, _M, _S, _SPACE, _ENTER, _DOWN, _C
+	else
 	db _D, _A, _V, _I, _D, _SPACE, _H, _U
 	db _S, _B, _A, _N, _D, _ENTER, _DOWN, _C
+	endif
 	db _O, _P, _Y, _R, _I, _G, _H, _T
 	db _SPACE, _LEFTPARENTH, _C, _RIGHTPARENTH, _SPACE, _1, _9, _8
 	db _3, _ENTER, _DOWN, _DOWN
