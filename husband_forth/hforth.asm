@@ -1585,7 +1585,7 @@ sub_03bdh:
 	call GET_SCR_ADDR	;03cd
 	pop af			;03d0
 	ld (ix+003h),a		;03d1
-	ld de,OFFSET+0x04E0	;03d4
+	ld de,0xFFE0		;03d4 - not an address, but a width (-32)
 	jp l02b2h		;03d7
 	
 sub_03dah:
@@ -5022,7 +5022,8 @@ l1190h:	ex (sp),ix		;1190
 	push de			;1198
 	push hl			;1199
 	rst 10h			;119a
-	ld de,OFFSET+0x04FA	;119b
+	ld de,0xFFFA		;119b - Not an address, but a
+				;       displacement of -6
 	add hl,de		;119e
 	jr c,l11a9h		;119f
 	add hl,hl		;11a1
@@ -5567,7 +5568,7 @@ l1443h:	pop ix			;1443
 	ld a,04eh		;1474
 	jr l1478h		;1476
 l1478h:
-	ld de,OFFSET+0x04FF	;1478
+	ld de,0xFFFF		;1478 - Offset of -1
 	xor a			;147b
 	rst 10h			;147c
 	add hl,de			;147d
@@ -5720,7 +5721,7 @@ sub_153fh:
 	ld de,l0200h		;153f
 	push bc			;1542
 	push hl			;1543
-	ld bc,OFFSET+0x04FF	;1544
+	ld bc,0xFFFF		;1544
 l1547h:
 	call sub_1519h		;1547
 	inc hl			;154a
