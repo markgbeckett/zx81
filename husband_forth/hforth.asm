@@ -73,7 +73,7 @@
 
 	;; Choose your configuration Minstrel 3 compatibility and NTSC
 	;; (Tree Forth original) vs PAL (David Husband's port)
-MINSTREL3:	equ 0x01
+MINSTREL3:	equ 0x00
 NTSC:		equ 0x00
 	
 	include "hforth_chars.asm"
@@ -83,9 +83,11 @@ NTSC:		equ 0x00
 OFFSET:		equ 0x7B00 	; Offset to system memory
 
 	if NTSC=1
+FRAMES:			equ 60 	; Display frames per second
 TOP_BORDER_LINES:	equ 31	; H_FORTH uses 4Ah (30d) / better 56
 BOT_BORDER_LINES:	equ 34	; H_FORTH uses 1Eh (74d) / better 55
 	else
+FRAMES:			equ 50 	; Display frames per second
 TOP_BORDER_LINES:	equ 55	; H_FORTH uses 4Ah (30d) / better 56
 BOT_BORDER_LINES:	equ 58	; H_FORTH uses 1Eh (74d) / better 55
 	endif
@@ -93,9 +95,11 @@ BOT_BORDER_LINES:	equ 58	; H_FORTH uses 1Eh (74d) / better 55
 	else
 OFFSET:		equ 0xFB00 	; Offset to system memory
 	if NTSC=1
+FRAMES:			equ 60 	; Display frames per second
 TOP_BORDER_LINES:	equ 31	; H_FORTH uses 4Ah (30d) / better 56
 BOT_BORDER_LINES:	equ 34	; H_FORTH uses 1Eh (74d) / better 55
 	else
+FRAMES:			equ 50 	; Display frames per second
 TOP_BORDER_LINES:	equ 31	; H_FORTH uses 4Ah (30d) / better 56
 BOT_BORDER_LINES:	equ 73	; H_FORTH uses 1Eh (74d) / better 55
 	endif
@@ -121,7 +125,7 @@ RAM_START:	equ OFFSET+0x016C	; Start of RAM
 P_DBUFFER:	equ OFFSET+0x016E	; Address of display buffer. Set
 					; to BD00/ FD00 during
 					; initialisation.
-MTASK_LIST_HEAD:	equ OFFSET+0x0170	; Multi-tasking-related
+PMTASK_LIST_HEAD:	equ OFFSET+0x0170	; Pointer to head of task list
 UNKNOWN7:	equ OFFSET+0x0172	; ???
 PRINT_DRVR:	equ OFFSET+0x0174	; Address of printer driver
 P_DISP_2:	equ OFFSET+0x0176	; Also points to display???
@@ -154,7 +158,7 @@ STACKP_BASE:	equ OFFSET+0x0190	; Base location for Paramater
 PCUR_TASK_STRUCT:	equ OFFSET+0x0192	; ???
 MSTACK0:	equ OFFSET+0x0194	; Pointer to machine-stack 0
 MSTACK1:	equ OFFSET+0x0196	; Pointer to machine-stack 1
-UNKNOWN1:	equ OFFSET+0x0198	; ???
+MTASK_TAIL:	equ OFFSET+0x0198	; ???
 FLAGS3:		equ OFFSET+0x01A5	; 0 - Set if PRINT OK required;
 					; 6 - Reset to stop multitasking
 					; on restart/ set to continue
@@ -726,7 +730,7 @@ l012bh:	inc hl			;012b - HL -> LASTKEY
 	;; Handle multitasking
 
 	;;  Service the timing routines for active tasks
-l012eh:	ld hl,(MTASK_LIST_HEAD)	;012e - Retrieve address of link field
+l012eh:	ld hl,(PMTASK_LIST_HEAD)	;012e - Retrieve address of link field
 	push hl			;0131   for task at head of task list list
 				;       and save it
 	jr l0139h		;0132
@@ -836,7 +840,7 @@ l0179h:	pop hl			;0179 - Retrieve address of start of
 	;; field to stack)
 	ex (sp),hl		;017f - Retrieve MTASK base
 
-	;;  Advance to byte 10 of task structure
+	;;  Advance to byte 10 of current task structure
 	ld a,l			;0180 
 	add a,00ah		;0181
 	ld l,a			;0183
@@ -848,17 +852,22 @@ l0179h:	pop hl			;0179 - Retrieve address of start of
 				;       zero, in which case we've reached
 	jr z,l01dbh		;0189 - the end of the list, so can move
 				;       on to check for keypress, if so
-	
-l018bh:	ld a,(hl)		;018b - Check if bit 7 is set and move
-	bit 7,a			;018c   on to check for keypress, if 
-	jr nz,l01dbh		;018e   not
 
-	bit 6,a			;0190 - Check bit 6 and move on to next
-	jr nz,l0179h		;0192   task if set
+	;; Check if task is scheduled/ locked/ etc. 
+l018bh:	ld a,(hl)		;018b - Retrieve task status flag
+
+	bit 7,a			;018c Check if Task Locking is set and
+	jr nz,l01dbh		;018e move on to check for keypress, if
+				;     so
+
+	bit 6,a			;0190 - Check bit 6 and move to next task
+	jr nz,l0179h		;0192   if set
 	
-	or a			;0194   Also, move on if A=0
+	or a			;0194   Also, move to next task if A=0
 	jr z,l0179h		;0195
 
+	;; GOT THIS FAR - assume task has to be scheduled to progress
+	;; beyond here
 	dec (hl)		;0197
 	set 7,(hl)		;0198
 
@@ -2620,7 +2629,7 @@ STR_ADD_CHR:
 
 sub_0744h:
 	ld hl,(02008h)		;0744
-	ld (UNKNOWN1),hl		;0747
+	ld (MTASK_TAIL),hl		;0747
 	ld hl,(02006h)		;074a
 	ld (P_HERE),hl		;074d
 
@@ -3571,9 +3580,9 @@ l0a4ch:	rst 20h			;0a4c - Pop from character stack into A
 
 	djnz l0a4ch		;0a64
 
-l0a66h:	call sub_0b9bh		;0a66
+l0a66h:	call UNSTACK_DEHL		;0a66
 	bit 0,c		;0a69
-	call nz,sub_0b2dh		;0a6b
+	call nz,NEG_DEHL		;0a6b
 	call UNSTACK_STRING		;0a6e
 	bit 7,c		;0a71
 	ex de,hl			;0a73
@@ -3613,7 +3622,7 @@ sub_0a96h:
 	push bc			;0a98
 	xor a			;0a99
 	ld c,001h		;0a9a
-	call sub_0b9bh		;0a9c
+	call UNSTACK_DEHL		;0a9c
 	call sub_0b28h		;0a9f
 	push af			;0aa2
 
@@ -3628,7 +3637,7 @@ l0aa3h:	call STACK_DE_HL	;0aa3
 	call sub_091eh		;0ab3
 	rst 18h			;0ab6
 	inc c			;0ab7
-	call sub_0b9bh		;0ab8
+	call UNSTACK_DEHL		;0ab8
 	call sub_0d93h		;0abb
 	jr nz,l0aa3h		;0abe
 	pop af			;0ac0
@@ -3697,7 +3706,7 @@ MSTAR:
 	call sub_0b19h		;0b09
 	call sub_0b3eh		;0b0c
 	or a			;0b0f
-	call po,sub_0b2dh		;0b10
+	call po,NEG_DEHL		;0b10
 	call STACK_DE_HL		;0b13
 	pop de			;0b16
 	pop hl			;0b17
@@ -3709,42 +3718,52 @@ sub_0b19h:
 	ret z			;0b1b
 	scf			;0b1c
 	rla			;0b1d
-sub_0b1eh:
+
+NEG_HL:
 	push de			;0b1e
-	ld de,l0000h		;0b1f
+	
+	ld de,0x0000		;0b1f
 	or a			;0b22
 	ex de,hl			;0b23
 	sbc hl,de		;0b24
+
 	pop de			;0b26
+
 	ret			;0b27
+
 sub_0b28h:
 	bit 7,d		;0b28
 	ret z			;0b2a
 	scf			;0b2b
 	rla			;0b2c
-sub_0b2dh:
-	call sub_0b1eh		;0b2d
-	ex de,hl			;0b30
+
+NEG_DEHL:
+	call NEG_HL		;0b2d
+	ex de,hl		;0b30
 	jr nc,l0b34h		;0b31
 	inc hl			;0b33
-l0b34h:
-	call sub_0b1eh		;0b34
-	ex de,hl			;0b37
+l0b34h:	call NEG_HL		;0b34
+	ex de,hl		;0b37
+
 	ret			;0b38
 
-	;; Stack DE and HL  ( -- HL DE )
+	;; Stack DE and HL ( -- HL DE ). Typically, this is used to
+	;; stack a double-precision (32-bit) number onto the Parameter
+	;; Stack.
+	;; 
 	;; On entry:
+	;; - DEHL - 32-bit number to be stacked.
 	;;
 	;; On exit:
 	;; 
 STACK_DE_HL:
 	;; Push DE onto parameter stack
 	ex de,hl		;0b39
-	rst 8			;0b3a - Push HL onto Parameter stack
+	rst 8			;0b3a - Push onto Parameter Stack
 
 	;; Push HL onto parameter stack
 	ex de,hl		;0b3b
-	rst 8			;0b3c - Push DE onto stack
+	rst 8			;0b3c - Push onto Parameter Stack
 	
 	ret			;0b3d
 
@@ -3808,17 +3827,17 @@ MSLASH:
 	call sub_0b19h		;0b78
 	push hl			;0b7b
 	pop bc			;0b7c
-	call sub_0b9bh		;0b7d
+	call UNSTACK_DEHL		;0b7d
 	call sub_0b28h		;0b80
 	call sub_0ba0h		;0b83
 	or a			;0b86
 	jr z,l0b94h		;0b87
 	inc a			;0b89
 	rra			;0b8a
-	call nc,sub_0b1eh		;0b8b
+	call nc,NEG_HL		;0b8b
 	ex de,hl			;0b8e
 	rra			;0b8f
-	call c,sub_0b1eh		;0b90
+	call c,NEG_HL		;0b90
 	ex de,hl			;0b93
 l0b94h:	call STACK_DE_HL		;0b94
 
@@ -3828,12 +3847,13 @@ l0b94h:	call STACK_DE_HL		;0b94
 
 	ret			;0b9a
 
-sub_0b9bh:
-	rst 10h			;0b9b
+UNSTACK_DEHL:
+	rst 10h			;0b9b - Pop 
 	ex de,hl			;0b9c
 	rst 10h			;0b9d
 	ex de,hl			;0b9e
 	ret			;0b9f
+
 sub_0ba0h:
 	push ix		;0ba0
 	push bc			;0ba2
@@ -3877,7 +3897,7 @@ l0bbdh:
 	call 00bcdh		;0bdb
 	rst 10h			;0bde
 	ret			;0bdf
-	ld bc,sub_0b2dh+2		;0be0
+	ld bc,NEG_DEHL+2		;0be0
 	nop			;0be3
 	push hl			;0be4
 	call sub_0bf2h		;0be5
@@ -4064,7 +4084,7 @@ DSTAR:
 	push hl			;0cd6
 	push de			;0cd7
 	call MDSTAR		;0cd8
-	call sub_0b9bh		;0cdb
+	call UNSTACK_DEHL		;0cdb
 	call TWODROP		;0cde
 	call STACK_DE_HL	;0ce1
 	pop de			;0ce4
@@ -4092,7 +4112,7 @@ TWODROP:
 sub_0cfbh:
 	push hl			;0cfb
 	push de			;0cfc
-	call sub_0b9bh		;0cfd
+	call UNSTACK_DEHL		;0cfd
 	call STACK_DE_HL		;0d00
 	push iy		;0d03
 	call STACK_DE_HL		;0d05
@@ -4139,7 +4159,7 @@ sub_0cfbh:
 l0d39h:
 	push hl			;0d39
 	rst 10h			;0d3a
-	call sub_0b1eh		;0d3b
+	call NEG_HL		;0d3b
 	rst 8			;0d3e
 	pop hl			;0d3f
 	ret			;0d40
@@ -4728,7 +4748,8 @@ l0fdeh:
 	db 0x04, _T, _A, _S, _K
 	dw 0x0048
 
-	call INIT_NEW_WORD	;0fe8
+	call INIT_NEW_WORD	;0fe8 - Request name for task word and
+				;       instantiate in dictionary
 
 	;; Set word to be a task
 	ld hl,(START_OF_WORD)	;0feb - Indicates a Task word
@@ -4741,7 +4762,7 @@ l0fdeh:
 	;; Populate task word header
 	push hl			;0ff7
 	call DICT_ADD_HL	;0ff8
-	ld hl,l1190h		;0ffb
+	ld hl,SCHED_TASK		;0ffb
 	call DICT_ADD_CALL_HL	;0ffe
 
 	;; Advance dictionary pointer by 14 bytes
@@ -4749,6 +4770,7 @@ l0fdeh:
 	rst 8			;1004
 	call DICT_ALLOT		;1005
 
+	;; Zero next 11 bytes
 	ld bc,0x0B00		;1008
 	pop hl			;100b - Retrieve start of
 	push hl			;100c   parameter field
@@ -4759,10 +4781,10 @@ l100dh:	ld (hl),c		;100d
 	djnz l100dh		;100f
 
 	ex de,hl		;1011 - Save address of next entry in
-				;       parameter field
+				;       parameter field to DE
 
 	call TICK_WORD		;1012 - Retrieve action word for task
-				;       (parameter field address)
+				;       (parameter field address) into HL
 
 	;; Store address into task word
 	ex de,hl		;1015
@@ -4771,8 +4793,10 @@ l100dh:	ld (hl),c		;100d
 	ld (hl),d		;1018
 
 	;; Retrieve address of parameter field
-	pop de			;1019
+	pop de			;1019 - Retrieve start of task Parameter Field
 
+	;; Store address of task's Parameter Field in (PCUR_TASK_STRUCT)
+	;; and update PCUR_TASK_STRUCT to point to
 	ld hl,(PCUR_TASK_STRUCT)	;101a
 
 	;; Temporarily disable NMI generator
@@ -4786,7 +4810,8 @@ l100dh:	ld (hl),c		;100d
 	;; Reenable NMI generator
 	out (0feh),a		;1022
 
-	;; Update location of task parameter field
+	;; Update location of current task parameter field to newly
+	;; created task
 	ex de,hl		;1024
 	ld (PCUR_TASK_STRUCT),hl	;1025
 
@@ -4865,16 +4890,18 @@ sub_108eh:
 	rst 10h			;10a2
 	push hl			;10a3
 	pop ix		;10a4
-	call sub_0b9bh		;10a6
-	call sub_10afh		;10a9
+	call UNSTACK_DEHL		;10a6
+	call STORE_DEHL		;10a9
 	pop ix		;10ac
 	ret			;10ae
-sub_10afh:
+
+STORE_DEHL:
 	ld (ix+000h),l		;10af
 	ld (ix+001h),h		;10b2
 	ld (ix+002h),e		;10b5
 	ld (ix+003h),d		;10b8
 	ret			;10bb
+
 	add a,d			;10bc
 	ld c,c			;10bd
 	ld b,(hl)			;10be
@@ -4947,22 +4974,19 @@ l10d7h:
 	xor (hl)			;111e
 	ld (hl),a			;111f
 	ret			;1120
-	inc b			;1121
-	ld c,h			;1122
-	ld c,a			;1123
-	ld b,e			;1124
-	ld c,e			;1125
-	db 0x11,0x00
 
-	;; Some kind of multi-tasking service routine. When multitasking
-	;; is off, $FC98 points to ROM, so this routine does nothing.
-	ld hl,(OFFSET+0x0198)	;1128 - Initially contains 0x0000
-	ld de,$000A		; 
+	;; Forth word LOCK
+	db 0x04, _L, _O, _C, _K
+	dw 0x0011
+
+	ld hl,(MTASK_TAIL)	;1128 - Set HL to point to tail of task list
+	ld de,$000A		;       Skip forward to byte 10
 	add hl,de		;112e
-	set 7,(hl)		;112f
+	set 7,(hl)		;112f - Set lock flag
 	
-	ret			;1131
+	ret			;1131 - Done
 
+	
 	ld b,055h		;1132
 	ld c,(hl)			;1134
 	ld c,h			;1135
@@ -4971,44 +4995,55 @@ l10d7h:
 	ld c,e			;1138
 	inc de			;1139
 	nop			;113a
-	ld hl,(UNKNOWN1)		;113b
+	ld hl,(MTASK_TAIL)		;113b
 l113eh:
 	ld de,l000ah		;113e
 	add hl,de			;1141
 	res 7,(hl)		;1142
 	ret			;1144
-	inc b			;1145
-	ld d,e			;1146
-	ld d,h			;1147
-	ld c,a			;1148
-	ld d,b			;1149
-	ld c,000h		;114a
-	ld hl,l0002h+1		;114c
+
+	;; Forth word STOP
+	db 0x04, _S, _T, _O, _P
+	dw 0x000E
+
+	;; Set scheduler mode to '3'
+	ld hl,0x0003		;114c
+
+	;; Populate parameter stack with scheduler mode and (dummy)
+	;; 32-bit time interval
 	rst 8			;114f
 	rst 8			;1150
 	rst 8			;1151
+
 	ret			;1152
 
 	;; Forth word START
 	;;
 	db 0x05, _S, _T, _A, _R, _T
 	dw 0x000F
-	
+
+	;; Set scheduler mode to be '4'
 	ld hl,0x0004		;115b
-	rst 8			;115e
+
+	;; Populate parameter stack with scheduling mode and (dummy)
+	;; 32-bit timer
+	rst 8			;115e 
 	rst 8			;115f
 	rst 8			;1160
+	
 	ret			;1161
 
-	ld (bc),a			;1162
-	ld c,c			;1163
-	ld c,(hl)			;1164
-	ld a,(bc)			;1165
-	nop			;1166
-	ld hl,l0000h		;1167
+	;; Forth word IN
+	db 0x02, _I, _N
+	dw 0x000A
+
+	;; Push flag value '0' onto Parameter Stack
+	ld hl,0x0000		;1167
 	rst 8			;116a
+	
 	ret			;116b
 
+	
 	;; Forth word EVERY
 	db 0x05, _E, _V, _E, _R, _Y
 	dw 0x000D
@@ -5033,7 +5068,8 @@ l113eh:
 	db 0x03, _R, _U, _N
 	dw 0x0072
 
-	;; Put 5 on the stack three times
+	;; Put 5 on the stack three times (once for scheduler flag and
+	;; twice for timing (which is ignored))
 	ld hl,0x0005		;1189
 	rst 8			;118c
 	rst 8			;118d
@@ -5041,66 +5077,110 @@ l113eh:
 
 	ret			;118f
 
-	;; Run task?
-l1190h:	ex (sp),ix		;1190
-	call sub_0b9bh		;1192
-	call sub_0b2dh		;1195
+	;; Run task ( FLAG TIME -- )
+	;;
+	;; Probably caled when task is executed, so address on stack
+	;; will be Taks's Paramater Field
+SCHED_TASK:
+	ex (sp),ix		;1190 - Retrieve return address (which
+				;       is the start of the task's
+				;       parameter field)
+	call UNSTACK_DEHL	;1192 - Retrieve (double) time interval (frames)
+	call NEG_DEHL		;1195 - Negate value (DEHL = 10000-DEHL)
+
+	;; Save number
 	push de			;1198
 	push hl			;1199
-	rst 10h			;119a
-	ld de,0xFFFA		;119b - Not an address, but a
-				;       displacement of -6
-	add hl,de		;119e
-	jr c,l11a9h		;119f
-	add hl,hl		;11a1
-	ld de,011bah		;11a2
-	add hl,de		;11a5
+
+	rst 10h			;119a - Retrieve FLAG into HL
+
+	ld de,0xFFFA		;119b - That is, -6
+	add hl,de		;119e - Flag-6
+	jr c,l11a9h		;119f   Abandon if Flag >=6
+	add hl,hl		;11a1   (FLAG-6)*2
+
+	;; Compute table offset for jump instruction
+	ld de,SCHED_ACTIONS	;11a2 - Note, this is end of tabel
+	add hl,de		;11a5   HL = 0x11BA+2*(FLAG-6)
 	jp JP_ADDR_HL		;11a6
 
-l11a9h:	pop hl			;11a9
-	pop hl			;11aa
-	pop ix			;11ab
+l11a9h:	pop hl			;11a9 - Balance stack (remove
+	pop hl			;11aa   time interval and
+	pop ix			;11ab   restore IX)
+
 	ret			;11ad
 
-	jp nz,0ce11h		;11ae
-	ld de,l12a8h		;11b1
-	push de			;11b4
-	ld de,l11deh		;11b5
-	rst 20h			;11b8
-	ld de,0fdd3h		;11b9
-	call sub_10afh		;11bc
-	out (0feh),a		;11bf
+	;; Table of possible scheduling modes
+	dw SCHEDULE_IN		; 0 = IN
+	dw SCHEDULE_EVERY	; 1 = EVERY
+	dw SCHEDULE_AT		; 2 = AT
+	dw SCHEDULE_STOP	; 3 = STOP
+	dw SCHEDULE_START	; 4 = START
+	dw SCHEDULE_RUN		; 5 = RUN
+SCHED_ACTIONS:
+	
+UPDATE_TIME_LIMIT:
+	out (0xFD),a		;11ba - Disable NMI
+	call STORE_DEHL		;11bc
+	out (0feh),a		;11bf - Enable NMI
 	ret			;11c1
-l11c2h:
-	inc ix		;11c2
-	inc ix		;11c4
-l11c6h:
-	pop hl			;11c6
+
+	;; Scheduler for IN command. Also used for finishing up the AT
+	;; scheduler
+SCHEDULE_IN:
+	inc ix		;11c2 - Advance to byte 2 of Task's parameter field
+	inc ix		;11c4   (that is, current counter)
+
+SE_CONT:
+	pop hl			;11c6 - Retrieve time interval (DEHL)
 	pop de			;11c7
-	call 011bah		;11c8
-	pop ix		;11cb
-	ret			;11cd
-	ld de,l0005h+1		;11ce
-	add ix,de		;11d1
-	jr l11c6h		;11d3
+	call UPDATE_TIME_LIMIT	;11c8 - and write to parameter field
+	pop ix			;11cb - Restore IX
+
+	ret			;11cd   so will return to PROCESS_WORD
+
+	;; On entry, IX = start of task parameter stack
+SCHEDULE_EVERY:
+	ld de,0x0006		;11ce
+	add ix,de		;11d1 - Advance to time-limit field
+	jr SE_CONT		;11d3
+
+	
+SCHEDULE_STOP:	
+	;; Discard time interval
 	pop hl			;11d5
 	pop hl			;11d6
-	set 6,(ix+00ah)		;11d7
-	pop ix		;11db
+
+	set 6,(ix+00ah)		;11d7 - Set task status to Stopped
+
+	pop ix			;11db - Restore IX
+	
 	ret			;11dd
-l11deh:
+
+	;; Implement START scheduler
+SCHEDULE_START:
+	;; Discard time interval
 	pop hl			;11de
 	pop hl			;11df
-	ld (ix+00ah),000h		;11e0
-	pop ix		;11e4
+
+	;; Clear task status 
+	ld (ix+00ah),000h	;11e0
+
+	pop ix			;11e4 - Restore IX
+	
 	ret			;11e6
-	pop hl			;11e7
+
+	;; Implement 'Run' scheduler
+SCHEDULE_RUN:	
+	pop hl			;11e7 - Discard time from stack
 	pop hl			;11e8
-	bit 6,(ix+00ah)		;11e9
+
+	bit 6,(ix+00ah)		;11e9 - Check if task is stopped
 	jr nz,l11f2h		;11ed
-	inc (ix+00ah)		;11ef
-l11f2h:
-	pop ix		;11f2
+	inc (ix+00ah)		;11ef - Increase priority???
+
+l11f2h:	pop ix			;11f2
+
 	ret			;11f4
 
 	;; Forth word TT
@@ -5109,42 +5189,52 @@ l11f2h:
 	
 	jp sub_0c13h		;11fa
 
-	;; Forth word TS
+	;; Forth word TS ( secs -- frames )
 	;;
-	;; Push number of frames in a second onto Parameter Stack
+	;; Compute number of frames in TOS seconds and push onto
+	;; Parameter Stack
 	db 0x02, _T, _S
 	dw 0x000C
 
+	;; Work out frames in one second
 	if NTSC=1
-	ld hl,0x003C		;1202 - 60 frames in a second
+	ld hl,FRAMES		;1202 - 60 frames in a second
 	else
-	ld hl,0x0032		;1202 - 50 frames in a second
+	ld hl,FRAMES		;1202 - 50 frames in a second
 	endif
 
-	rst 8			;1205
+	rst 8			;1205 - Push onto Parameter Stack
 	
-	jp MSTAR		;1206
+	jp MSTAR		;1206 - Jump to `M*` to work out product
+				;       as a double
 
+	;; Forth word TM ( mins -- frames )
+	;; 
+	;; Compute number of frames in TOS minutes and push onto
+	;; Parameter Stack
+	db 0x02, _T, _M
+	dw 0x000C
 
-	ld (bc),a		;1209
-	ld d,h			;120a
-	ld c,l			;120b
-	inc c			;120c
-	nop			;120d
-
+	;; Work out frames in one minutes
 	if NTSC
-	ld hl,0x0E10		;120e
+	ld hl,60*FRAMES		;120e
 	else
-	ld hl,0x0BB8		;120e
+	ld hl,60*FRAMES		;120e
 	endif
 
-	rst 8			;1211
-	jp MSTAR		;1212
-	ld (bc),a			;1215
-	ld d,h			;1216
-	ld c,b			;1217
-	inc d			;1218
-	nop			;1219
+	rst 8			;1211 - Push onto parameter stack
+	
+	jp MSTAR		;1212 - Jump to `M*` to work out product
+				;       as a double
+
+
+	;; Forth word TH ( hours -- frames )
+	;; 
+	;; Compute number of frames in TOS hours and push onto
+	;; Parameter Stack
+	db 0x02, _T, _H
+	dw 0x0014
+	
 	call sub_0c13h		;121a
 
 	if NTSC=1
@@ -5155,15 +5245,18 @@ l11f2h:
 	ld hl,0xBF20		;1220
 	endif
 	
-l1223h:
-	call STACK_DE_HL		;1223
+l1223h:	call STACK_DE_HL	;1223
 	jp DSTAR		;1226
-	ld (bc),a			;1229
-	ld d,h			;122a
-	ld b,h			;122b
-	djnz l122eh		;122c
-l122eh:
-	call sub_0c13h		;122e
+
+	;; Forth word TD (d days -- frames )
+	;; 
+	;; Compute number of frames in TOS days and push onto
+	;; Parameter Stack.
+	db 0x02, _T, _D
+	dw 0x0010
+	
+l122eh:	call sub_0c13h		;122e
+
 	if NTSC=1
 	ld de,0x004F		;1231
 	ld hl,01A00h		;1234
@@ -5171,32 +5264,39 @@ l122eh:
 	ld de,0x0041		;1231
 	ld hl,0eb00h		;1234
 	endif
-	jr l1223h		;1237
-	ld (bc),a			;1239
-	ld d,h			;123a
-	ld d,a			;123b
-	djnz l123eh		;123c
 
+	jr l1223h		;1237
+
+
+	;; Forth word TW ( weeks -- frames )
+	;; 
+	;; Compute number of frames in TOS weeks and push onto
+	;; Parameter Stack.
+	db 0x02, _T, _W
+	dw 0x0010
+	
 l123eh:	call sub_0c13h		;123e
-	if NTSC=1
-	ld de,0x0229		;1241
-	else
-	ld de,0x01CD		;1241
-	endif
 	
 	if NTSC=1
+	ld de,0x0229		;1241
 	ld hl,0xB600		;1244
 	else
+	ld de,0x01CD		;1241
 	ld hl,0x6D00		;1244
 	endif
 	
 	jr l1223h		;1247
-	ld (bc),a		;1249
-	ld d,h			;124a
-	ld e,c			;124b
-	djnz l124eh		;124c
-l124eh:
-	call sub_0c13h		;124e
+
+	;; Forth word TY ( years -- frames )
+	;; 
+	;; Compute number of frames in TOS years and push onto
+	;; Parameter Stack
+	db 0x02, _T, _Y
+	dw 0x0010
+
+l124eh:	call sub_0c13h		;124e - Convert TOS to double
+
+	;; Stack number of ticks in a year (as a double)
 	if NTSC=1
 	ld de,0x70C8		;1251
 	ld hl,0x1200		;1254
@@ -5205,7 +5305,9 @@ l124eh:
 	ld hl,0x0F00		;1254
 	endif
 	
-	jr l1223h		;1257
+	jr l1223h		;1257 - Stack HLDE and D*
+
+
 	add a,h			;1259
 	ld b,e			;125a
 	ld b,c			;125b
@@ -5264,15 +5366,17 @@ sub_12a2h:
 	pop hl			;12a6
 	ret			;12a7
 
-l12a8h:
-	ld hl,l0000h		;12a8
-	add hl,sp		;12ab
+	;; Process AT
+SCHEDULE_AT:	ld hl,0x0000		;12a8
+	add hl,sp		;12ab - HL points to top of stack (which
+				;hold   time interval specified, when
+				;       scheduling task)
 
-l12ach:	ld de,TIME		;12ac
-	or a			;12af
-	call TIC		;12b0
-	jp nc,l11c2h		;12b3
-	call sub_12e7h		;12b6
+l12ach:	ld de,TIME		;12ac - Point to current time
+	or a			;12af - Reset carry
+	call TIC		;12b0 - Work out system time - offset
+	jp nc,SCHEDULE_IN	;12b3 - Move on, if okay
+	call sub_12e7h		;12b6 - Otherwise ???
 	ld e,068h		;12b9
 	call sub_12e7h		;12bb
 	jr l12ach		;12be
@@ -5325,8 +5429,7 @@ sub_12e7h:
 	push bc			;12e9
 	ld b,004h		;12ea
 	ex de,hl			;12ec
-l12edh:
-	ld a,(de)			;12ed
+l12edh:	ld a,(de)			;12ed
 	sbc a,(hl)			;12ee
 	ld (de),a			;12ef
 	inc hl			;12f0
@@ -5336,6 +5439,7 @@ l12edh:
 	pop de			;12f5
 	pop hl			;12f6
 	ret			;12f7
+
 sub_12f8h:
 	push iy		;12f8
 	pop de			;12fa
@@ -5397,8 +5501,8 @@ sub_1305h:
 	ld d,e			;1341
 	ld (de),a			;1342
 	nop			;1343
-	call sub_0b9bh		;1344
-	call sub_0b2dh		;1347
+	call UNSTACK_DEHL		;1344
+	call NEG_DEHL		;1347
 	jp STACK_DE_HL		;134a
 	inc b			;134d
 	ld b,h			;134e
@@ -5407,7 +5511,7 @@ sub_1305h:
 	ld d,e			;1351
 	djnz l1354h		;1352
 l1354h:
-	call sub_0b9bh		;1354
+	call UNSTACK_DEHL		;1354
 	call sub_0b28h		;1357
 	jp STACK_DE_HL		;135a
 	ld (bc),a			;135d
@@ -6150,7 +6254,7 @@ l16d5h:	jr z,GT_CONT_2		;16d5 - Jump if TOS <= 20S
 	call nz,0x0B1E
 	else
 	ret z			;170f - BUG fix - `nop`
-	call sub_0b1eh		;1710 - BUG fix - `call nz, ...`
+	call NEG_HL		;1710 - BUG fix - `call nz, ...`
 	endif
 
 	rst 8			;1713
@@ -6513,6 +6617,7 @@ l18c7h:
 
 	ret			;18da
 
+	
 	db 0x03, 0x4D, 0x45, 0x4D	; MEM
 	db 0x3D, 0x00
 	call sub_18e6h		;18e1
@@ -6588,7 +6693,7 @@ sub_1927h:
 	ld hl,NUL		;1956
 	ld (P_MTASK),hl		;1959
 l195ch:
-	ld hl,(MTASK_LIST_HEAD)	;195c
+	ld hl,(PMTASK_LIST_HEAD)	;195c
 l195fh:
 	push hl			;195f
 	pop bc			;1960
@@ -6718,7 +6823,7 @@ l19f0h:	rst 20h			;19f0
 	ld (bc),a		;1a05
 	ld d,l			;1a06
 	ld hl,(l000dh+1)	;1a07
-	call sub_0b9bh		;1a0a
+	call UNSTACK_DEHL		;1a0a
 	call sub_0b3eh		;1a0d
 	jp STACK_DE_HL		;1a10
 	dec b			;1a13
@@ -6733,7 +6838,7 @@ sub_1a1bh:
 	rst 10h			;1a1b
 	push hl			;1a1c
 	pop bc			;1a1d
-	call sub_0b9bh		;1a1e
+	call UNSTACK_DEHL		;1a1e
 	call sub_0ba0h		;1a21
 	jp STACK_DE_HL		;1a24
 	inc b			;1a27
@@ -6751,7 +6856,7 @@ sub_1a1bh:
 	ld d,l			;1a37
 	inc a			;1a38
 	ld c,000h		;1a39
-	call sub_0b9bh		;1a3b
+	call UNSTACK_DEHL		;1a3b
 	or a			;1a3e
 	sbc hl,de		;1a3f
 	jp GT_CONT_2		;1a41
@@ -6775,7 +6880,7 @@ l1a53h:
 	ld e,b			;1a58
 	rrca			;1a59
 	nop			;1a5a
-	call sub_0b9bh		;1a5b
+	call UNSTACK_DEHL		;1a5b
 	call DE_GT_HL		;1a5e
 	ccf			;1a61
 	jr l1a50h		;1a62
@@ -6829,7 +6934,7 @@ l1a9ah:
 	ld b,h			;1a9e
 	jr nc,l1adeh		;1a9f
 	ld c,000h		;1aa1
-	call sub_0b9bh		;1aa3
+	call UNSTACK_DEHL	;1aa3
 	call sub_0d93h		;1aa6
 	jr l1a96h		;1aa9
 	inc b			;1aab
@@ -6985,7 +7090,7 @@ sub_1b70h:
 	ld (02006h),hl		;1b73
 	ld hl,(START_OF_WORD)	;1b76
 	ld (02004h),hl		;1b79
-	ld hl,(UNKNOWN1)		;1b7c
+	ld hl,(MTASK_TAIL)		;1b7c
 	ld (02008h),hl		;1b7f
 	ret			;1b82
 	add a,h			;1b83
@@ -7367,7 +7472,7 @@ l1da7h:	nop			;1da7
 	ld b,b			;1dad
 l1daeh:
 	dw OFFSET+0x0200	; Default for P_DISPLAY
-	dw UNKNOWN1		;1daf
+	dw MTASK_TAIL		;1daf
 l1db2h:
 	nop			;1db2
 	jr nz,l1d84h		;1db3
