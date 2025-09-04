@@ -4895,13 +4895,23 @@ sub_108eh:
 	pop ix		;10ac
 	ret			;10ae
 
+	;; Write 32-bit number to memory (Little Endian)
+	;;
+	;; On entry:
+	;;   DEHL - number to be written
+	;;   IX - address to write to
+	;;
+	;; On exit:
+	;;   IX - memory location immedately after where number is written
 STORE_DEHL:
 	ld (ix+000h),l		;10af
 	ld (ix+001h),h		;10b2
 	ld (ix+002h),e		;10b5
 	ld (ix+003h),d		;10b8
+
 	ret			;10bb
 
+	
 	add a,d			;10bc
 	ld c,c			;10bd
 	ld b,(hl)			;10be
@@ -5079,29 +5089,53 @@ l113eh:
 
 	;; Run task ( FLAG TIME -- )
 	;;
-	;; Probably caled when task is executed, so address on stack
-	;; will be Taks's Paramater Field
+	;; Implementation of each task word, used to schedule the
+	;; contained action word. This routine is accessed from code
+	;; field of task, which contains `call SCHED_TASK`. Thus, on
+	;; entry, the stack contains the address of the start of the
+	;; task's parameter field.
+	;;
+	;; To function correctly, user must have inserted two items onto
+	;; the Parameter Stack: TOS is a double-length time-interval and
+	;; 2OS is a code (0--5) indicating the scheduling mode (see
+	;; SCHED_MODE for details).
 SCHED_TASK:
 	ex (sp),ix		;1190 - Retrieve return address (which
 				;       is the start of the task's
-				;       parameter field)
-	call UNSTACK_DEHL	;1192 - Retrieve (double) time interval (frames)
-	call NEG_DEHL		;1195 - Negate value (DEHL = 10000-DEHL)
+				;       parameter field) and save
+				;       IX. Doing in this way, means we
+				;       discard this address when
+				;       RET-urning (using `pop ix`).
+	call UNSTACK_DEHL	;1192 - Retrieve (double-length) time
+				;       interval (frames) into DE (high
+				;       byte) and HL (now byte)
+	call NEG_DEHL		;1195 - Negate value (DEHL =
+				;       0x10000-DEHL), which is used to
+				;       set starting value for task
+				;       counter, which then counts up to
+				;       0x10000
 
-	;; Save number
+	;; Save time value
 	push de			;1198
 	push hl			;1199
 
-	rst 10h			;119a - Retrieve FLAG into HL
+	;; Retrieve scheduler mode and turn into look-up address in
+	;; SCHED_MODE table (that is SCHED_MODE+2*(mode-6).
+	;;
+	;; N.B. This seems an odd way to do this. One could set
+	;; SCHED_MODE to point to start of lookup table and add two
+	;; times mode to get offset. However, this way incorporates a
+	;; check for out-of-range mode values.
+	rst 10h			;119a - Retrieve mode value into HL
 
 	ld de,0xFFFA		;119b - That is, -6
 	add hl,de		;119e - Flag-6
-	jr c,l11a9h		;119f   Abandon if Flag >=6
+	jr c,l11a9h		;119f   Abandon if Mode >=6
 	add hl,hl		;11a1   (FLAG-6)*2
 
 	;; Compute table offset for jump instruction
-	ld de,SCHED_ACTIONS	;11a2 - Note, this is end of tabel
-	add hl,de		;11a5   HL = 0x11BA+2*(FLAG-6)
+	ld de,SCHED_MODE+12	;11a2 - Note, this is end of taebl
+	add hl,de		;11a5   HL=(SCHED_MODE+12)+2*(FLAG-6)
 	jp JP_ADDR_HL		;11a6
 
 l11a9h:	pop hl			;11a9 - Balance stack (remove
@@ -5111,79 +5145,135 @@ l11a9h:	pop hl			;11a9 - Balance stack (remove
 	ret			;11ad
 
 	;; Table of possible scheduling modes
+SCHED_MODE:
 	dw SCHEDULE_IN		; 0 = IN
 	dw SCHEDULE_EVERY	; 1 = EVERY
 	dw SCHEDULE_AT		; 2 = AT
 	dw SCHEDULE_STOP	; 3 = STOP
 	dw SCHEDULE_START	; 4 = START
 	dw SCHEDULE_RUN		; 5 = RUN
-SCHED_ACTIONS:
-	
+
+	;; Write 32-bit timer value to a task's parameter field
+	;;
+	;; On entry:
+	;;   DEHL - 32-bit timer value to write
+	;;   IX - address (usually, in task's parameter field) to which
+	;;        to store number
 UPDATE_TIME_LIMIT:
 	out (0xFD),a		;11ba - Disable NMI
+
 	call STORE_DEHL		;11bc
+
 	out (0feh),a		;11bf - Enable NMI
+
 	ret			;11c1
 
-	;; Scheduler for IN command. Also used for finishing up the AT
+	;; Scheduler for IN command. Also used for finishing up the EVERY
 	;; scheduler
+	;;
+	;; On entry:
+	;;   Stack contains 32-bit time interval
+	;;   IX - address of parameter field of task
+	;;
+	;; On exit:
+	;;   A, BC, DE, HL - corrupted
 SCHEDULE_IN:
-	inc ix		;11c2 - Advance to byte 2 of Task's parameter field
-	inc ix		;11c4   (that is, current counter)
+	inc ix			;11c2 - Advance to byte 2 of Task's
+	inc ix			;11c4   parameter field (that is, current
+				;       counter)
 
+	;; (Entry point, from SCHEDULE_EVERY)
 SE_CONT:
-	pop hl			;11c6 - Retrieve time interval (DEHL)
+	pop hl			;11c6 - Retrieve time interval into DEHL
 	pop de			;11c7
-	call UPDATE_TIME_LIMIT	;11c8 - and write to parameter field
-	pop ix			;11cb - Restore IX
 
-	ret			;11cd   so will return to PROCESS_WORD
+	call UPDATE_TIME_LIMIT	;11c8 - and write to time-counter field
+				;       of task (Param_field(2,...,5)
 
-	;; On entry, IX = start of task parameter stack
+	pop ix			;11cb - Restore IX (and, as started with
+				;       `ex (sp),ix`, discard return
+				;       address)
+
+	ret			;11cd   Return to PROCESS_WORD
+
+	;; Scheduler for EVERY command.
+	;;
+	;; On entry:
+	;;   Stack contains 32-bit time value
+	;;   IX - address of parameter field of task
+	;;
+	;; On exit:
+	;;   A, BC, DE, HL - corrupted
 SCHEDULE_EVERY:
+	;; Point IX to time-limit field
 	ld de,0x0006		;11ce
-	add ix,de		;11d1 - Advance to time-limit field
-	jr SE_CONT		;11d3
+	add ix,de		;11d1
+
+	jr SE_CONT		;11d3 - Write time value and done
 
 	
+	;; Scheduler for STOP command.
+	;;
+	;; On entry:
+	;;   Stack contains 32-bit (dummy) time value
+	;;   IX - address of parameter field of task
+	;;
+	;; On exit:
+	;;   A, BC, DE, HL - corrupted
 SCHEDULE_STOP:	
-	;; Discard time interval
-	pop hl			;11d5
+	pop hl			;11d5 - Discard time value
 	pop hl			;11d6
 
-	set 6,(ix+00ah)		;11d7 - Set task status to Stopped
+	set 6,(ix+0x0A)		;11d7 - Set task status to Stopped
 
 	pop ix			;11db - Restore IX
 	
 	ret			;11dd
 
-	;; Implement START scheduler
+	;; Scheduler for START command.
+	;;
+	;; On entry:
+	;;   Stack contains 32-bit (dummy) time value
+	;;   IX - address of parameter field of task
+	;;
+	;; On exit:
+	;;   A, BC, DE, HL - corrupted
 SCHEDULE_START:
-	;; Discard time interval
-	pop hl			;11de
+	pop hl			;11de - Discard time value
 	pop hl			;11df
 
-	;; Clear task status 
-	ld (ix+00ah),000h	;11e0
+	ld (ix+0x0A),000h	;11e0 - Clear task Stopped flag
 
 	pop ix			;11e4 - Restore IX
 	
 	ret			;11e6
 
+	;; Scheduler for RUN command.
+	;;
+	;; On entry:
+	;;   Stack contains 32-bit (dummy) time value
+	;;   IX - address of parameter field of task
+	;;
+	;; On exit:
+	;;   A, BC, DE, HL - corrupted
 	;; Implement 'Run' scheduler
 SCHEDULE_RUN:	
-	pop hl			;11e7 - Discard time from stack
+	pop hl			;11e7 - Discard time value
 	pop hl			;11e8
 
 	bit 6,(ix+00ah)		;11e9 - Check if task is stopped
-	jr nz,l11f2h		;11ed
-	inc (ix+00ah)		;11ef - Increase priority???
+	jr nz,SR_CONT		;11ed   Skip forward, if so
 
-l11f2h:	pop ix			;11f2
+	inc (ix+0x0A)		;11ef - Increase priority???
+
+SR_CONT:
+	pop ix			;11f2 - Restore IX
 
 	ret			;11f4
 
-	;; Forth word TT
+	
+	;; Forth word TT (returns (double-length) time interval in
+	;; ticks)
 	db 0x02, _T, _T
 	dw 0x0008
 	
