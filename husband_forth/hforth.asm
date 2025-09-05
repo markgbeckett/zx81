@@ -73,7 +73,7 @@
 
 	;; Choose your configuration Minstrel 3 compatibility and NTSC
 	;; (Tree Forth original) vs PAL (David Husband's port)
-MINSTREL3:	equ 0x00
+MINSTREL3:	equ 0x01
 NTSC:		equ 0x00
 	
 	include "hforth_chars.asm"
@@ -125,8 +125,8 @@ RAM_START:	equ OFFSET+0x016C	; Start of RAM
 P_DBUFFER:	equ OFFSET+0x016E	; Address of display buffer. Set
 					; to BD00/ FD00 during
 					; initialisation.
-PMTASK_LIST_HEAD:	equ OFFSET+0x0170	; Pointer to head of task list
-UNKNOWN7:	equ OFFSET+0x0172	; ???
+PMTASK_LIST_HD:	equ OFFSET+0x0170	; Pointer to head of task list
+FENCE:	equ OFFSET+0x0172		; Location of any fence set
 PRINT_DRVR:	equ OFFSET+0x0174	; Address of printer driver
 P_DISP_2:	equ OFFSET+0x0176	; Also points to display???
 F_WARM_RESTART:	equ OFFSET+0x0178 	; Set to FF during restart, to
@@ -134,7 +134,7 @@ F_WARM_RESTART:	equ OFFSET+0x0178 	; Set to FF during restart, to
 					; possible
 PARSE_NUM_ROUT:	equ OFFSET+0x017A 	; Routine to parse number from
 					; character buffer
-P_MTASK:	equ OFFSET+0x017C	; Location of multitasking scheduler???
+P_MTASK:	equ OFFSET+0x017C	; Location of multitasking scheduler
 KIB_R_OFFSET:	equ OFFSET+0x017E	; Offset to most recently read
 					; entry in Keyboard Input Buffer
 KIB_W_OFFSET:	equ OFFSET+0x017F	; Offset to most recently
@@ -174,7 +174,7 @@ FLAGS:		equ OFFSET+0x01AD	; System flags:
 					; 0 - Execution / Editor mode
 					; 1 - Editor screen print lock
 					; 2 - Console print lock
-					; 3 - ???
+					; 3 - Something to do with memory ???
 					; 4 - Machine stack in use (0/1)
 					; 5 - Switch-machine-stack lock
 					; 6 - Editor screen visible
@@ -727,10 +727,12 @@ l012bh:	inc hl			;012b - HL -> LASTKEY
 	inc hl			;012c - HL -> INKEY
 	ld (hl),c		;012d - Store keypress
 
+	;; ================================================================
 	;; Handle multitasking
+	;; ================================================================
 
 	;;  Service the timing routines for active tasks
-l012eh:	ld hl,(PMTASK_LIST_HEAD)	;012e - Retrieve address of link field
+l012eh:	ld hl,(PMTASK_LIST_HD)	;012e - Retrieve address of link field
 	push hl			;0131   for task at head of task list list
 				;       and save it
 	jr l0139h		;0132
@@ -840,7 +842,8 @@ l0179h:	pop hl			;0179 - Retrieve address of start of
 	;; field to stack)
 	ex (sp),hl		;017f - Retrieve MTASK base
 
-	;;  Advance to byte 10 of current task structure
+	;;  Advance to status field of current task (w/o corrupting DE
+	;;  or BC)
 	ld a,l			;0180 
 	add a,00ah		;0181
 	ld l,a			;0183
@@ -860,16 +863,17 @@ l018bh:	ld a,(hl)		;018b - Retrieve task status flag
 	jr nz,l01dbh		;018e move on to check for keypress, if
 				;     so
 
-	bit 6,a			;0190 - Check bit 6 and move to next task
-	jr nz,l0179h		;0192   if set
+	bit 6,a			;0190 - Check if Task is stopped and
+	jr nz,l0179h		;0192   move on to next task, if so
 	
-	or a			;0194   Also, move to next task if A=0
-	jr z,l0179h		;0195
+	or a			;0194 - Also, move to next task if
+	jr z,l0179h		;0195   priority is zero
 
-	;; GOT THIS FAR - assume task has to be scheduled to progress
-	;; beyond here
-	dec (hl)		;0197
-	set 7,(hl)		;0198
+	;; Service task
+	dec (hl)		;0197 - Decrement priority (Bits 6 and 7
+				;       are guaranteed to be reset at
+				;       this point)
+	set 7,(hl)		;0198 - Set task locking
 
 	;; Save registers
 	push hl			;019a
@@ -888,33 +892,36 @@ l018bh:	ld a,(hl)		;018b - Retrieve task status flag
 	ld h,(hl)		;01a6
 	ld l,a			;01a7
 
+	;; Check which machine context is active
 	push hl			;01a8
 	ld hl,FLAGS		;01a9
 	bit 4,(hl)		;01ac
-	jr nz,l01b6h		;01ae
+	jr nz,l01b6h		;01ae - Jump forward, if Context 1
 
-	;; Run task
+	;; Execute task's action word
 	pop hl			;01b0
 	call jump_to_hl		;01b1
 
 	jr l01cfh		;01b4
 
-l01b6h:	res 4,(hl)		;01b6
-	set 5,(hl)		;01b8
-	ex (sp),hl		;01ba - Extract return address into HL
+l01b6h:	res 4,(hl)		;01b6 - Set to Context 0
+	set 5,(hl)		;01b8 - Lock context switching
+	ex (sp),hl		;01ba - Extract return address into HL,
+				;       saving HL at the same time.
 	
 	;; Switch from Stack 1 to Stack 0
 	ld (MSTACK1),sp		;01bb 
 	ld sp,(MSTACK0)		;01bf
 
-	call jump_to_hl		;01c3 - This is where clock is updated 
+	;; Execute task's action word
+	call jump_to_hl		;01c3 - This is where clock is updated???
 	
 	ld sp,(MSTACK1)		;01c6 - Switch back to Stack 1 (discard
-				;Stack 0 pointer)
+				;       Stack 0 pointer)
 
-	pop hl			;01ca
-	res 5,(hl)		;01cb
-l01cdh:	set 4,(hl)		;01cd
+	pop hl			;01ca - Restore HL
+	res 5,(hl)		;01cb - Unlock context switching
+l01cdh:	set 4,(hl)		;01cd - Confirm Context 1 is active
 
 	;; Restore registers
 l01cfh:	pop ix			;01cf
@@ -924,8 +931,11 @@ l01cfh:	pop ix			;01cf
 	exx			;01d4
 	pop de			;01d5
 	pop hl			;01d6
-	res 7,(hl)		;01d7
-	jr l018bh		;01d9
+	res 7,(hl)		;01d7 - Disable task locking
+
+	jr l018bh		;01d9 - Continue to service task
+				;       (assuming priority has not
+				;       reached zero)
 
 l01dbh:	pop hl			;01db
 
@@ -958,8 +968,10 @@ l01dbh:	pop hl			;01db
 
 	pop hl			;01f8
 
-	jr nc,l01fdh		;01f9 - Skip forward, if key successfully processed
-	res 7,(hl)		;01fb - Otherwise, reset to try again next time
+	jr nc,l01fdh		;01f9 - Skip forward, if key
+				;       successfully processed
+	res 7,(hl)		;01fb - Otherwise, reset to try again
+				;       next time
 
 l01fdh:	pop af			;01fd - End of RUN_VSYNC routine
 	pop bc			;01fe
@@ -3111,8 +3123,9 @@ C0_KERNEL:
 	cp l			;08dd
 	jr z,C0_SKIP		;08de
 
-	rst 8			;08e0 - Push HL back onto Parameter
-				;       stack (restore previous state)
+	rst 8			;08e0 - Push token length back onto
+				;       Parameter stack (restore
+				;       previous state)
 	
 	call PROCESS_TOKEN	;08e1
 
@@ -3270,7 +3283,7 @@ l092ah:	pop de			;092a   into DE
 	ret nc			;092e - Return if DE <= HL -- that is,
 				;       not a stack underflow
 
-	ld a,053h		;092f - Deal with stack underflow
+	ld a,_S			;092f - Error: Parameter Stack underflow
 	jp ERR_RESTART		;0931
 
 
@@ -3279,7 +3292,7 @@ sub_0934h:
 	bit 6,(hl)		;0937   (as set by TON)
 	ret nz			;0939 - Return if so
 
-	;; Disable multitasking?
+	;; Disable multitasking
 	ld hl,NO_ACTION		;093a - Points to RET statement 
 	ld (P_MTASK),hl		;093d - Store for later use in
 				;       jump_to_hl at $0A27
@@ -3346,7 +3359,7 @@ l0965h:	cpl			;0965 - Calculate $10000-HL
 	;; Save current registers
 	exx			;0968
 
-;; 	;; Zero RAM (up to 0x8000)
+ 	;; Zero RAM (up to 0x8000)
 	if MINSTREL3=1 		
 	ld hl,0x4000
 	ld de,0x4001
@@ -3391,7 +3404,7 @@ l0970h:	ld (hl),a		;0970
 	ld hl,0xBD00		;0988 - Need to adjust memory
 				;       configuration for 48k RAM.
 	ld (P_DBUFFER),hl	;098b - By default, these variables
-	ld (OFFSET+0x0176),hl	;098e   contain FD00, so only need to
+	ld (P_DISP_2),hl	;098e   contain FD00, so only need to
 				;       change if largest RAM
 				;       configuration
 
@@ -3572,10 +3585,10 @@ l0a4ch:	rst 20h			;0a4c - Pop from character stack into A
 	rst 8			;0a54 - Push HL onto param stack
 	ex de,hl		;0a55
 	ld l,a			;0a56
-	call sub_0c13h		;0a57
+	call S_TO_D		;0a57
 	call DSTAR		;0a5a
 	rst 8			;0a5d - Push HL onto param stack
-	call sub_0c13h		;0a5e
+	call S_TO_D		;0a5e
 	call sub_1305h		;0a61
 
 	djnz l0a4ch		;0a64
@@ -3626,10 +3639,10 @@ sub_0a96h:
 	call sub_0b28h		;0a9f
 	push af			;0aa2
 
-l0aa3h:	call STACK_DE_HL	;0aa3
+l0aa3h:	call STACK_DEHL	;0aa3
 	ld hl,(BASE)		;0aa6
 	rst 8			;0aa9
-	call sub_0c13h		;0aaa
+	call S_TO_D		;0aaa
 	call 00cc5h		;0aad
 	rst 10h			;0ab0
 	ld a,l			;0ab1
@@ -3669,7 +3682,7 @@ sub_0ad3h:
 l0addh:	rst 8			;0add
 	ld hl,(BASE)		;0ade
 	rst 8			;0ae1
-	call sub_0bf2h		;0ae2
+	call DIV_TO_MDIV	;0ae2
 	rst 10h			;0ae5
 	ld a,l			;0ae6
 	call sub_091eh		;0ae7
@@ -3707,7 +3720,7 @@ MSTAR:
 	call sub_0b3eh		;0b0c
 	or a			;0b0f
 	call po,NEG_DEHL		;0b10
-	call STACK_DE_HL		;0b13
+	call STACK_DEHL		;0b13
 	pop de			;0b16
 	pop hl			;0b17
 
@@ -3756,7 +3769,7 @@ l0b34h:	call NEG_HL		;0b34
 	;;
 	;; On exit:
 	;; 
-STACK_DE_HL:
+STACK_DEHL:
 	;; Push DE onto parameter stack
 	ex de,hl		;0b39
 	rst 8			;0b3a - Push onto Parameter Stack
@@ -3839,7 +3852,7 @@ MSLASH:
 	rra			;0b8f
 	call c,NEG_HL		;0b90
 	ex de,hl			;0b93
-l0b94h:	call STACK_DE_HL		;0b94
+l0b94h:	call STACK_DEHL		;0b94
 
 	pop bc			;0b97
 	pop de			;0b98
@@ -3882,6 +3895,8 @@ l0bbdh:
 	pop de			;0bc1
 	pop ix		;0bc2
 	ret			;0bc4
+
+	;; Forth word */MOD
 	dec b			;0bc5
 	ld hl,(04d2fh)		;0bc6
 	ld c,a			;0bc9
@@ -3900,7 +3915,7 @@ l0bbdh:
 	ld bc,NEG_DEHL+2		;0be0
 	nop			;0be3
 	push hl			;0be4
-	call sub_0bf2h		;0be5
+	call DIV_TO_MDIV		;0be5
 	rst 10h			;0be8
 	pop hl			;0be9
 	ret			;0bea
@@ -3910,45 +3925,54 @@ l0bbdh:
 	ld c,a			;0bee
 	ld b,h			;0bef
 	ld (de),a			;0bf0
-	nop			;0bf1
-sub_0bf2h:
-	push hl			;0bf2
-	rst 10h			;0bf3
-	call sub_0c13h		;0bf4
-	rst 8			;0bf7
-	call MSLASH		;0bf8
-	pop hl			;0bfb
-	ret			;0bfc
-	inc bc			;0bfd
-	ld c,l			;0bfe
-	ld c,a			;0bff
-	ld b,h			;0c00
-	rrca			;0c01
-	nop			;0c02
-	call sub_0bf2h		;0c03
-	call SWAP		;0c06
-	jp l137ah		;0c09
-	inc b			;0c0c
-	ld d,e			;0c0d
-	dec l			;0c0e
-	ld a,044h		;0c0f
-	ld d,000h		;0c11
 
-	;; ( XX -- XX FLAG )
-	;;
-	;; Including handle TT (ticks) scheduler
-sub_0c13h:
+
+	nop			;0bf1
+
+	;; Perform 16-bit division, firstly promoting dividend to 32-bit
+DIV_TO_MDIV:
+	push hl			;0bf2
+
+	rst 10h			;0bf3 - Pop divisor into HL
+
+	call S_TO_D		;0bf4 - Convert dividend to double-precision
+	
+	rst 8			;0bf7 - Push divisor to Parameter Stack
+	
+	call MSLASH		;0bf8
+
+	pop hl			;0bfb
+
+	ret			;0bfc
+
+	;; Forth word MOD
+	db 0x03, _M, _O, _D
+	dw 0x000F
+
+	call DIV_TO_MDIV	;0c03 - Do division
+	call SWAP		;0c06 - Switch to TOS = Remainder; 2OS =
+				;       Quotient
+	jp DROP			;0c09 - Drop remainder and return
+	
+	;; Forth word S->D
+	;; Convert single-precision to double-precision number
+	db 0x04, _S, _MINUS, _GREATERTHAN, _D
+	dw 0x0016
+
+S_TO_D:
 	push de			;0c13
 	push hl			;0c14
 	
 	rst 10h			;0c15 - Pop from stack into HL
 				;(determines frequency)
+
+	;; Check if negative
 	ld a,h			;0c16 - Move upper byte to A
 	rla			;0c17 - Bit 7 into carry
 	ex de,hl		;0c18
-	sbc hl,hl		;0c19 - 0000 or FFFF, depending on carry
+	sbc hl,hl		;0c19 - 0000/ FFFF for positive/ negative
 	ex de,hl		;0c1b
-	call STACK_DE_HL	;0c1c
+	call STACK_DEHL	;0c1c
 
 	pop hl			;0c1f
 	pop de			;0c20
@@ -4074,7 +4098,7 @@ l0cabh:
 
 	call 0x0B9B
 	call sub_0cfbh		;0cc8
-	call STACK_DE_HL		;0ccb
+	call STACK_DEHL		;0ccb
 	jp l0c3ah		;0cce
 
 	;; Forth Word D*
@@ -4086,7 +4110,7 @@ DSTAR:
 	call MDSTAR		;0cd8
 	call UNSTACK_DEHL		;0cdb
 	call TWODROP		;0cde
-	call STACK_DE_HL	;0ce1
+	call STACK_DEHL	;0ce1
 	pop de			;0ce4
 	pop hl			;0ce5
 
@@ -4113,9 +4137,9 @@ sub_0cfbh:
 	push hl			;0cfb
 	push de			;0cfc
 	call UNSTACK_DEHL		;0cfd
-	call STACK_DE_HL		;0d00
+	call STACK_DEHL		;0d00
 	push iy		;0d03
-	call STACK_DE_HL		;0d05
+	call STACK_DEHL		;0d05
 	pop hl			;0d08
 	push hl			;0d09
 	rl d		;0d0a
@@ -4654,11 +4678,11 @@ l0f4eh:
 	jr l0f4eh		;0f67
 l0f69h:
 	call sub_0a36h		;0f69
-	ld a,048h		;0f6c
-	jp c,ERR_RESTART		;0f6e
+	ld a,_H			;0f6c - Error: token not found nor hex
+	jp c,ERR_RESTART	;0f6e
 	rst 10h			;0f71
 	ld a,l			;0f72
-	call DICT_ADD_BYTE		;0f73
+	call DICT_ADD_BYTE	;0f73
 	jp l0f4eh		;0f76
 	inc bc			;0f79
 	ld c,b			;0f7a
@@ -4874,7 +4898,7 @@ l1073h:	ld hl,RUN_DISPLAY	;1073
 	push hl			;1082
 	pop ix		;1083
 	call sub_108eh		;1085
-	call STACK_DE_HL		;1088
+	call STACK_DEHL		;1088
 	pop ix		;108b
 	ret			;108d
 sub_108eh:
@@ -5277,7 +5301,7 @@ SR_CONT:
 	db 0x02, _T, _T
 	dw 0x0008
 	
-	jp sub_0c13h		;11fa
+	jp S_TO_D		;11fa
 
 	;; Forth word TS ( secs -- frames )
 	;;
@@ -5325,7 +5349,7 @@ SR_CONT:
 	db 0x02, _T, _H
 	dw 0x0014
 	
-	call sub_0c13h		;121a
+	call S_TO_D		;121a
 
 	if NTSC=1
 	ld de,0x0003		;121d
@@ -5335,7 +5359,7 @@ SR_CONT:
 	ld hl,0xBF20		;1220
 	endif
 	
-l1223h:	call STACK_DE_HL	;1223
+l1223h:	call STACK_DEHL	;1223
 	jp DSTAR		;1226
 
 	;; Forth word TD (d days -- frames )
@@ -5345,7 +5369,7 @@ l1223h:	call STACK_DE_HL	;1223
 	db 0x02, _T, _D
 	dw 0x0010
 	
-l122eh:	call sub_0c13h		;122e
+l122eh:	call S_TO_D		;122e
 
 	if NTSC=1
 	ld de,0x004F		;1231
@@ -5365,7 +5389,7 @@ l122eh:	call sub_0c13h		;122e
 	db 0x02, _T, _W
 	dw 0x0010
 	
-l123eh:	call sub_0c13h		;123e
+l123eh:	call S_TO_D		;123e
 	
 	if NTSC=1
 	ld de,0x0229		;1241
@@ -5384,7 +5408,7 @@ l123eh:	call sub_0c13h		;123e
 	db 0x02, _T, _Y
 	dw 0x0010
 
-l124eh:	call sub_0c13h		;124e - Convert TOS to double
+l124eh:	call S_TO_D		;124e - Convert TOS to double
 
 	;; Stack number of ticks in a year (as a double)
 	if NTSC=1
@@ -5413,9 +5437,9 @@ l124eh:	call sub_0c13h		;124e - Convert TOS to double
 	ld de,l0e68h		;126d
 l1270h:
 	call TICK_WORD		;1270
-	call sub_12a2h		;1273
+	call DE_CMP_HL		;1273
 	jr z,l127dh		;1276
-	call DICT_ADD_HL		;1278
+	call DICT_ADD_HL	;1278
 	jr l1270h		;127b
 l127dh:
 	ld hl,(P_HERE)		;127d
@@ -5440,7 +5464,7 @@ l128bh:	pop hl			;128b
 	push hl			;1293
 	rst 10h			;1294
 	add hl,hl			;1295
-	call sub_12a2h		;1296
+	call DE_CMP_HL		;1296
 	jr nc,l12a0h		;1299
 	pop de			;129b
 	add hl,de			;129c
@@ -5449,11 +5473,22 @@ l128bh:	pop hl			;128b
 l12a0h:	pop hl			;12a0
 	ret			;12a1
 
-sub_12a2h:
+	;; Check if DE>HL
+	;;
+	;; On entry:
+	;;   DE and HL populated appropriately
+	;;
+	;; On exit:
+	;;   Z  - set, if DE=HL
+	;;   CF - set, if DE>HL, reset otherwise
+DE_CMP_HL:
 	push hl			;12a2
-	or a			;12a3
+	
+	or a			;12a3 - Reset carry
 	sbc hl,de		;12a4
+	
 	pop hl			;12a6
+	
 	ret			;12a7
 
 	;; Process AT
@@ -5593,7 +5628,7 @@ sub_1305h:
 	nop			;1343
 	call UNSTACK_DEHL		;1344
 	call NEG_DEHL		;1347
-	jp STACK_DE_HL		;134a
+	jp STACK_DEHL		;134a
 	inc b			;134d
 	ld b,h			;134e
 	ld b,c			;134f
@@ -5603,7 +5638,7 @@ sub_1305h:
 l1354h:
 	call UNSTACK_DEHL		;1354
 	call sub_0b28h		;1357
-	jp STACK_DE_HL		;135a
+	jp STACK_DEHL		;135a
 	ld (bc),a			;135d
 	ld b,e			;135e
 	ld b,b			;135f
@@ -5623,16 +5658,16 @@ l1354h:
 	ld a,l			;1370
 	ld (de),a			;1371
 	ret			;1372
-	inc b			;1373
-	ld b,h			;1374
-	ld d,d			;1375
-	ld c,a			;1376
-	ld d,b			;1377
-	add hl,bc			;1378
-	nop			;1379
-l137ah:
-	rst 10h			;137a
+
+	;; Forth word DROP
+	db 0x04, _D, _R, _O, _P
+	dw 0x0009
+
+DROP:	rst 10h			;137a - Pop value from Parameter Stack
+
 	ret			;137b
+
+
 	ld b,042h		;137c
 	ld c,h			;137e
 	ld b,c			;137f
@@ -5695,7 +5730,7 @@ l13b6h: rst 10h			;13b6
 	call SERVICE_CLOCK	;13bd
 	call CHECK_KIB		;13c0
 	call z,sub_048dh	;13c3
-	call sub_18fah		;13c6
+	call CHECK_MEM		;13c6
 	call sub_1036h		;13c9
 
 	;; Set to indicate warm restart is possible
@@ -6707,14 +6742,18 @@ l18c7h:
 
 	ret			;18da
 
+
+	;; Forth word MEM
+	db 0x03, _M, _E, _M	; MEM
+	dw 0x003D
+
+	call FREE_MEM		;18e1
 	
-	db 0x03, 0x4D, 0x45, 0x4D	; MEM
-	db 0x3D, 0x00
-	call sub_18e6h		;18e1
 	rst 8			;18e4
+
 	ret			;18e5
 
-sub_18e6h:
+FREE_MEM:
 	ld hl,(P_HERE)		;18e6
 	ex de,hl		;18e9
 	ld hl,(RAM_SIZE)	;18ea
@@ -6728,64 +6767,65 @@ sub_18e6h:
 	add hl,de			;18f8
 	ret			;18f9
 
-sub_18fah:
+CHECK_MEM:
 	ld hl,FLAGS3		;18fa
 	bit 3,(hl)		;18fd
 	ret nz			;18ff
-	call sub_18e6h		;1900
-	ld de,OFFSET+0x04E0	;1903 - Was ffe0h ***
+	call FREE_MEM		;1900
+	ld de,OFFSET+0x04E0	;1903 - Was ffe0h (which is -32)
 	add hl,de		;1906
 	ex de,hl		;1907
 	ld hl,(RAM_SIZE)	;1908
 	sbc hl,de		;190b
 	ret nc			;190d
+
+	;; Out of memory
 	ld hl,FLAGS3		;190e
 	set 3,(hl)		;1911
 	ld a,04dh		;1913
 	jp PRINT_ERR_MSG		;1915
-	dec b			;1918
-	ld b,(hl)			;1919
-	ld b,l			;191a
-	ld c,(hl)			;191b
-	ld b,e			;191c
-	ld b,l			;191d
-	ld e,000h		;191e
-	call sub_1927h		;1920
-	ld (UNKNOWN7),hl		;1923
+
+	;; Forth word FENCE
+	db 0x05, _F, _E, _N, _C, _E
+	dw 0x001E
+
+	call GET_WORD_AND_UNSTACK		;1920
+	ld (FENCE),hl		;1923
+
 	ret			;1926
 
-sub_1927h:
-	call GET_WORD		;1927
+GET_WORD_AND_UNSTACK:
+	call GET_WORD		;1927 - Carry set, if no match in dictionary
 	push af			;192a
-	call UNSTACK_STRING		;192b
+	call UNSTACK_STRING	;192b
 	pop af			;192e
-	ret nc			;192f
-	pop hl			;1930
-	ld a,055h		;1931
+	ret nc			;192f - Return, if match
+	
+	pop hl			;1930 - Dicard return address
+	ld a,_U			;1931 - Error: Undefined word
 	jp PRINT_ERR_MSG	;1933
-	ld b,046h		;1936
-	ld c,a			;1938
-	ld d,d			;1939
-	ld b,a			;193a
-	ld b,l			;193b
-	ld d,h			;193c
-	ld c,e			;193d
-	nop			;193e
-	call sub_1927h		;193f
+
+	;; Forth word FORGET
+	db 0x06, _F, _O, _R, _G, _E, _T
+	dw 0x004B
+	
+	call GET_WORD_AND_UNSTACK	;193f
+
+	;; Check if will cross fence boundary
 	ex de,hl		;1942
-	ld hl,(UNKNOWN7)	;1943
-	call sub_12a2h		;1946
-	ld a,046h		;1949
+	ld hl,(FENCE)		;1943
+	call DE_CMP_HL		;1946
+	ld a,_F			;1949 - Error: Fenced word
 	jp nc,PRINT_ERR_MSG	;194b
+	
+	;; Check if will delete a scheduled task
 	ld hl,(P_MTASK)		;194e
-	call sub_12a2h		;1951
+	call DE_CMP_HL		;1951
 	jr c,l195ch		;1954
 	ld hl,NUL		;1956
 	ld (P_MTASK),hl		;1959
-l195ch:
-	ld hl,(PMTASK_LIST_HEAD)	;195c
-l195fh:
-	push hl			;195f
+l195ch:	ld hl,(PMTASK_LIST_HD)	;195c
+l195fh:	push hl			;195f
 	pop bc			;1960
 	ld (PCUR_TASK_STRUCT),hl
 				;1961
@@ -6795,7 +6835,7 @@ l195fh:
 	ld l,a			;1967
 	or h			;1968
 	jr z,l1974h		;1969
-	call sub_12a2h		;196b
+	call DE_CMP_HL		;196b
 	jr c,l195fh		;196e
 	xor a			;1970
 	ld (bc),a		;1971
@@ -6804,8 +6844,10 @@ l195fh:
 l1974h:
 	ex de,hl		;1974
 	ld (UNKNOWN2),hl	;1975
+
 	call FIND_NEXT_WORD	;1978
 	ld (START_DICT_DEF),hl ;197b
+
 	jp sub_0765h		;197e
 
 	;; FORTH word TOFF
@@ -6915,7 +6957,7 @@ l19f0h:	rst 20h			;19f0
 	ld hl,(l000dh+1)	;1a07
 	call UNSTACK_DEHL		;1a0a
 	call sub_0b3eh		;1a0d
-	jp STACK_DE_HL		;1a10
+	jp STACK_DEHL		;1a10
 	dec b			;1a13
 	ld d,l			;1a14
 	cpl			;1a15
@@ -6930,7 +6972,7 @@ sub_1a1bh:
 	pop bc			;1a1d
 	call UNSTACK_DEHL		;1a1e
 	call sub_0ba0h		;1a21
-	jp STACK_DE_HL		;1a24
+	jp STACK_DEHL		;1a24
 	inc b			;1a27
 	ld d,l			;1a28
 	ld c,l			;1a29
@@ -7429,20 +7471,10 @@ RESTART_NEW:
 	ds 0x1CC0-$
 	
 	else
-	nop			;1cb3
-	nop			;1cb4
-	nop			;1cb5
-	nop			;1cb6
-	nop			;1cb7
-	nop			;1cb8
-	nop			;1cb9
-	nop			;1cba
-	nop			;1cbb
-	nop			;1cbc
-	nop			;1cbd
-	nop			;1cbe
-	nop			;1cbf
-	endif
+
+	ds 0x1CC0-$
+	
+endif
 	;; Jump table of 32 service routines, corresponding to special
 	;; key presses
 SPECIAL_CHAR_TABLE:		; 1CC0h
