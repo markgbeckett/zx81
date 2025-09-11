@@ -1,28 +1,43 @@
 # Running Husband Forth on the Minstrel 3
 
+## Background
+
 Husband Forth was an alternative ROM image for the ZX81, which replaced the default Sinclair BASIC monitor with a Forth-based programming environment.
 
-Forth was relatively popular in the early 1980s. Forth programs are compact and fast (when compared to BASIC), making Forth well-suited to the limited resources of a microcomputer. Husband Forth looks to be a particularly advanced Forth monitor which, for example, provides multi-tasking support -- very unusual at the time.
+Forth was relatively popular in the early 1980s. Forth programs are compact and fast (when compared to BASIC), making Forth well-suited to the limited resources of a microcomputer. Better still, being ROM-based, Husband Forth does not take any precious RAM for the monitor code, so can run with as little as 2 kB of RAM.
 
-Husband Forth is likely to be a port of a Timex Sinclair 1000 ROM (referred to by several names, including [Tree Forth](https://www.timexsinclair.com/article/tree-forth/), Multi-Forth, and Pluri-Forth). The Timex Sinclair website suggests there were several versions of Tree Forth. However, all the Tree Forth ROMs I have found on in the Internet are identical (and do not contain version information). Tree Forth was onfigured for an NTSC display, as was typically used on the TS1000. The port to Husband Forth was likely to involve adjusting the code to work with a PAL display (as used in the UK). Comparing the ROM images of Tree Forth and Husband Forth highlights around 30 byte-level differences, with substantive differences in the code that renders the display.
+Released in early 1984, Husband Forth looks to be a particularly advanced Forth monitor which, for example, provides multi-tasking support -- something not common on microcomputers, at the time.
+
+Husband Forth is likely to be a port of a Timex Sinclair 1000 ROM (referred to by several names, including [Tree Forth](https://www.timexsinclair.com/article/tree-forth/), Multi-Forth, and Pluri-Forth). The Timex Sinclair website suggests there were several versions of Tree Forth. However, all the Tree Forth ROMs I have found on in the Internet are identical (and do not contain version information). Tree Forth was configured for an NTSC display, as was typically used on the TS1000. The port to Husband Forth made the monitor run on a PAL system (as used in the UK) and adjusted the clock and timing routines to 50 Hz. 
 
 Versions of both the Husband Forth ROM (and Tree Forth ROM) are distributed with the [EightyOne emulator](https://sourceforge.net/projects/eightyone-sinclair-emulator/). ROMs are also available from other sites, but they look to be identical to the versions distributed with EightyOne.
 
-The Tynemouth Minstrel 3 is a modern-day, ZX81-compatible microcomputer with 32kB of RAM. I hoped to be able to run Husband Forth on the Minstrel 3. Sadly, neither Husband Forth ROM nor Tree Forth ROM, distributed with EightyOne, runs correctly on the Minstrel 3. I wanted to understand why this was and whether I could get Husband Forth to work, so I began to disassemble and study the ROM.
+The Tynemouth Minstrel 3 is a modern-day, ZX81-compatible microcomputer with 32kB of RAM. I hoped to be able to run Husband Forth on the Minstrel 3. Sadly, neither the Husband Forth nor the Tree Forth ROMs, distributed with EightyOne, run on the Minstrel 3. I wanted to understand why this was and whether I could get Husband Forth to work, so I began to disassemble and study the ROM.
 
 My expectation was that the display-handling code was not (quite) compatible with the Minstrel 3. A [discussion on a retrocomputing forum](https://forum.tlienhard.com/phpBB3/viewtopic.php?t=1438) suggests that the ROMs distributed with EightyOne have been tweaked to work correctly with the emulator, so perhaps these tweaks had rendered the ROMs unusable on real hardware.
 
-However, my investigations to date have identified a number of issues that seem to prevent Husband Forth running on the Minstrel 3 as I describe below.
+However, as I explain below, the problems were somewhat more subtle than that.
+
+Happy Forth programming!
+
+
+## Running Husband Forth on a Minstrel 3
+
+You can run either Husband Forth or Tree Forth on the Minstrel 3, but copying one of the ROM images [hforth_pal.rom] or [hforth_ntsc.rom] onto a suitable EPROM and installing in your Minstrel 3.
+
+Make sure to set the appropriate jumpers for either NTSC or PAL, as appropriate to your chosen ROM, and you should be able to boot into the Forth system console screen.
+
+You can download a PDF copy of the [Husband Forth user guide](https://www.retrocomputers.gr/media/kunena/attachments/169/zx81-forth-manual.pdf) (which is also suitable for Tree Forth)
 
 ## Husband Forth Display Handling
 
-The ZX81 produces a PAL-compatible display signal. It's sibling, the Timex Simclair 1000, which was sold in North America produced an NTSC-compatible display. The two standards are very similar, but with different timings. Here I am looking at the PAL system, though these notes are relevant to NTSC with specific timings adjusted appropriately.
+The ZX81 produces a PAL-compatible display signal. It's sibling, the Timex Simclair 1000, which was sold mostly in North America produced an NTSC-compatible display. The two standards are very similar, but with different timings. Here I am looking at the PAL system, though these notes are relevant to NTSC with specific timings adjusted appropriately.
 
-The official [PAL display format](https://martin.hinner.info/vga/pal.html) consists of 625 lines and is updated 25 times per second. Each frame is transmitted as two fields of 312.5 scan lines, and pairs of fields are interlaced to produce picture with less flicker. Not every scanline is visible: a small number are used for frame synchronisation to ensure the display is stable.
+The official [PAL display format](https://martin.hinner.info/vga/pal.html) produces a TV frame consisting of 625 scanlines and the frame is updated 25 times per second. Each frame is transmitted as two fields of 312.5 scan lines, and pairs of fields are interlaced to produce a picture with less flicker. Not every scanline is visible: a small number are used for image synchronisation, to ensure the display is stable.
 
-The first component of frame synchronisation, generated at the beginning of each field, is called the Vsync. Its length alternates between 7 and 8 scanlines (448 and 512 us), which provides the interlacing effort. Following the Vsync pulse, a series of 64us scanlines follows, containing the visible part of the display. However, not all 64us of each horizontal scanline contains picture data: the first 12us is used for a horizontal pulse (4us) and backporch signal (8us) which helps align the line and callibrate the brightness.
+The first component of image synchronisation, generated at the beginning of each field, is called the vertical synchronisation (Vsync, for short). Its length alternates between 7 and 8 scanlines (448 and 512 us), which provides the interlacing effect. Following the Vsync pulse, a series of 64us scanlines follows, containing the visible part of the image. However, not all 64us of each horizontal scanline contains image data: the first 12us is used for a horizontal pulse (4us) and backporch signal (8us), referred to together as Hsync, which helps align the line and callibrate the brightness.
 
-Instead of an interlaced 625-line signal, the ZX81 is designed to produce a simplified field of around 312 lines at a rate of 50 Hz (20ms/ field), with a consistent Vsync pulse to prevent interlacing. From now on, we will refer to the fields produced by the ZX81 as frames.
+Instead of an interlaced 625-line signal, the ZX81 is designed to produce a simplified field of around 312 lines at a rate of 50 Hz (20ms/ fram), with a consistent Vsync pulse to prevent interlacing. From now on, we will refer to the fields produced by the ZX81 as frames.
 
 Building on its predecessor, the ZX81 relied heavily on the Z80 CPU (with some help from custom electronics) to generate the display signal. This made the ZX81 very low cost, but also meant that the micro potentially spent much (in fact, up to 80%) of its time producing a display, rather than running user programs.
 
@@ -38,7 +53,7 @@ Both Husband Forth and ZX81 8K BASIC generate the display in four phases:
 
 * The bottom border is generated, again using the NMI mechanism and allowing the Forth monitor code to make progress.
 
-As you can see, most of the Forth monitor code runs during the top- and bottom- border generation, though there is also some keyboard-scanning code hidden inside the VSync stage, as we will describe below.
+As you can see, most of the Forth monitor code runs during the top- and bottom- border generation, though there is also some keyboard-scanning and multitasking scheduling code hidden inside the VSync stage, as we will describe below.
 
 ### Border Generation
 
@@ -70,9 +85,9 @@ NMI_DONE: ; 0x006C
 
 Slightly unusually, a standard `ret` instruction is used to exit the NMI routine (wheras, more normally, a `retn` would be used). Using `ret` means the previousstate of the maskable interrupt is lost and the maskable interrupts is always be disabled.
 
-By default, Husband Forth sets the top border to have 31 lines and the bottom border to have 74 lines, so the main screen is not centred vertically.
+By default, Husband Forth sets the top border to have 31 lines and the bottom border to have 74 lines, so the main screen is not centred vertically. It has been suggested that the unequal borders are related to the way it was ported from the NTSC-compatible Tree Forth (adding rows to the bottom border to produce sufficient scanlines for a PAL display).
 
-## Vsync Generation
+### Vsync Generation
 
 The Vsync signal is controlled by the ZX81s ULA. The Vsync signal is turned on, from software, using `in (0xFE),a` and turned off using `out (<any_address>),a`. Other than activating and deactivating the signal, the Z80 has little to do during this phase. However, the Z80 is responsible for getting the timing right and on both ZX81 BASIC and Husband Forth, the time between the start and end of the Vsync signal is used to do something useful: to scan the keyboard. To work, the code to scan the keyboard has to take a fixed amount of time.
 
@@ -146,7 +161,7 @@ M_INT:	dec c			; Decrement scan-line counter
 
 EXEC_DISPLAY:
 	ld r,a			; Reset refresh counter
-	ei			; Enable interrupts and trigger HSync
+	ei			; Enable interrupts
 
 	jp (hl) 		; Execute next display line
 
@@ -157,7 +172,7 @@ NEXT_SCANLINE:
 	
 	ret z			; Timing-related: this is never
 	 			; satisfied, so always adds 5 T states
-	 			; to the code to delay start of HSYNC
+	 			; delay 
 
 	jr EXEC_DISPLAY		; Continue to execute display line
 
@@ -165,7 +180,9 @@ NEXT_SCANLINE:
 
 When setting up to produce the main display, the BC pair is initialised to 24 rows and 9 pixels per row (one more than needed as B is decremented at the start of the interrupt).
 
-There are two significant paths through the interrupt routine (the `jp` instruction is the branch point): one when progressing through a character row, and one when advancing to the next character row. It is very important that both paths take the same amount of time to complete, to provide a stable display. Using a `jp` rather than `jr` instruction and inserting a dummy `ret z` ensures both paths take 57 T states (17.5 us) to prepare to execute the display buffer. This time is reflected by the left-hand border on the screen display.
+There are two significant paths through the interrupt routine (the `jp` instruction is the branch point): one when progressing through a character row, and one when advancing to the next character row. It is very important that both paths take the same amount of time to complete, to provide a stable display. Using a `jp` rather than `jr` instruction and inserting a dummy `ret z` ensures both paths take 62 T states (20.3 us) to prepare to execute the display buffer. This time is reflected by the left-hand border on the screen display.
+
+The maskable interrupt is also responsible for triggering the Hsync signal. This happens in response to the Z80's IORQ signal, which is asserted as part of the fetch cycle of the first instruction of the interrupt routine (the maskable interrupt takes 13 T states to assert). Minstrel 3 circuitry means a Hsync signal is enabled during the fetch cycle of the next instruction. The Hysn signal is subsequently disabled during the fetch cycle of the fourth instruction.
 
 At the end of the main display, the NMI circuitry is enabled (having previously set it up to display the bottom border). The routine then exits (back to user code) and relies on the NMI circuitry to interrupt the Z80 at the end of each bottom-border display line.
 
@@ -173,7 +190,7 @@ At the end of the main display, the NMI circuitry is enabled (having previously 
 
 As noted above, the Husband Forth ROM does not produce a stable display on the Minstrel 3, so the first thing I wanted to do was check the timing of display generation in the ROM, based on the deduction above.
 
-A Husband Forth frame consists of a VSync signal (taking 402us), 105 border lines (each taking 64 us) and 192 main display lines, each taking 60.3us (based on 57+32*4+11 T states). This give a frame length of 18.1ms. Both the frame length and the main-display scanline length are shorter than idea, potentially leading to an undisplayable signal.
+A Husband Forth frame consists of a VSync signal (taking 402us), 105 border lines (each taking 64 us) and 192 main display lines, each taking 62.4us (based on 64+32*4+11 T states). This give a frame length of 18.1ms. Both the frame length and the main-display scanline length are shorter than idea, potentially leading to an undisplayable signal.
 
 However, when investigating the Husband Forth display code, I also spotted that the Z80 is never set to interrupt mode 1. This means it will operate in Interrupt Mode 0, which retrieves and executes an instruction from the data bus when an interrupt is generated.
 
@@ -182,3 +199,42 @@ However, when investigating the Husband Forth display code, I also spotted that 
 8 scan lines = 512 us = 1,664 T states
 
 Would like scanlines to be 12 T states longer
+
+Scanline:
+
+16 T states (Hsync) + 42 T states (left) +  128 (text) + 13+4+16  (interrupt and IORQ) = 207 T states
+
+## Dictionary Layout
+
+All Forth environments rely on a dictionary of words, which the user adds to to provide the functionality they need. On Husband Forth, the core of the dictionary is held in ROM and users add to it (with a colon-defined word, for example) in RAM.
+
+A typical H Forth word has three components:
+* It begins with a one-byte name-length-field, which is primarily used to hold the length of the word name. The lowest six bits hold the word-name length. The remaining tow bits are used to hold word properties.
+* The name-length-field is followed immediately by the name (as a sequence of bytes)
+* Third, a two-byte, word-length field which records the total size of the word in memory.
+* Fourth, the body of the word -- that is, its parameter field.
+
+A task word is slightly more complicate. It has four components:
+* It begins with a one-byte name-length-field, like a colon definition.
+* The name-length-field is followed immediately by the name.
+* Third, a two-byte, word-length field which records the total size of the word in memory.
+* Fourth, the address of the parameter field is stored, which is later in the defintion
+* Fifth is a sixteen-byte data structure containing key information about the task.
+* Finally, there is the parameter field, which contains a link to the parameter field of the word that the task actions.
+
+Further, the beginning (tail) and end (head) of the dictionary are stored in two system variables. New words are added to the head of the dictionary.
+
+The ROM part of the dictionary is actually backwards. The last word in the user's dictionary has a word-length field that effectively points to the head of the ROM dictionary: that is, to `M*`.
+
+## Character Stack
+
+In the default memory configuration, the character stack is located between FCC0h and FCFFh (that is, space for 64 characters) and grows down from FCFFh. The top of stack is held in a one-byte system-variable at FC84h (label `PSTACK_C`) and initially contains the value C0h.
+
+The restart routines at 18h and 20h are used to push/ pop characters onto/ off the stack, respectively. There are also more advanced routines, which use character stack, including:
+
+* PUSH_STRING (0637h) - which pushes a countable string in memory onto character stack (also pushing length of string onto parameter stack)
+
+* PRINT_STRING (0652h) - Print string from character stack (with length on parameter stack) to current screen
+
+* MATCH STRING (06A7h)
+
