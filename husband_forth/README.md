@@ -14,6 +14,8 @@ Versions of both the Husband Forth ROM (and Tree Forth ROM) are distributed with
 
 The Tynemouth Minstrel 3 is a modern-day, ZX81-compatible microcomputer with 32kB of RAM. I hoped to be able to run Husband Forth on the Minstrel 3. Sadly, neither the Husband Forth nor the Tree Forth ROMs, distributed with EightyOne, run on the Minstrel 3. I wanted to understand why this was and whether I could get Husband Forth to work, so I began to disassemble and study the ROM.
 
+![Tree Forth on a Minstrel 3](tree_forth.png)
+
 My expectation was that the display-handling code was not (quite) compatible with the Minstrel 3. A [discussion on a retrocomputing forum](https://forum.tlienhard.com/phpBB3/viewtopic.php?t=1438) suggests that the ROMs distributed with EightyOne have been tweaked to work correctly with the emulator, so perhaps these tweaks had rendered the ROMs unusable on real hardware.
 
 However, as I explain below, the problems were somewhat more subtle than that.
@@ -23,7 +25,7 @@ Happy Forth programming!
 
 ## Running Husband Forth on a Minstrel 3
 
-You can run either Husband Forth or Tree Forth on the Minstrel 3, but copying one of the ROM images [hforth_pal.rom] or [hforth_ntsc.rom] onto a suitable EPROM and installing in your Minstrel 3.
+You can run either Husband Forth or Tree Forth on the Minstrel 3, but copying one of the ROM images [hforth_pal.rom](forth_pal,rom) or [hforth_ntsc.rom](forth_ntsc.rom) onto a suitable EPROM and installing in your Minstrel 3.
 
 Make sure to set the appropriate jumpers for either NTSC or PAL, as appropriate to your chosen ROM, and you should be able to boot into the Forth system console screen.
 
