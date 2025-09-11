@@ -25,7 +25,7 @@ Happy Forth programming!
 
 ## Running Husband Forth on a Minstrel 3
 
-You can run either Husband Forth or Tree Forth on the Minstrel 3, but copying one of the ROM images [hforth_pal.rom](forth_pal,rom) or [hforth_ntsc.rom](forth_ntsc.rom) onto a suitable EPROM and installing in your Minstrel 3.
+You can run either Husband Forth or Tree Forth on the Minstrel 3, but copying one of the ROM images [hforth_pal.rom](hforth_pal,rom) or [hforth_ntsc.rom](hforth_ntsc.rom) onto a suitable EPROM and installing in your Minstrel 3.
 
 Make sure to set the appropriate jumpers for either NTSC or PAL, as appropriate to your chosen ROM, and you should be able to boot into the Forth system console screen.
 
