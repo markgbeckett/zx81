@@ -74,7 +74,7 @@
 	;; Choose your configuration Minstrel 3 compatibility and NTSC
 	;; (Tree Forth original) vs PAL (David Husband's port)
 MINSTREL3:	equ 0x01
-NTSC:		equ 0x00
+NTSC:		equ 0x01
 	
 	include "hforth_chars.asm"
 
@@ -104,8 +104,13 @@ TOP_BORDER_LINES:	equ 31	; H_FORTH uses 4Ah (30d) / better 56
 BOT_BORDER_LINES:	equ 73	; H_FORTH uses 1Eh (74d) / better 55
 	endif
 	endif
-	
 
+	;; Screen configuration options
+DISP_WIDTH:	equ 0x20	; Length of row in display buffer
+DISP_HEIGHT:	equ 0x18	; Number of rows in display buffer
+DBUFFER:	equ 0xFD00	; Address of display buffer in
+				; upper-memory
+	
 	;; H Forth  Memory Map (System Variables and Stacks)
 PSTACK_BASE:	equ OFFSET-0x0080 	; Base of Parameter Stack
 STACK0_BASE:	equ OFFSET+0x0080 	; Start of System Execution
@@ -119,7 +124,7 @@ STACKC_BASE:	equ OFFSET+0x01C0	; Base of Character stack
 	;; System variables
 VARS_BASE:	equ OFFSET+0x0150	; System variable base addr
 UNKNOWN6:	equ OFFSET+0x0152	; ???
-COUNTER:	equ OFFSET+0x0154	; Some kind of counter
+AUTO_CNT:	equ OFFSET+0x0154	; Counter for auto-mode
 RAM_SIZE:	equ OFFSET+0x0156	; Total RAM
 UNKNOWN4:	equ OFFSET+0x0158	; ???
 TIME:		equ OFFSET+0x015C	; Time variable (see Ch 15 of manual)
@@ -213,37 +218,44 @@ FLAGS2:		equ OFFSET+0x01BE	; Further flags
 TOKEN_LN:	equ OFFSET+0x01BF	; Track length of currently
 					; being entered token
 	
-	org	00000h
+	org	0x0000		; Start of ROM address space
 
 	;;
-	;; RST 00 routine (cold or warm restart)
+	;; RST 0x00 - Cold or warm restart
 	;; 
-l0000h:	out (0xFD),a		;0000 - Disable NMI Generator
-l0002h:	ld sp,STACK0_BASE	;0002 - Reset stack pointer
+RESTART:
+	out (0xFD),a		;0000 - Disable NMI Generator
+	ld sp,STACK0_BASE	;0002 - Reset stack pointer
 
 	if MINSTREL3=1
-l0005h:	jp RESTART_NEW		;0005 - Continue with reset
+l0005h:	jp RESTART_NEW		;0005 - Continue with augmented reset,
+				;       for Minstrel 3
 
 	else
-l0005h:	jp RESTART		;0005 - Continue with reset
+l0005h:	jp RESTART_CONT		;0005 - Continue with reset
 	endif
 
-	;; Push HL onto parameter stack
-	;; IY points to parameter stack
+	;;
+	;; RST 0x08 - Push HL onto Parameter Stack
+	;; 
+	;; IY points to Parameter Stack
 HL_TO_PSTACK:
-	dec iy		;0008
-l000ah:
+	dec iy			;0008
+
 	ld (iy+000h),h		;000a
-l000dh:
-	jr l004bh		;000d
+l000dh:	jr HTP_CONT		;000d
 
-	rst 38h			;000f
+	
+	rst 38h			;000f - Not sure this is ever used
 
-	;; Pop from Parameter Stack into HL
-	;; IY points to parameter stack
-l0010h:	ld l,(iy+000h)		;0010
+	;;
+	;; RST 0x10 - Pop from Parameter Stack into HL
+	;; 
+	;; IY points to Parameter Stack
+PSTACK_TO_HL:
+	ld l,(iy+000h)		;0010
 	inc iy			;0013
-	jr l0051h		;0015
+	jr PTH_CONT		;0015
 
 	
 	rst 38h			;0017
@@ -361,7 +373,8 @@ I_NEXT_SCANLINE:
 
 	
 	;; Continuation of PUSH_HL restart routine (RST 08)
-l004bh:	dec iy			;004b
+HTP_CONT:
+	dec iy			;004b
 	ld (iy+000h),l		;004d
 
 NO_ACTION:
@@ -369,7 +382,8 @@ NO_ACTION:
 				;       RET)
 
 	;; Continuation of POP_HL routine (RST 10)
-l0051h:	ld h,(iy+000h)		;0051
+PTH_CONT:
+	ld h,(iy+000h)		;0051
 	inc iy			;0054
 	
 	ret			;0056
@@ -454,18 +468,18 @@ RUN_DISPLAY:
 	push bc
 	push de
 
-	ld bc,0x1809		; 24 rows and 8 scan lines + 1
+	ld bc,DISP_HEIGHT*0x0100+0x0009	; 24 rows and 8 scan lines + 1
 	ld hl, RUN_VSYNC	; Store address of next but one display
 	ld (NEXT_DISP_ROUT), hl ; routine (VSync)
 
 	if MINSTREL3=1
-	ld hl, 0xFD00
+	ld hl, DBUFFER
 
 	else
 	ld hl,(P_DBUFFER)	; Point to start of display buffer
 				; (execution address in upper 32kB of
 				; memory)
-	;; set 7,h			; Switch address to upper memory
+	;; set 7,h		; Switch address to upper memory
 	endif
 	
 	ld a,0xEA		; Sets a pause before the main display
@@ -1125,7 +1139,7 @@ GET_SCR_OFFSET:
 				;       of 31d = %00011111)
 	ld l,a			;023a
 
-	;; Normalise high-byte of address (only need low two bits
+	;; Normalise high-byte of address (only need low two bits)
 	ld a,h			;023b
 	and 003h		;023c
 	ld h,a			;023e
@@ -1200,7 +1214,7 @@ GET_SCR_POSN:
 	;;        dimensions
 	;;   A  - corrupted
 GET_SCR_SIZE:
-	ld bc,l0000h		;0261 - Required adjustment (to screen
+	ld bc,0x0000		;0261 - Required adjustment (to screen
 				;       location)
 	ld a,(ix+004h)		;0264 - Retrieve rightmost column
 	sub (ix+002h)		;0267 - Subtract leftmost column
@@ -1244,7 +1258,7 @@ CLS:	call GET_SCR_SIZE	;0283 - BC = width, height of screen
 	
 	call GET_SCR_ADDR	;0287 - HL = start of screen
 
-	ld de,l0020h		;028a - DE = row length
+	ld de,DISP_WIDTH	;028a - DE = row length
 	ld a,(ix+007h)		;028d - Retrieve blank character for screen
 
 CLS_LOOP:
@@ -1286,7 +1300,7 @@ SCROLL_SCRN:
 	jr c,l02c2h		;02aa - Done if screen is negative sized
 	call GET_SCR_ADDR		;02ac
 
-	ld de,l0020h		;02af - Set DE to width of display
+	ld de,DISP_WIDTH		;02af - Set DE to width of display
 
 	;; Scroll screen
 l02b2h:	dec c			;02b2 - Rows to scroll is screen height-1
@@ -1670,15 +1684,17 @@ sub_03dah:
 	;; 
 PUT_DPAD:
 	;; Put pad only works in editor mode
-	call CHECK_EDIT_MODE	;03ee
-	ret z			;03f1
+	call CHECK_EDIT_MODE	;03ee - 0 = System Execution Context/ 1
+				;       = System Editor Contaxt
+	ret z			;03f1 - No action, if System Execution
+				;       context
 	
 	call CR			;03f2
 	call GET_SCR_POSN	;03f5 - Get current screen position
 	push hl			;03f8 - Save it
 	
 	ld hl,(P_DBUFFER)	;03f9 - Retrieve start of display buffer
-	ld de,l0200h		;03fc - 16 screen lines?
+	ld de,16*DISP_WIDTH	;03fc - 16 screen lines?
 	add hl,de		;03ff - Point to display copy of PAD
 
 l0400h:	ex de,hl		;0400 - DE points to display copy of pad
@@ -1711,7 +1727,7 @@ INVERT_LINE:
 
 IL_LOOP:
 	ld a,(hl)		;0413
-	xor 080h		;0414
+	xor %10000000		;0414
 	ld (hl),a		;0416
 	inc hl			;0417
 	djnz IL_LOOP		;0418
@@ -1721,8 +1737,8 @@ IL_LOOP:
 
 	ret			;041c
 
-l041dh:	call CHECK_EDIT_MODE	;041d
-	ret z			;0420
+l041dh:	call CHECK_EDIT_MODE	;041d 
+	ret z			;0420 - Return if in System Execution Context
 	call GET_SCR_SIZE	;0421
 	ld hl,(P_DBUFFER)	;0424
 	ld de,l0200h		;0427
@@ -1738,10 +1754,12 @@ l041dh:	call CHECK_EDIT_MODE	;041d
 	ld b,c			;043c
 	call INVERT_LINE	;043d
 	ret			;0440
+
 	call CHECK_EDIT_MODE	;0441
 	ret z			;0444
 	call PUT_DPAD		;0445
 	jp l03a3h		;0448
+
 	call CHECK_EDIT_MODE	;044b
 	ret z			;044e
 	call sub_03dah		;044f
@@ -1815,8 +1833,8 @@ FC_DONE:
 
 	ret			;048c - Done
 
-sub_048dh:
-	ld a,01fh		;048d
+PRINT_FLASH:
+	ld a,_FLASH		;048d
 	ld hl,(CONTEXT)		;048f
 
 	jp (hl)			;0492
@@ -3330,7 +3348,7 @@ RESET_TASKS:
 	;; 
 	;; Continuation of RST 0x00 routine
 	;;
-RESTART:
+RESTART_CONT:
 	;;  Check if Shift key is pressed (user-requested cold restart)
 	ld a,0x7F		;0946
 l0948h:	in a,(0xFE)		;0948 - Read keyboard half-row for
@@ -3589,9 +3607,9 @@ EDIT_MAIN_LOOP:
 	ld hl,(P_MTASK)		;0a27
 	call jump_to_hl		;0a2a
 
-	ld hl,(COUNTER)		;0a2d
+	ld hl,(AUTO_CNT)	;0a2d
 	inc hl			;0a30
-	ld (COUNTER),hl		;0a31
+	ld (AUTO_CNT),hl	;0a31
 	jr EDIT_MAIN_LOOP	;0a34
 
 	;; Part of processing word entered at keyboard (e.g., called
@@ -3694,8 +3712,8 @@ l0aa3h:	call STACK_DEHL	;0aa3
 	call sub_091eh		;0ab3
 	rst 18h			;0ab6
 	inc c			;0ab7
-	call UNSTACK_DEHL		;0ab8
-	call sub_0d93h		;0abb
+	call UNSTACK_DEHL	;0ab8
+	call CHECK_DEHL_ZERO	;0abb
 	jr nz,l0aa3h		;0abe
 	pop af			;0ac0
 	rra			;0ac1
@@ -3733,7 +3751,7 @@ l0addh:	rst 8			;0add
 	rst 18h			;0aea
 	inc c			;0aeb
 	rst 10h			;0aec
-	call sub_0d98h		;0aed
+	call CHECK_HL_ZERO		;0aed
 	jr nz,l0addh		;0af0
 	pop af			;0af2
 	jr z,l0ac8h		;0af3
@@ -3762,7 +3780,7 @@ MSTAR:
 	ex de,hl			;0b07
 	rst 10h			;0b08
 	call sub_0b19h		;0b09
-	call sub_0b3eh		;0b0c
+	call MULT_DE_HL		;0b0c
 	or a			;0b0f
 	call po,NEG_DEHL		;0b10
 	call STACK_DEHL		;0b13
@@ -3825,29 +3843,32 @@ STACK_DEHL:
 	
 	ret			;0b3d
 
-sub_0b3eh:
-	push ix		;0b3e
-l0b40h:
-	push bc			;0b40
-	ld ix,l0000h		;0b41
+	;; Multiply HL by DE
+MULT_DE_HL:
+	push ix			;0b3e
+l0b40h:	push bc			;0b40
+	
+	ld ix,0x0000		;0b41
 	ld b,010h		;0b45
 	or a			;0b47
 	jr l0b4ch		;0b48
-l0b4ah:
-	add ix,ix		;0b4a
-l0b4ch:
-	adc hl,hl		;0b4c
+l0b4ah:	add ix,ix		;0b4a
+l0b4ch:	adc hl,hl		;0b4c
 	jr nc,l0b55h		;0b4e
+
 	add ix,de		;0b50
 	jr nc,l0b55h		;0b52
 	inc hl			;0b54
-l0b55h:
-	djnz l0b4ah		;0b55
-	push ix		;0b57
+l0b55h:	djnz l0b4ah		;0b55
+
+	push ix			;0b57
 	pop de			;0b59
-	ex de,hl			;0b5a
+
+	ex de,hl		;0b5a
+
 	pop bc			;0b5b
-	pop ix		;0b5c
+	pop ix			;0b5c
+
 	ret			;0b5e
 
 	;; Forth word *
@@ -4340,13 +4361,15 @@ DUP:
 	
 	ret			;0d92
 
-sub_0d93h:
+CHECK_DEHL_ZERO:
 	ld a,l			;0d93
 	or h			;0d94
 	or e			;0d95
 	or d			;0d96
 	ret			;0d97
-sub_0d98h:
+
+
+CHECK_HL_ZERO:
 	ld a,l			;0d98
 	or h			;0d99
 	ret			;0d9a
@@ -4735,7 +4758,7 @@ l0f69h:
 	ld e,b			;0f7c
 	dec c			;0f7d
 	nop			;0f7e
-	ld hl,l0010h		;0f7f
+	ld hl,PSTACK_TO_HL		;0f7f
 	ld (BASE),hl		;0f82
 	ret			;0f85
 	inc bc			;0f86
@@ -4895,29 +4918,39 @@ l100dh:	ld (hl),c		;100d
 
 	ret			;1035
 
-sub_1036h:
-	ld hl,FLAGS3		;1036
+	;;  Service AUTO mode counter???
+SERVICE_AUTO:
+	;; Check if auto-mode enabled and exit if not
+ 	ld hl,FLAGS3		;1036
 	bit 7,(hl)		;1039
 	ret nz			;103b
-	ld de,l0000h		;103c
-	ld hl,(COUNTER)		;103f
+
+	;; Retrieve 32-bit counter into DEHL
+	ld de,0x0000		;103c
+	ld hl,(AUTO_CNT)	;103f
 	ex de,hl		;1042
-	ld (COUNTER),hl		;1043
+	ld (AUTO_CNT),hl	;1043
+
+	;; Check if high word is zero
 	ex de,hl		;1046
-	call sub_0d98h		;1047
-	jr z,l1060h		;104a
-	ld de,l0100h		;104c
+	call CHECK_HL_ZERO	;1047
+	jr z,FA_DISABLE_DISP	;104a - Disable display (as for FAST mode)
+
+	;; Check if high word > 0100 
+	ld de,0x0100		;104c
 	sbc hl,de		;104f
-	jr nc,l1073h		;1051
+	jr nc,SL_ENABLE_DISP	;1051 - Enable display (as for SLOW mode)
+
 	ret			;1053
 
 	;; Forth word FAST
 	db 0x04, _F, _A, _S, _T
 	dw 0x0013
 	
-	ld hl,FLAGS3		;105b
+FAST:	ld hl,FLAGS3		;105b
 	set 7,(hl)		;105e
-l1060h:	ld hl,SKIP_DISPLAY	;1060
+FA_DISABLE_DISP:
+	ld hl,SKIP_DISPLAY	;1060
 	ld (P_RUN_DISP),hl	;1063
 	ret			;1066
 
@@ -4928,13 +4961,14 @@ l1060h:	ld hl,SKIP_DISPLAY	;1060
 
 SLOW:	ld hl,FLAGS3		;106e
 	set 7,(hl)		;1071
-l1073h:	ld hl,RUN_DISPLAY	;1073
+SL_ENABLE_DISP:
+	ld hl,RUN_DISPLAY	;1073
 	ld (P_RUN_DISP),hl	;1076
 	
 	ret			;1079
 
 
-	ld (bc),a			;107a
+	ld (bc),a		;107a
 	ld b,h			;107b
 	ld b,b			;107c
 	ld hl,0dd00h		;107d
@@ -4995,9 +5029,9 @@ STORE_DEHL:
 	call DICT_ADD_CHAR_AND_HL		;10ce
 	call DICT_ADD_WORDS		;10d1
 	jp ERR_RESTART		;10d4
-l10d7h:
-	rst 10h			;10d7
-	jp sub_0d98h		;10d8
+l10d7h:	rst 10h			;10d7
+	jp CHECK_HL_ZERO	;10d8
+	
 	add a,h			;10db
 	ld b,l			;10dc
 	ld c,h			;10dd
@@ -5076,7 +5110,7 @@ LOCK:	ld hl,(MTASK_TAIL)	;1128 - Set HL to point to tail of task list
 	nop			;113a
 	ld hl,(MTASK_TAIL)		;113b
 l113eh:
-	ld de,l000ah		;113e
+	ld de,0x000A		;113e
 	add hl,de			;1141
 	res 7,(hl)		;1142
 	ret			;1144
@@ -5556,7 +5590,7 @@ sub_12c0h:
 sub_12c3h:
 	push hl			;12c3
 	push de			;12c4
-	ld bc,l0002h+2		;12c5
+	ld bc,0x0004		;12c5
 	add hl,bc			;12c8
 	ex de,hl			;12c9
 	add hl,bc			;12ca
@@ -5611,15 +5645,15 @@ l12edh:	ld a,(de)			;12ed
 	ret			;12f7
 
 sub_12f8h:
-	push iy		;12f8
+	push iy			;12f8
 	pop de			;12fa
-	ld hl,l0002h+2		;12fb
-	add hl,de			;12fe
+	ld hl,0x0004		;12fb
+	add hl,de		;12fe
 	ret			;12ff
-	ld (bc),a			;1300
+	ld (bc),a		;1300
 	ld b,h			;1301
 	dec hl			;1302
-	ld (de),a			;1303
+	ld (de),a		;1303
 	nop			;1304
 sub_1305h:
 	push hl			;1305
@@ -5696,7 +5730,7 @@ l1354h:
 	ret			;1367
 	ld (bc),a			;1368
 	ld b,e			;1369
-	ld hl,l000ah+1		;136a
+	ld hl,0x000B		;136a
 	rst 10h			;136d
 	ex de,hl			;136e
 	rst 10h			;136f
@@ -5772,11 +5806,14 @@ l13b6h: rst 10h			;13b6
 	pop bc			;13b9
 	jp INSERT_CHAR		;13ba
 
-	call SERVICE_CLOCK	;13bd
+	;; Default task that is executed 50/ 60 times per second
+DEF_TASK:
+	call SERVICE_CLOCK	;13bd - Update clock
 	call CHECK_KIB		;13c0
-	call z,sub_048dh	;13c3
+	call z,PRINT_FLASH	;13c3 - Flash cursor, if no key pressed
+	
 	call CHECK_MEM		;13c6
-	call sub_1036h		;13c9
+	call SERVICE_AUTO	;13c9
 
 	;; Set to indicate warm restart is possible
 	ld hl,F_WARM_RESTART	;13cc
@@ -5810,7 +5847,7 @@ SERVICE_CLOCK:
 	call INIT_NEW_WORD		;13f8
 	ld hl,l0fdeh		;13fb
 	call DICT_ADD_CALL_HL		;13fe
-	ld hl,l0000h		;1401
+	ld hl,0x0000		;1401
 	push hl			;1404
 
 	call DICT_ADD_HL	;1405
@@ -6132,7 +6169,7 @@ sub_15a5h:
 	push bc			;15a6
 	ld e,000h		;15a7
 l15a9h:
-	ld bc,l0000h		;15a9
+	ld bc,0x0000		;15a9
 l15ach:
 	ld a,07fh		;15ac
 	in a,(0feh)		;15ae
@@ -6391,23 +6428,23 @@ l16d5h:	jr z,GT_CONT_2		;16d5 - Jump if TOS <= 20S
 	nop			;16e8
 	call sub_0eebh		;16e9
 	jp l0e7bh		;16ec
-	ld (bc),a			;16ef
+	ld (bc),a		;16ef
 	dec hl			;16f0
-	ld hl,l0010h+2		;16f1
+	ld hl,0x0012		;16f1
 	rst 10h			;16f4
 	push hl			;16f5
-	ld e,(hl)			;16f6
+	ld e,(hl)		;16f6
 	inc hl			;16f7
-	ld d,(hl)			;16f8
+	ld d,(hl)		;16f8
 	rst 10h			;16f9
-	add hl,de			;16fa
-	ex de,hl			;16fb
+	add hl,de		;16fa
+	ex de,hl		;16fb
 	pop hl			;16fc
-	ld (hl),e			;16fd
+	ld (hl),e		;16fd
 	inc hl			;16fe
-	ld (hl),d			;16ff
+	ld (hl),d		;16ff
 	ret			;1700
-	ld (bc),a			;1701
+	ld (bc),a		;1701
 	dec hl			;1702
 	dec l			;1703
 	inc d			;1704
@@ -7021,39 +7058,45 @@ l19f0h:	rst 20h			;19f0
 	ld hl,CPU_MSG		;19ff
 	jp PRINT_STR_HL		;1a02
 
-
-	ld (bc),a		;1a05
-	ld d,l			;1a06
-	ld hl,(l000dh+1)	;1a07
-	call UNSTACK_DEHL		;1a0a
-	call sub_0b3eh		;1a0d
+	;; Forth word U*
+	;;
+	db 0x02, _U, _ASTERISK
+	dw 0x000E
+	
+	call UNSTACK_DEHL	;1a0a
+	call MULT_DE_HL		;1a0d
 	jp STACK_DEHL		;1a10
-	dec b			;1a13
-	ld d,l			;1a14
-	cpl			;1a15
-	ld c,l			;1a16
-	ld c,a			;1a17
-	ld b,h			;1a18
-	inc d			;1a19
-	nop			;1a1a
+
+	;; Forth word U/MOD
+	;;
+	;; Divide 32-bit number (2OS) by 16-bit number (TOS), returning
+	;; quotient (2OS) and remainder (TOS)
+	db 0x05, _U, _SLASH, _M, _O, _D
+	dw 0x0014
+	
 sub_1a1bh:
 	rst 10h			;1a1b
 	push hl			;1a1c
 	pop bc			;1a1d
-	call UNSTACK_DEHL		;1a1e
+	call UNSTACK_DEHL	;1a1e
 	call sub_0ba0h		;1a21
 	jp STACK_DEHL		;1a24
-	inc b			;1a27
-	ld d,l			;1a28
-	ld c,l			;1a29
-	ld c,a			;1a2a
-	ld b,h			;1a2b
-	rrca			;1a2c
-	nop			;1a2d
+
+	;; Forth word UMOD
+	;;
+	;; Divide 32-bit number (2OS) by 16-bit number (TOS), returning
+	;; quotient (2OS) and remainder (TOS)
+	db 0x04, _U, _M, _O, _D
+	dw 0x000F
+	
 	call sub_1a1bh		;1a2e
 	call SWAP		;1a31
 	rst 10h			;1a34
 	ret			;1a35
+
+	;; Forth word U<
+	;;
+	
 	ld (bc),a			;1a36
 	ld d,l			;1a37
 	inc a			;1a38
@@ -7062,6 +7105,8 @@ sub_1a1bh:
 	or a			;1a3e
 	sbc hl,de		;1a3f
 	jp GT_CONT_2		;1a41
+
+
 	inc bc			;1a44
 	ld c,l			;1a45
 	ld c,c			;1a46
@@ -7102,7 +7147,7 @@ l1a53h:
 	dw 0x0010
 	
 l1a74h:	rst 10h			;1a74
-	ld de,l0000h		;1a75
+	ld de,0x0000		;1a75
 	ex de,hl		;1a78
 	rst 8			;1a79
 	ex de,hl		;1a7a
@@ -7137,7 +7182,7 @@ l1a9ah:
 	jr nc,l1adeh		;1a9f
 	ld c,000h		;1aa1
 	call UNSTACK_DEHL	;1aa3
-	call sub_0d93h		;1aa6
+	call CHECK_DEHL_ZERO	;1aa6
 	jr l1a96h		;1aa9
 	inc b			;1aab
 	ld b,h			;1aac
@@ -7545,7 +7590,7 @@ RESTART_NEW:
 				; ROM does not do this meaning initially
 				; data is loaded into top of memory)
 
-	jp RESTART
+	jp RESTART_CONT
 
 	endif
 
@@ -7682,8 +7727,8 @@ DEFVARS:
 	dw OFFSET+0x0136		; MSTACK1
 	db 0x00, 0x00, 0x00, 0x00	; MTASK_TAIL
 	db 0x00, 0x00, 0xF1, 0xFF
-	db 0xFF, 0xFF, 0x00, 0xBD
-	db 0x13
+	db 0xFF, 0xFF, 0x00
+	dw DEF_TASK
 	db 0x00				;1de5 - FLAGS3
 	dw 0x04CF			; CONTEXT
 	dw WRITE_TO_KIB			; Keyboard routine
