@@ -1,3 +1,6 @@
+	;; Do I have Execution Context and Editor Context in correct
+	;; order
+
 ; z80dasm.1.6
 ; command line: z80dasm -g 0 -a -l -o hforth.asm husband_forth.bin
 
@@ -835,9 +838,10 @@ l0153h:	ld a,(ix+004h)		;0153
 	jr z,l0136h		;015e
 
 	;; Check if change to counter limit is required ???
-	bit 6,(ix+004h)		;0160
-	jr nz,l0136h		;0164
-	inc (ix+004h)		;0166
+	bit 6,(ix+004h)		;0160 - Check if task is stopped
+	jr nz,l0136h		;0164	and move on, if so
+	inc (ix+004h)		;0166 - Increment task priority
+	
 	jr l0136h		;0169
 
 	;; Task's time is non-zero, so increment and done
@@ -858,10 +862,10 @@ l0170h:	inc (hl)		;0170 - Increase digit
 	;; current task's link field address being zero)
 l0178h:	pop hl			;0178 - Discard address of next-task's
 				;       link field, as is nonsense
-l0179h:	pop hl			;0179 - Retrieve address of start of
-	push hl			;017a   task list and save it again
+l0179h:	pop hl			;0179 - Retrieve address of first/ next
+	push hl			;017a   task and save it again
 
-	;; Retrieve address of link field of next task
+	;; Retrieve address of link field to next task
 	ld a,(hl)		;017b
 	inc hl			;017c
 	ld h,(hl)		;017d
@@ -894,15 +898,17 @@ l018bh:	ld a,(hl)		;018b - Retrieve task status flag
 
 	bit 6,a			;0190 - Check if Task is stopped and
 	jr nz,l0179h		;0192   move on to next task, if so
-	
-	or a			;0194 - Also, move to next task if
+
+	;; Check task's priority
+	or a			;0194 - Move on if task's
 	jr z,l0179h		;0195   priority is zero
 
 	;; Service task
 	dec (hl)		;0197 - Decrement priority (Bits 6 and 7
 				;       are guaranteed to be reset at
 				;       this point)
-	set 7,(hl)		;0198 - Set task locking
+	set 7,(hl)		;0198 - Set task locking to prevent
+				;       other tasks running.
 
 	;; Save registers
 	push hl			;019a
@@ -936,8 +942,9 @@ l018bh:	ld a,(hl)		;018b - Retrieve task status flag
 
 l01b6h:	res 4,(hl)		;01b6 - Set to Execution Context
 	set 5,(hl)		;01b8 - Lock context switching
-	ex (sp),hl		;01ba - Extract return address into HL,
-				;       saving HL at the same time.
+	ex (sp),hl		;01ba - Extract task's action address
+				;       into HL, saving HL at the same
+				;       time.
 	
 	;; Switch from Stack 1 to Stack 0
 	ld (MSTACK1),sp		;01bb 
@@ -4089,13 +4096,13 @@ l0c4ch:
 	or a			;0c4f
 l0c50h:
 	rl (ix+004h)		;0c50
-	inc ix		;0c54
+	inc ix			;0c54
 	dec c			;0c56
 	jr nz,l0c50h		;0c57
-	pop ix		;0c59
-	call sub_12c3h		;0c5b
+	pop ix			;0c59
+	call COMPARE_DNUM	;0c5b
 	jr c,l0c67h		;0c5e
-	call sub_12e7h		;0c60
+	call HL_MINUS_DE		;0c60
 	set 0,(ix+004h)		;0c63
 l0c67h:
 	pop bc			;0c67
@@ -4210,7 +4217,7 @@ sub_0cfbh:
 	push hl			;0d09
 	rl d		;0d0a
 	pop de			;0d0c
-	call sub_12e7h		;0d0d
+	call HL_MINUS_DE	;0d0d
 	pop de			;0d10
 	pop hl			;0d11
 	ret			;0d12
@@ -5580,31 +5587,44 @@ l12ach:	ld de,TIME		;12ac - Point to current time
 	or a			;12af - Reset carry
 	call TIC		;12b0 - Work out system time - offset
 	jp nc,SCHEDULE_IN	;12b3 - Move on, if okay
-	call sub_12e7h		;12b6 - Otherwise ???
-	ld e,068h		;12b9
-	call sub_12e7h		;12bb
+
+	call HL_MINUS_DE	;12b6 - Otherwise ???
+	ld e,PER & 0x00FF	;12b9 - Set DE to point to PER
+	call HL_MINUS_DE	;12bb
 	jr l12ach		;12be
 
 sub_12c0h:
 	call sub_12f8h		;12c0
-sub_12c3h:
+
+	;; Compare the 32-bit numbers pointed to by HL and DE
+	;;
+	;; On exit
+	;;   Z - set for match, reset otherwise
+	;;   BC - corrupted
+COMPARE_DNUM:
 	push hl			;12c3
 	push de			;12c4
+
 	ld bc,0x0004		;12c5
-	add hl,bc			;12c8
-	ex de,hl			;12c9
-	add hl,bc			;12ca
+	add hl,bc		;12c8 - Advance to TIME + 04 (put in DE)
+	ex de,hl		;12c9
+	add hl,bc		;12ca - Advance to PER + 04
 	ld b,c			;12cb
 
-l12cch:	dec hl			;12cc
+	;; Check if each digit match, one at a time, starting with final
+	;; digit and working down
+CD_LOOP:
+	dec hl			;12cc
 	dec de			;12cd
-	ld a,(de)			;12ce
+	ld a,(de)		;12ce
 	cp (hl)			;12cf
-	jr nz,l12d4h		;12d0
-	djnz l12cch		;12d2
+	jr nz,CD_DONE		;12d0
+	djnz CD_LOOP		;12d2
 
-l12d4h:	pop de			;12d4
+CD_DONE:
+	pop de			;12d4
 	pop hl			;12d5
+
 	ret			;12d6
 
 	;; Increment time counter
@@ -5626,22 +5646,30 @@ TIC_LOOP:
 	pop hl			;12e5
 
 	ret			;12e6
-	
-sub_12e7h:
+
+	;; Subtract 32-bit number pointed to by DE from 32-bit number
+	;; pointed to by HL and store result in location pointed to by
+	;; HL
+HL_MINUS_DE:
 	push hl			;12e7
 	push de			;12e8
 	push bc			;12e9
-	ld b,004h		;12ea
-	ex de,hl			;12ec
-l12edh:	ld a,(de)			;12ed
-	sbc a,(hl)			;12ee
-	ld (de),a			;12ef
+
+	ld b,004h		;12ea - Four bytes
+	ex de,hl		;12ec
+
+HMD_LOOP:
+	ld a,(de)		;12ed
+	sbc a,(hl)		;12ee
+	ld (de),a		;12ef
 	inc hl			;12f0
 	inc de			;12f1
-	djnz l12edh		;12f2
+	djnz HMD_LOOP		;12f2
+
 	pop bc			;12f4
 	pop de			;12f5
 	pop hl			;12f6
+
 	ret			;12f7
 
 sub_12f8h:
@@ -5673,7 +5701,7 @@ sub_1305h:
 	push hl			;1317
 	push de			;1318
 	call sub_12f8h		;1319
-	call sub_12e7h		;131c
+	call HL_MINUS_DE		;131c
 	rst 10h			;131f
 	rst 10h			;1320
 	pop de			;1321
@@ -5806,14 +5834,14 @@ l13b6h: rst 10h			;13b6
 	pop bc			;13b9
 	jp INSERT_CHAR		;13ba
 
-	;; Default task that is executed 50/ 60 times per second
+	;; Default task that is executed every 15 frames
 DEF_TASK:
 	call SERVICE_CLOCK	;13bd - Update clock
-	call CHECK_KIB		;13c0
+	call CHECK_KIB		;13c0 - Check for keyboard input
 	call z,PRINT_FLASH	;13c3 - Flash cursor, if no key pressed
 	
-	call CHECK_MEM		;13c6
-	call SERVICE_AUTO	;13c9
+	call CHECK_MEM		;13c6 - Check for out-of-memory
+	call SERVICE_AUTO	;13c9 - If AUTO mode, service counter
 
 	;; Set to indicate warm restart is possible
 	ld hl,F_WARM_RESTART	;13cc
@@ -5821,19 +5849,26 @@ DEF_TASK:
 
 	ret			;13d1
 
+	
 SERVICE_CLOCK:
 	push hl			;13d2
 	push de			;13d3
 
+	;; Service timer ???
 	ld hl,UNKNOWN4		;13d4
 	ld de,UNKNOWN5		;13d7
 	call TIC		;13da
-	ld l,05ch		;13dd
-	ld e,064h		;13df
+
+	;; Update DE and HL to point to clock (relies on them being in
+	;; same page)
+	ld l,TIME & 0x00FF	;13dd
+	ld e,TIC_COUNTER & 0x00FF	;13df
 	call TIC		;13e1
-	ld e,068h		;13e4
-	call sub_12c3h		;13e6
-	call nc,sub_12e7h		;13e9
+
+	;; Check if timer has reached limit (in PER)
+	ld e,PER & 0x00FF	;13e4
+	call COMPARE_DNUM	;13e6
+	call nc,HL_MINUS_DE	;13e9 - If TIME>PER, TIME=TIME-PER
 
 	pop de			;13ec
 	pop hl			;13ed
@@ -7701,11 +7736,11 @@ l1d9bh:	db 0x08			 ; 5 (Left)
 	;; Copy of system variables 1DA0--1DFF
 DEFVARS:
 	db 0x00, 0x00, 0x00, 0x00	; UNKNOWN5 (7C60)
-	db 0x0F, 0x00, 0x00, 0x00 	; TIC_COUNTER (7C64)
+	db 0x0F, 0x00, 0x00, 0x00 	; TIC_COUNTER (7C64) - 15 frames
 	db 0x00, 0x1A, 0x4F, 0x00	; PER (7C68)
 	dw 0x4000			; RAM_START
 	dw OFFSET+0x0200		; P_DBUFFER
-	dw OFFSET+0x0198		; PM_TASK_LIST_HD (1db0)
+	dw OFFSET+0x0198		; PMTASK_LIST_HD (1db0)
 	dw 0x2000			; FENCE
 	dw PRINT_DRV			; PRINTER DRIVER
 	dw OFFSET+0x0200		; DISP_2
