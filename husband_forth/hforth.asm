@@ -76,8 +76,8 @@
 
 	;; Choose your configuration Minstrel 3 compatibility and NTSC
 	;; (Tree Forth original) vs PAL (David Husband's port)
-MINSTREL3:	equ 0x01
-NTSC:		equ 0x01
+MINSTREL3:	equ 0x00
+NTSC:		equ 0x00
 	
 	include "hforth_chars.asm"
 
@@ -149,7 +149,7 @@ F_WARM_RESTART:	equ OFFSET+0x0178 	; Set to FF during restart, to
 					; possible
 PARSE_NUM_ROUT:	equ OFFSET+0x017A 	; Routine to parse number from
 					; character buffer
-P_MTASK:	equ OFFSET+0x017C	; Location of multitasking scheduler
+P_BACKTASK:	equ OFFSET+0x017C	; Location of multitasking scheduler
 KIB_R_OFFSET:	equ OFFSET+0x017E	; Offset to most recently read
 					; entry in Keyboard Input Buffer
 KIB_W_OFFSET:	equ OFFSET+0x017F	; Offset to most recently
@@ -3344,9 +3344,9 @@ RESET_TASKS:
 	bit 6,(hl)		;0937   (as set by TON)
 	ret nz			;0939 - Return if so
 
-	;; Disable multitasking
+	;; Disable background task
 	ld hl,NO_ACTION		;093a - Points to RET statement 
-	ld (P_MTASK),hl		;093d
+	ld (P_BACKTASK),hl	;093d
 
 	call LOCK		;0940 - Lock multi-tasking
 
@@ -3611,12 +3611,15 @@ EDIT_MAIN_LOOP:
 
 	call COMPILE_SCREEN	;0a24
 
-	ld hl,(P_MTASK)		;0a27
+	;; Run background task
+	ld hl,(P_BACKTASK)	;0a27
 	call jump_to_hl		;0a2a
 
+	;; Service auto counter
 	ld hl,(AUTO_CNT)	;0a2d
 	inc hl			;0a30
 	ld (AUTO_CNT),hl	;0a31
+	
 	jr EDIT_MAIN_LOOP	;0a34
 
 	;; Part of processing word entered at keyboard (e.g., called
@@ -5371,12 +5374,12 @@ SCHEDULE_RUN:
 	pop hl			;11e7 - Discard time value
 	pop hl			;11e8
 
-	bit 6,(ix+00ah)		;11e9 - Check if task is stopped
-	jr nz,SR_CONT		;11ed   Skip forward, if so
+	bit 6,(ix+0x0A)		;11e9 - Check if task is stopped
+	jr nz,SR_DONE		;11ed   Skip forward, if so
 
-	inc (ix+0x0A)		;11ef - Increase priority???
+	inc (ix+0x0A)		;11ef - Increase priority
 
-SR_CONT:
+SR_DONE:
 	pop ix			;11f2 - Restore IX
 
 	ret			;11f4
@@ -6854,11 +6857,12 @@ l18c7h:
 	db 0x04, _B, _A, _C, _K
 	dw 0x000E
 
+	;; Update background text to point to code field of selected
+	;; word
 	call TICK_WORD		;18d4
-	ld (P_MTASK),hl		;18d7
+	ld (P_BACKTASK),hl	;18d7
 
 	ret			;18da
-
 
 	;; Forth word MEM
 	db 0x03, _M, _E, _M	; MEM
@@ -6903,10 +6907,9 @@ CHECK_MEM:
 	bit 3,(hl)		;18fd
 	ret nz			;18ff
 	call FREE_MEM		;1900
-	ld de,0xFFE0		;1903 - OFFSET+0x04E0
-	add hl,de		;1906
+	ld de,0xFFE0		;1903 - That is, -32
+	add hl,de		;1906 - HL = HL-32
 
-	
 	if MINSTREL3=1
 	ret c
 	
@@ -6924,8 +6927,9 @@ CHECK_MEM:
 	;; Out of memory
 	ld hl,FLAGS3		;190e
 	set 3,(hl)		;1911
-	ld a,04dh		;1913
-	jp PRINT_ERR_MSG		;1915
+	ld a,_M			;1913 - Error: Out of memory
+	jp PRINT_ERR_MSG	;1915
+	
 
 	;; Forth word FENCE
 	db 0x05, _F, _E, _N, _C, _E
@@ -6960,12 +6964,14 @@ GET_WORD_AND_UNSTACK:
 	ld a,_F			;1949 - Error: Fenced word
 	jp nc,PRINT_ERR_MSG	;194b
 	
-	;; Check if will delete a scheduled task
-	ld hl,(P_MTASK)		;194e
+	;; Check if will delete background task
+	ld hl,(P_BACKTASK)	;194e
 	call DE_CMP_HL		;1951
-	jr c,l195ch		;1954
-	ld hl,NUL		;1956
-	ld (P_MTASK),hl		;1959
+	jr c,l195ch		;1954 - Jump forward, if not
+	ld hl,NUL		;1956 - Otherwise, disable background
+	ld (P_BACKTASK),hl	;1959   task
+
+	;; Check if need to remove items from task list
 l195ch:	ld hl,(PMTASK_LIST_HD)	;195c
 l195fh:	push hl			;195f
 	pop bc			;1960
@@ -6983,8 +6989,8 @@ l195fh:	push hl			;195f
 	ld (bc),a		;1971
 	inc bc			;1972
 	ld (bc),a		;1973
-l1974h:
-	ex de,hl		;1974
+
+l1974h:	ex de,hl		;1974
 	ld (UNKNOWN2),hl	;1975
 
 	call FIND_NEXT_WORD	;1978
@@ -6992,6 +6998,7 @@ l1974h:
 
 	jp INIT_DICT		;197e
 
+	
 	;; FORTH word TOFF
 	db 0x04, 0x54, 0x4F, 0x46, 0x46
 	db 0x0D, 0x00
@@ -7746,7 +7753,7 @@ DEFVARS:
 	dw OFFSET+0x0200		; DISP_2
 	db 0ffh,000h			; F_WARM_RESTART
 	dw sub_0a36h			; PARSE_NUM_ROUTINE
-	dw NO_ACTION			; P_MTASK
+	dw NO_ACTION			; P_BACKTASK
 	db 0x80, 0x80			; KIB_R_OFFSET, KIB_W_OFFSET
 	dw RUN_VSYNC			; NEXT_DISP_ROUT (1DC0)
 	dw RUN_DISPLAY			; P_RUN_DISPLAY
