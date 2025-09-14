@@ -3303,8 +3303,14 @@ READ_FROM_KIB:
 
 	ret			;091d - Done
 
-	
-sub_091eh:
+	;; Convert digit to ASCII character (with base)
+	;; 
+	;; On entry:
+	;;   A - digit to convert
+	;;
+	;; On exit:
+	;;   A - ASCII code of digit
+BYTE_TO_ASCII:
 	add a,090h		;091e
 	daa			;0920
 	adc a,040h		;0921
@@ -3701,74 +3707,94 @@ l0a92h:
 	djnz l0a4ch		;0a92
 	jr l0a66h		;0a94
 
-sub_0a96h:
+	;; Convert 32-bit number on Parameter Stack into counted string
+	;; on Character Stack
+D_TOS_TO_STRING:
 	push hl			;0a96
 	push de			;0a97
 	push bc			;0a98
+
 	xor a			;0a99
-	ld c,001h		;0a9a
-	call UNSTACK_DEHL		;0a9c
-	call sub_0b28h		;0a9f
+	ld c,001h		;0a9a - Set length of string
+
+	call UNSTACK_DEHL	;0a9c - Retrieve number
+	call ABS_SGN_DEHL	;0a9f - Separate sign and magnitude
+
 	push af			;0aa2
-
-l0aa3h:	call STACK_DEHL	;0aa3
+DTTS_LOOP:	call STACK_DEHL		;0aa3
 	ld hl,(BASE)		;0aa6
-	rst 8			;0aa9
-	call S_TO_D		;0aaa
-	call 00cc5h		;0aad
-	rst 10h			;0ab0
-	ld a,l			;0ab1
-	rst 10h			;0ab2
-	call sub_091eh		;0ab3
-	rst 18h			;0ab6
-	inc c			;0ab7
-	call UNSTACK_DEHL	;0ab8
-	call CHECK_DEHL_ZERO	;0abb
-	jr nz,l0aa3h		;0abe
-	pop af			;0ac0
+	rst 8			;0aa9 - Push base onto Parameter Stack
+	call S_TO_D		;0aaa   and convert to double
+	call D_SLASH		;0aad - Divide
+	rst 10h			;0ab0 - Retrieve low bytes of remainder,
+				;       which will be no bigger than
+				;       255d.
+	ld a,l			;0ab1 - Move into A
+	rst 10h			;0ab2 - Retrieve high byte of remainder
+				;       (effectively, discard)
+	call BYTE_TO_ASCII	;0ab3 - Convert remainder (digit) to 
+	rst 18h			;0ab6   ASCII and add to Character Stack
+	inc c			;0ab7 - Increase string length
+	call UNSTACK_DEHL	;0ab8 - Retrieve quotient
+	call CHECK_DEHL_ZERO	;0abb - Check if zero (i.e., done)
+	jr nz,DTTS_LOOP		;0abe - Repeat, if not
+	
+	pop af			;0ac0 - Check for negative
 	rra			;0ac1
-	jr nc,l0ac8h		;0ac2
-	ld a,02dh		;0ac4
+	jr nc,DTTS_CONT		;0ac2 - Skip forward, if positive
+	ld a,_MINUS		;0ac4 - Add "-" to beginning of string
 	rst 18h			;0ac6
-	inc c			;0ac7
+	inc c			;0ac7 - Increase string length
 
-l0ac8h:	ld a,020h		;0ac8
+DTTS_CONT:	ld a,_SPACE		;0ac8 - Pad with space
 	rst 18h			;0aca
-	ld h,000h		;0acb
-	ld l,c			;0acd
+
+	ld h,000h		;0acb - Move string length to HL
+	ld l,c			;0acd   and store to stack
 	rst 8			;0ace
-	pop bc			;0acf
+
+	pop bc			;0acf - Restore registers
 	pop de			;0ad0
 	pop hl			;0ad1
+
 	ret			;0ad2
 
-sub_0ad3h:
-	push hl			;0ad3
+	;; Convert number to string
+TOS_TO_STRING:
+	push hl			;0ad3 - Save registers
 	push de			;0ad4
 	push bc			;0ad5
-	ld c,001h		;0ad6
-	rst 10h			;0ad8
-	call sub_0b19h		;0ad9
 
-	push af			;0adc
-l0addh:	rst 8			;0add
+	ld c,001h		;0ad6 
+	rst 10h			;0ad8 - Retrieve number
+
+	call ABS_SGN_HL		;0ad9 - Separate sign (HL = ABS(HL))
+
+	push af			;0adc - Save sign
+l0addh:	rst 8			;0add - Save ABS(HL) onto Parameter Stack
+
 	ld hl,(BASE)		;0ade
-	rst 8			;0ae1
-	call DIV_TO_MDIV	;0ae2
-	rst 10h			;0ae5
+	rst 8			;0ae1 - Stack number base
+	call DIV_TO_MDIV	;0ae2 - Divide ABS(HL) by BASE
+	rst 10h			;0ae5 - Pop quotient
 	ld a,l			;0ae6
-	call sub_091eh		;0ae7
-	rst 18h			;0aea
-	inc c			;0aeb
-	rst 10h			;0aec
-	call CHECK_HL_ZERO		;0aed
-	jr nz,l0addh		;0af0
+	call BYTE_TO_ASCII	;0ae7
+
+	rst 18h			;0aea - Push to character stack
+	inc c			;0aeb - Increase character count
+	rst 10h			;0aec - Pop remainder
+
+	call CHECK_HL_ZERO	;0aed - Check if zero and repeat
+	jr nz,l0addh		;0af0   if not
+
 	pop af			;0af2
-	jr z,l0ac8h		;0af3
-	ld a,02dh		;0af5
-	rst 18h			;0af7
-	inc c			;0af8
-	jr l0ac8h		;0af9
+	
+	jr z,DTTS_CONT		;0af3 - Jump if sign is positive
+	ld a,_MINUS		;0af5
+	rst 18h			;0af7 - Add "-"
+	inc c			;0af8 - Increase string length
+
+	jr DTTS_CONT		;0af9
 
 	
 	;; Start of built-in FORTH dictionary. (0AFBh)
@@ -3786,10 +3812,10 @@ MSTAR:
 	push de			;0b01
 	xor a			;0b02
 	rst 10h			;0b03
-	call sub_0b19h		;0b04
+	call ABS_SGN_HL		;0b04
 	ex de,hl			;0b07
 	rst 10h			;0b08
-	call sub_0b19h		;0b09
+	call ABS_SGN_HL		;0b09
 	call MULT_DE_HL		;0b0c
 	or a			;0b0f
 	call po,NEG_DEHL		;0b10
@@ -3799,14 +3825,22 @@ MSTAR:
 
 	ret			;0b18
 
-sub_0b19h:
-	bit 7,h		;0b19
+	;; Separate signed integer in HL into sign and magnitude
+	;;
+	;; On entry:
+	;;   HL - signed integer
+	;;
+	;; On exit
+	;;   HL - ABS(HL)
+	;;   Z - set for positive/ reset for negative
+ABS_SGN_HL:
+	bit 7,h			;0b19 - Check if negative
 	ret z			;0b1b
-	scf			;0b1c
-	rla			;0b1d
 
-NEG_HL:
-	push de			;0b1e
+	scf			;0b1c - Set bit 0 of A to be
+	rla			;0b1d   sign (1=-ve; 0=+ve)
+
+NEG_HL:	push de			;0b1e
 	
 	ld de,0x0000		;0b1f
 	or a			;0b22
@@ -3817,8 +3851,16 @@ NEG_HL:
 
 	ret			;0b27
 
-sub_0b28h:
-	bit 7,d		;0b28
+	;; Separate sign and magnitude of 32-bit number is DEHL.
+	;;
+	;; On entry:
+	;;   DEHL - 32-bit, signed integer
+	;;
+	;; On exit
+	;;   DEHL - ABS(DEHL) 
+	;;   A(1)  - set if positive/ reset if negative.
+ABS_SGN_DEHL:
+	bit 7,d			;0b28
 	ret z			;0b2a
 	scf			;0b2b
 	rla			;0b2c
@@ -3826,9 +3868,11 @@ sub_0b28h:
 NEG_DEHL:
 	call NEG_HL		;0b2d
 	ex de,hl		;0b30
-	jr nc,l0b34h		;0b31
+	jr nc,ND_CONT		;0b31
 	inc hl			;0b33
-l0b34h:	call NEG_HL		;0b34
+
+ND_CONT:
+	call NEG_HL		;0b34
 	ex de,hl		;0b37
 
 	ret			;0b38
@@ -3882,6 +3926,7 @@ l0b55h:	djnz l0b4ah		;0b55
 	ret			;0b5e
 
 	;; Forth word *
+	;; 
 	db 0x01, _ASTERISK
 	dw 0x000F
 
@@ -3913,11 +3958,11 @@ MSLASH:
 
 	xor a			;0b76
 	rst 10h			;0b77
-	call sub_0b19h		;0b78
+	call ABS_SGN_HL		;0b78
 	push hl			;0b7b
 	pop bc			;0b7c
 	call UNSTACK_DEHL		;0b7d
-	call sub_0b28h		;0b80
+	call ABS_SGN_DEHL		;0b80
 	call sub_0ba0h		;0b83
 	or a			;0b86
 	jr z,l0b94h		;0b87
@@ -4032,11 +4077,11 @@ DIV_TO_MDIV:
 	
 	;; Forth word S->D
 	;; Convert single-precision to double-precision number
+	;; 
 	db 0x04, _S, _MINUS, _GREATERTHAN, _D
 	dw 0x0016
 
-S_TO_D:
-	push de			;0c13
+S_TO_D:	push de			;0c13
 	push hl			;0c14
 	
 	rst 10h			;0c15 - Pop from stack into HL
@@ -4053,45 +4098,45 @@ S_TO_D:
 	pop hl			;0c1f
 	pop de			;0c20
 
-l0c21h:	ret			;0c21
+	ret			;0c21
+
 	
-	;; Forth word ROT
-	inc bc			;0c22
-	ld d,d			;0c23
-	ld c,a			;0c24
-	ld d,h			;0c25
-	ld (de),a			;0c26
-	nop			;0c27
-	rst 10h			;0c28
-	ex de,hl			;0c29
-	rst 10h			;0c2a
+	;; Forth word ROT ( A B C -- B C A )
+	;;
+	db 0x03, _R, _O, _T
+	dw 0x0012
+
+	rst 10h			;0c28 - Retrieve TOS into DE
+	ex de,hl		;0c29
+	rst 10h			;0c2a - Retrieve 2OS into machine stack
 	push hl			;0c2b
-	rst 10h			;0c2c
-	ex (sp),hl			;0c2d
-	rst 8			;0c2e
-l0c2fh:
-	ex de,hl			;0c2f
-	rst 8			;0c30
-	pop hl			;0c31
-	rst 8			;0c32
-	ret			;0c33
-	inc bc			;0c34
-	ld c,l			;0c35
-	ld b,h			;0c36
-	cpl			;0c37
-	ld b,c			;0c38
-	nop			;0c39
-l0c3ah:
-	push ix		;0c3a
+	rst 10h			;0c2c - Retrieve 3OS into HL
+	
+	ex (sp),hl		;0c2d - HL = 2OS, machine stack holds 3OS
+	rst 8			;0c2e - Push 2OS onto Parameter Stack
+	ex de,hl		;0c2f - HL = TOS
+	rst 8			;0c30 - Push TOS onto stack
+	pop hl			;0c31 - Retrieve 3OS
+	rst 8			;0c32 - Push 3OS onto stack
+	
+	ret			;0c33 - Done
+
+	
+	;; Forth word MD/
+	;; 
+	db 0x03, _M, _D, _SLASH
+	dw 0x0041
+	
+l0c3ah:	push ix			;0c3a
 	push hl			;0c3c
 	push de			;0c3d
 	push bc			;0c3e
-	push iy		;0c3f
+	push iy			;0c3f
 	pop de			;0c41
-	ld hl,HL_TO_PSTACK		;0c42
-	add hl,de			;0c45
+	ld hl,HL_TO_PSTACK	;0c42
+	add hl,de		;0c45
 	push de			;0c46
-	pop ix		;0c47
+	pop ix			;0c47
 	ld bc,02008h		;0c49
 l0c4ch:
 	push bc			;0c4c
@@ -4168,10 +4213,11 @@ l0cabh:
 
 	;; Forth Word D/
 	;;
-	;;
+	;; 32-bit division of TOS by 2OS
 	db 0x02, 0x44, 0x2F
 	db 0x11, 0x00
 
+D_SLASH:
 	call 0x0B9B
 	call sub_0cfbh		;0cc8
 	call STACK_DEHL		;0ccb
@@ -4544,6 +4590,7 @@ l0e4ah:	pop de			;0e4a - Restore registers
 	ret			;0e55
 
 	;; Forth word :
+	;; 
 	db 0x01, _COLON
 	dw 0x000E
 
@@ -4553,6 +4600,7 @@ l0e4ah:	pop de			;0e4a - Restore registers
 	call DICT_ADD_WORDS	;0e61 - Assume returns via ';'
 
 	;; Forth word ;
+	;; 
 	db 0x01+0x80, _SEMICOLON
 	dw 0x000C
 
@@ -4565,23 +4613,26 @@ l0e6dh:	pop hl			;0e6d
 
 	ret			;0e6f
 
-	add a,d			;0e70
-	dec sp			;0e71
-	ld b,e			;0e72
-	rlca			;0e73
-	nop			;0e74
+	db 0x02+0x80, _SEMICOLON, _C
+	dw 0x0007
+
 	jr l0e6dh		;0e75
-	ld bc,00a2eh		;0e77
-	nop			;0e7a
-l0e7bh:
-	call sub_0ad3h		;0e7b
+
+	;; Forth word .
+	;; 
+	db 0x01, _PERIOD
+	dw 0x000A
+	
+l0e7bh:	call TOS_TO_STRING	;0e7b
 	jp PRINT_STRING		;0e7e
-	ld (bc),a			;0e81
-	ld b,h			;0e82
-	ld l,00bh		;0e83
-	nop			;0e85
-	call sub_0a96h		;0e86
+
+	;; Forth word D.
+	db 0x02, _D, _PERIOD
+	dw 0x000B
+
+	call D_TOS_TO_STRING		;0e86
 	jp PRINT_STRING		;0e89
+
 	ld bc,l0e49h		;0e8c
 	nop			;0e8f
 	pop de			;0e90
@@ -4648,7 +4699,7 @@ l0ea2h:
 	rst 10h			;0ed6
 	ld a,l			;0ed7
 	jp PRINT_A		;0ed8
-	ld bc,l0c21h		;0edb
+	ld bc,0c21h		;0edb
 	nop			;0ede
 	rst 10h			;0edf
 	ex de,hl			;0ee0
@@ -5725,7 +5776,7 @@ sub_1305h:
 	inc c			;1333
 	nop			;1334
 	rst 10h			;1335
-	call sub_0b19h		;1336
+	call ABS_SGN_HL		;1336
 	rst 8			;1339
 	ret			;133a
 	ld b,044h		;133b
@@ -5745,9 +5796,9 @@ sub_1305h:
 	ld b,d			;1350
 	ld d,e			;1351
 	djnz l1354h		;1352
-l1354h:
-	call UNSTACK_DEHL		;1354
-	call sub_0b28h		;1357
+
+l1354h:	call UNSTACK_DEHL	;1354
+	call ABS_SGN_DEHL	;1357
 	jp STACK_DEHL		;135a
 	ld (bc),a			;135d
 	ld b,e			;135e
@@ -5944,13 +5995,14 @@ l1443h:	pop ix			;1443
 	ret			;1445
 	ld bc,00723h		;1446
 	nop			;1449
-	jp sub_0ad3h		;144a
+	jp TOS_TO_STRING	;144a
+	
 	ld (bc),a		;144d
 	ld b,h			;144e
 	inc hl			;144f
 	ex af,af'		;1450
 	nop			;1451
-	jp sub_0a96h		;1452
+	jp D_TOS_TO_STRING		;1452
 
 	;; Forth word ED
 	;;
@@ -6491,7 +6543,7 @@ l16d5h:	jr z,GT_CONT_2		;16d5 - Jump if TOS <= 20S
 	bit 7,h			;1707
 	push af			;1709
 	rst 10h			;170a
-	call sub_0b19h		;170b
+	call ABS_SGN_HL		;170b
 	pop af			;170e
 
 	if NTSC=1
@@ -6798,7 +6850,7 @@ l186bh:
 	rst 8			;1882
 	ret			;1883
 	ld (bc),a			;1884
-	ld (l0c2fh),a		;1885
+	ld (0c2fh),a		;1885
 	nop			;1888
 	rst 10h			;1889
 	sra h		;188a
@@ -7194,7 +7246,7 @@ l1a74h:	rst 10h			;1a74
 	rst 8			;1a79
 	ex de,hl		;1a7a
 	rst 8			;1a7b
-	jp sub_0a96h		;1a7c
+	jp D_TOS_TO_STRING	;1a7c
 
 
 	ld (bc),a		;1a7f
@@ -7332,7 +7384,7 @@ l1b0eh:
 l1b30h:
 	rst 10h			;1b30
 	ld a,l			;1b31
-	call sub_091eh		;1b32
+	call BYTE_TO_ASCII	;1b32
 	ld h,000h		;1b35
 	ld l,a			;1b37
 	rst 8			;1b38
