@@ -42,6 +42,8 @@ I am also disassembling the ZX81-Forth ROM and it is possible to build the ROM f
 
 Near the start of the source code, you will find two variables that can be used to create different versions of the ROM. The variable `MINSTREL3` (set to zero or one) controls whether or not to patch the ROM for the Minstrel 3, and the variable `NTSC` (set to zero or one) determins whether to assemble for PAL displays (Husband variant) or for NTSC displays (Tree Forth original).
 
+If you set `MINSTREL3=0`, then you will assemble the original ZX81-Forth (with `NTSC=0`) or Tree Forth (with `NTSC=1`) ROM. 
+
 Happy Forth programming!
 
 ## ZX81-Forth Display Handling
