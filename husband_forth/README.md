@@ -22,7 +22,7 @@ However, as I explain below, the problems were somewhat more subtle than that.
 
 ZX81-Forth (and Tree Forth) do not work, in their unmodified form, on the Minstrel 3 for three reasons:
 
-* First, ZX81-Forth does not enable Z80 interrupt mode 1, which is critical to the correct operation of the monitor. The display routine in ZX81-Forth relies on the maskable interrupt routine at 0x38 to display text and, to use this routine, the Z80 needs to be configured for `IM 1`. This puzzled me at first, as I did not understand how the monitor worked on the ZX81 (when using the default interrupt mode 0). However, it turns out that the ZX81 has pull-ups fitted to the address bus, so will have the value 0xFF on the databus when a maskable interrupt is generated, and 0xFF is the Z80 instruction for `rst 0x38`. The Minstrel 3 does not have pull-up resistors on the databus (though could be modified to do so). To correct this, I inserted an `im 1` command into the initialisation code.
+* First, ZX81-Forth does not enable Z80 interrupt mode 1, which is critical to the correct operation of the monitor. The display routine in ZX81-Forth relies on the maskable interrupt routine at 0x38 to display text and, to use this routine, the Z80 needs to be configured for `IM 1`. This puzzled me at first, as I did not understand how the monitor worked on the ZX81 (when using the default interrupt mode 0). However, it turns out that the ZX81 has pull-up resistors fitted to the databus, so will have the value 0xFF on the databus when a maskable interrupt is generated, and 0xFF is the Z80 instruction for `rst 0x38`. The Minstrel 3 does not have pull-up resistors on the databus (though could be modified to do so). To correct this, I inserted an `im 1` command into the initialisation code.
 
 * Second, ZX81-Forth (usually) stores its state at the top of the address space (addresses 0xFB00--0xFFFF). On a ZX81 with at least 2kB of RAM, this will contain a shadow copy of the top five pages of RAM. The ZX81 hardware intercepts attempts to execute code in upper memory as part of its display-handling code. However, it does not intercept read and write operations, so this is okay. In contrast, the Minstrel 3 supports read and write operations to addresses up to 0x9FFF (which is the end of the 32K RAM). Read and write to the top of the address space (specifically, 0xFB00--0xFFFF) is not possible. To fix this, I refactored the code so that it used only the lower half of memory, with state being located in 0x7B00--0x7FFF.
 
@@ -46,7 +46,34 @@ If you set `MINSTREL3=0`, then you will assemble the original ZX81-Forth (with `
 
 Happy Forth programming!
 
-## ZX81-Forth Display Handling
+## ZX81-Forth Disassembly
+
+I am in the process of disassembling ZX81-Forth, in part because it seems a genuinely interesting piece of software to study and in part because I would like to try to run it on other Z80-based systems.
+
+You can get a sense of my progress by browsing the [source code](hforth.asm). I have worked through around three quarters of the program, though my understanding has grown as I have progressed, so some of my earlier comments may be ambiguous or even wrong. It will take a couple more iterations to get a reasonable and complete, commented assembly-language source code.
+
+In addition, I have described below some of what I think are the key elements of ZX81-Forth, to help people follow the source code. Again, this is a work in progress.
+
+### ZX81-Forth High-level Flowchart
+
+I have sketched out a flowchart that explains how I think ZX81-Forth works.
+
+![hforth_flowchart.png](High-level flow of the monitor)
+
+As with ZX81 BASIC, quite a lot of time is spent producing a screen display. This is time-critical and has to, effectively, be the controlling process.
+
+During the top and border generation, the Z80 is mostly idle and this is where the monitor code and user code runs. The monitor is reasonably complex and likely to take a reasonable amount of this idle time, leaving less time for actual user code. Further, the monitor runs in two different contexts (with different machine stacks and register contents).
+
+The monitor starts in what I have called Context 0. This is where user code is actually executed, either actioning Forth words and numbers entered into the Console window or scheduled by the multitasker. Alongside Context 0 is Context 1 which handles some of the monitor's house-keeping tasks, such as checking stack underflow, running the background task and, when the Console is in focus, parsing keyboard input.
+
+As with the ZX81, the keyboard is read as part of the Vsync routine. It runs in a near-constant number of clock cycles and, if a key is pressed, it is either added to a keyboard input buffer (if the Console is in focus) or is printed to the screen, if the Editor is in focus. Key presses are actually processed in Context 1, asynchronous from the keyboard scanning routine. Processing key presses effetively equates to reading in tokens (strings of ASCII characters representing either Forth words of numbers). When a complete token has been received (indicated by a space character or newline character), control is passed back to Context 0 which then processes the token (running a Forth word or adding a number to the Parameter Stack). The creation of new dictionary entries using compiling words, such as `:`,  is handled in Context 0 as part of the execution of the corresponding compiling word.
+
+Multitasking is achieved via a scheduler which runs at the end of each frame's Vsync signal is generated. If any tasks are due to run, these are handled by a temporary switch to Context 0, temporarily interrupting the parsing of tokens (Context 0) and the monitor's housekeeping functions (Context 1).
+
+Because it is a multitasking monitor, it is not possible to describe a linear path through the monitor code. The monitor switches between different tasks constantly and there are various system variables that support locking to prevent race conditions between conflicting monitor actions.
+
+
+### ZX81-Forth Display Handling
 
 The ZX81 produces a PAL-compatible display signal. It's sibling, the Timex Simclair 1000, which was sold mostly in North America, produced an NTSC-compatible display. The two standards are very similar, but with different timings. Here I am looking at the PAL system, though these notes are relevant to NTSC with specific timings adjusted appropriately.
 
