@@ -1,11 +1,7 @@
-	;; Do I have Execution Context and Editor Context in correct
-	;; order
-
 ; z80dasm.1.6
 ; command line: z80dasm -g 0 -a -l -o hforth.asm husband_forth.bin
 
 	;; To do
-	;; - Check START_OF_WORDIONARY is what I think it is
 	;; - Reinstate memory-checking routine
 	;; - Initialise IY before parameter stack is called
 	;;
@@ -162,12 +158,13 @@ P_RUN_DISP:	equ OFFSET+0x0182	; Address of routine to produce
 P_STACKC:	equ OFFSET+0x0184	; Address of next entry in Character
 					; Stack
 BASE:		equ OFFSET+0x0186	; 16-bit base for processing numbers
-START_OF_WORD:	equ OFFSET+0x0188	; Special string (used with
+PSTART_DICT:	equ OFFSET+0x0188	; Special string (used with
 					; expansion ROM)
 P_HERE:		equ OFFSET+0x018A 	; Current entry point in
 					; dictionary
 START_DICT_DEF:	equ OFFSET+0x018C
-UNKNOWN2:	equ OFFSET+0x018E 	; ???
+UNKNOWN2:	equ OFFSET+0x018E 	; Start of currently being
+					; defined word???
 STACKP_BASE:	equ OFFSET+0x0190	; Base location for Paramater
 					; Stack
 PCUR_TASK_STRUCT:	equ OFFSET+0x0192	; ???
@@ -175,6 +172,7 @@ MSTACK0:	equ OFFSET+0x0194	; Pointer to machine-stack 0
 MSTACK1:	equ OFFSET+0x0196	; Pointer to machine-stack 1
 MTASK_TAIL:	equ OFFSET+0x0198	; ???
 FLAGS3:		equ OFFSET+0x01A5	; 0 - Set if PRINT OK required;
+					; 1 - Set if compile-screen req'ed
 					; 4 - Set if RAM at 2000--3FFF
 					; 5 - ??? Disabled for PAL
 					; 6 - Reset to stop multitasking
@@ -184,9 +182,10 @@ FLAGS3:		equ OFFSET+0x01A5	; 0 - Set if PRINT OK required;
 					;     = Manual (FAST/SLOW))
 
 
-CONTEXT:	equ OFFSET+0x01A6	; Address of handler for Editor/
-					; Console ???
-KEYBD_ROUT:	equ OFFSET+0x01A8	; Keyboard handler
+KBD_ROUT: 	equ OFFSET+0x01A6	; Address of key handler for
+					; Editor/ Execution context
+					; (usually, PROCESS_KEY)
+CO_KBD_ROUT:	equ OFFSET+0x01A8	; Keyboard handler
 POSSIBLE_KEY:	equ OFFSET+0x01AB
 LAST_KEY:	equ OFFSET+0x01AC 	
 FLAGS:		equ OFFSET+0x01AD	; System flags:
@@ -367,11 +366,11 @@ I_NEXT_SCANLINE:
 				; in HL))
 	
 				; Hsync turned off by flip-flop circuit
-	
+
 	ret z			; (5) Timing-related: this is never
 	 			; satisfied, so always adds 5 T states
 	 			; to the code to delay start of HSYNC
-
+	
 	jr I_EXEC_DISPLAY	; (12) Continue to execute display line
 
 	
@@ -927,12 +926,11 @@ l018bh:	ld a,(hl)		;018b - Retrieve task status flag
 	ld h,(hl)		;01a6
 	ld l,a			;01a7
 
-	;; Check which machine context is active
+	;; Check which machine stack is in use
 	push hl			;01a8
 	ld hl,FLAGS		;01a9
 	bit 4,(hl)		;01ac
-	jr nz,l01b6h		;01ae - Jump forward, if System Editor
-				;       Context (context 1)
+	jr nz,l01b6h		;01ae - Jump forward, if Stack 1
 
 	;; Execute task's action word
 	pop hl			;01b0
@@ -1000,8 +998,8 @@ l01dbh:	pop hl			;01db
 	bit 7,a			;01ed
 	jp nz,l094dh		;01ef - Warm restart
 
-	ld hl,(CONTEXT)		;01f2 - $04CF for Execution Context/
-				;       Editor Context
+	ld hl,(KBD_ROUT)	;01f2 - Usually $04CF for both Editor
+				;       Context/ Execution Context
 	call jump_to_hl		;01f5
 
 	pop hl			;01f8
@@ -1787,10 +1785,10 @@ EDIT:	push hl			;0455
 
 	set 6,(hl)		;0463
 	
-	ld l,0xB9		;0465 - HL points into Editor screen
+	ld l,(SCR_INFO_CO & 0x00FF) + 0x03
+				;0465 - HL points into Console Screen
 				;       info   (would be IX+3)
-	ld (hl),0x11		;0467 - Set current coordinate to
-				;       top-left corner
+	ld (hl),0x11		;0467 - Set top row of console to 17d
 
 	ld a,_PUTPAD		;0469 - Copy first line of screen
 				;       (copyright) into PAD
@@ -1842,7 +1840,7 @@ FC_DONE:
 
 PRINT_FLASH:
 	ld a,_FLASH		;048d
-	ld hl,(CONTEXT)		;048f
+	ld hl,(KBD_ROUT)	;048f
 
 	jp (hl)			;0492
 
@@ -1930,16 +1928,22 @@ PA_DONE:
 
 	
 	;; Handle keypress
+	;;
+	;; If System Execution mode is enabled, keypress is handled by
+	;; CO_KBD_ROUT. Otherwise, (if System Editor), write to ED
+	;; screen.
 	;; 
 	;; On entry, A contains ASCII code of key press
+	;; 
 PROCESS_KEY:
 	push hl			;04cf
-	ld hl,FLAGS		;04d0 - Check entry mode
-	bit 0,(hl)		;04d3 - Execution/ editing mode?
+	ld hl,FLAGS		;04d0 - Check which input screen is
+	bit 0,(hl)		;04d3 - active (System Execution or
+				;       Editor)
 	scf			;04d5
 	jr nz,PK_EDITOR		;04d6 - Jump forward if editor mode
 
-	ld hl,(KEYBD_ROUT)		;04d8 - Likely 0x08f8 - Add to keyboard
+	ld hl,(CO_KBD_ROUT)	;04d8 - Likely 0x08f8 - Add to keyboard
 	call jump_to_hl		;04db   input buffer ???
 
 PK_DONE:
@@ -2111,7 +2115,7 @@ l0577h:	ld a,(hl)		;0577
 CL_WRITE_TO_KIB:
 	push hl			;0581
 
-	ld hl,(KEYBD_ROUT)	;0582 - Retrieve address of routine to
+	ld hl,(CO_KBD_ROUT)	;0582 - Retrieve address of routine to
 				;       write to keyboard input buffer
 	call jump_to_hl		;0585
 
@@ -2227,7 +2231,7 @@ INIT_MSTACKS:
 	res 5,(hl)		;05f0 - Confirm stack switch not in
 				;       progress
 
-	ld hl,EDIT_MAIN_LOOP	; Insert address of main loop at
+	ld hl,C1_MAIN_LOOP	; Insert address of main loop at
 	ld (STACK1_BASE),hl	; head of System Editor Stack
 
 	ld hl,STACK1_BASE-8	; Set pointer to fourth word on
@@ -2245,38 +2249,39 @@ INIT_MSTACKS:
 	;; On exit:
 	;;   
 PARSE_KIB_ENTRY:
-	cp _EDIT		;05ff
-	jp z,PRINT_A		;0601
-	set 7,a			;0604 - Prevent switch to Execution
-				;       Context
+	cp _EDIT		;05ff - Check if Edit key pressed
+	jp z,PRINT_A		;0601   and jump forward, if so
+	set 7,a			;0604 - Confirm key has been handled?
 	
 	push hl			;0606 - Save KIB offset
 
 	;; Check which context is active and, unless FLAG 3 is set,
-	;; switch to System Execution Context (context 0)
+	;; switch to Context 0
 	ld hl,FLAGS		;0607
-	bit 4,(hl)		;060a
-	jr z,l061eh		;060c - Jump forward, if execution stack
+	bit 4,(hl)		;060a - Check which stack context is active
+	jr z,PKE_EXIT		;060c - Jump forward, if Context 0
 
 	bit 3,(hl)		;060e
 	set 3,(hl)		;0610
-	jr nz,l061eh		;0612
+	jr nz,PKE_EXIT		;0612
 
 	call SWITCH_MSTACK	;0614 - Change execution context
 
 	res 3,(hl)		;0617
 	or a			;0619
 	bit 7,a			;061a
-	jr z,l061fh		;061c
+	jr z,PKE_DONE		;061c
 
-l061eh:	scf			;061e
+PKE_EXIT:
+	scf			;061e
 
-l061fh:	pop hl			;061f
+PKE_DONE:
+	pop hl			;061f
 
 	ret			;0620
 
 
-	;; Switch to System EDitor context (Stack 1)
+	;; Switch to Context 1
 	;;
 	;; On entry:
 	;;   Carry significant ???
@@ -2287,7 +2292,8 @@ SWITCH_TO_MSTACK1:
 	ld a,(FLAGS)		; Check which machine stack is active
 	bit 4,a		
 
-	ret nz			; Nothing to do if Stack 1 is active
+	ret nz			; Nothing to do if Stack 1 is already
+				; active
 
 	;; Know Stack 0 is active
 	sbc a,a			; A = 0, if carry clear, otherwise A = 0xFF
@@ -2537,7 +2543,7 @@ MS_LOOP:
 	djnz MS_LOOP		;06c3 - Repeat for every character
 
 MS_DONE:
-	pop bc			;06c5
+	pop bc			;06c5 - Restore registers
 	pop de			;06c6
 	pop hl			;06c7
 	
@@ -2603,8 +2609,9 @@ READ_TOKEN:
 RT_GET_CHAR:
 	or a			;06f7 - Clear carry for next subroutine
 
-	call SWITCH_TO_MSTACK1	;06f8 - Activate Context 1 (System
-				;       Editor)
+	call SWITCH_TO_MSTACK1	;06f8 - Activate Context 1 (check for
+				;       keyboard input and perform
+				;       system house-keeping)
 
 	;; At this point, A contains most recent entry in KIB + 0x80
 	and %01111111		;06fb - Mask off bit 7
@@ -2695,11 +2702,11 @@ sub_0744h:
 
 	;; Deal with recognised ROM
 l0750h:	ld hl,(02004h)		;0750 - Jump address in ROM
-	ld (START_OF_WORD),hl		;0753
+	ld (PSTART_DICT),hl		;0753
 
 sub_0756h:
 	push hl			;0756
-	ld hl,(START_OF_WORD)	;0757
+	ld hl,(PSTART_DICT)	;0757
 	ld (START_DICT_DEF),hl	;075a
 	ld hl,(P_HERE)		;075d
 	ld (UNKNOWN2),hl		;0760
@@ -2711,7 +2718,7 @@ INIT_DICT:
 	push hl			;0765
 
 	ld hl,(START_DICT_DEF)		;0766
-	ld (START_OF_WORD),hl		;0769
+	ld (PSTART_DICT),hl		;0769
 	ld hl,(UNKNOWN2)		;076c
 	ld (P_HERE),hl		;076f
 
@@ -2725,7 +2732,7 @@ ADD_LINK_FIELD:
 	push de			;0774
 	
 	ex de,hl		;0775 - Move entry point to DE
-	ld hl,(START_OF_WORD)	;0776 - Head of existing dictionary
+	ld hl,(PSTART_DICT)	;0776 - Head of existing dictionary
 
 	or a			;0779 
 	sbc hl,de		;077a
@@ -2755,8 +2762,9 @@ GET_WORD:
 	;; On exit:
 	;;   CF - reset (matched) / set (no match)
 	;;   HL - matching word / corrupt
+	;;   A  - corrupted
 CHECK_FOR_WORD:
-	ld hl,(START_OF_WORD)	;0785
+	ld hl,(PSTART_DICT)	;0785
 
 CW_LOOP:
 	call MATCH_STRING	;0788
@@ -2779,20 +2787,21 @@ CW_LOOP:
 	;; Advance to next word (in dictionary)
 	;;
 	;; On entry:
-	;;  HL - address of current word
+	;;  HL - address of start of current word
 	;;
 	;; On exit:
-	;; 
+	;;  HL - address of start of next word
+	;;  A  - corrupted
 FIND_NEXT_WORD:
-	push de			;0795
+	push de			;0795 - Save DE
 
-	;; Move address of word into HL
+	;; Move address of word into DE
 	ld d,h			;0796 
 	ld e,l			;0797
 
-	;; Retrieve word-name-length
+	;; Retrieve word-name-length (masking off word-type modifiers
 	ld a,(de)		;0798 
-	and 03fh		;0799
+	and %00111111		;0799
 
 	;;  Advance HL to word-length field
 	add a,l			;079b
@@ -2801,19 +2810,24 @@ FIND_NEXT_WORD:
 	inc h			;079f
 
 FNW_CONT:
-	inc hl			;07a0
+	inc hl			;07a0 - One more increment to account
+				;       for word-name-length field
 
-	;; Advance to next word
+	;; Retrieve contents of link field
 	ld a,(hl)		;07a1
 	inc hl			;07a2
 	ld h,(hl)		;07a3
 	ld l,a			;07a4
+
+	;; ... and add to address of current word to get address of next
+	;; work
 	add hl,de		;07a5
 
-	pop de			;07a6
+	pop de			;07a6 - Retrieve DE
 	
 	ret			;07a7
 
+	
 TOKEN_TO_DICT:
 	ld hl,(P_HERE)		;07a8
 	call DUP		;07ab - Duplicate token length (on
@@ -3053,7 +3067,7 @@ INIT_NEW_WORD:
 
 	call ADD_LINK_FIELD	;0871
 
-	ld (START_OF_WORD),hl	;0874 - Update head of dictionary
+	ld (PSTART_DICT),hl	;0874 - Update head of dictionary
 
 	ret			;0877
 
@@ -3142,8 +3156,9 @@ l08bbh:	push hl			;08bb
 INIT_FLAGS:
 	ld hl,FLAGS		;08c2 - Flags
 	ld a,(hl)		;08c5
-	and %01110000		;08c6 - Set Editor mode; Disable print
-				;       locks, ???, cursor-investion off
+	and %01110000		;08c6 - Set System Execution mode;
+				;       Disable print locks, ???,
+				;       cursor-invertion off
 	ld (hl),a		;08c8
 	
 	ld hl,FLAGS3		;08c9
@@ -3164,7 +3179,7 @@ INIT_FLAGS:
 	ret			;08d7
 
 	;; Kernel of context 0 loop
-EXEC_KERNEL:
+C0_KERNEL:
 	call READ_TOKEN		;08d8 - Read and parse token from
 				;       keyboard input buffer
 	rst 10h			;08db - Pop string length from Parameter
@@ -3283,7 +3298,8 @@ CHECK_KIB:
 	;; ================================================================
 READ_FROM_KIB:
 	call CHECK_KIB		;0910 - Compare KIB read-offset to
-				;write-offset, setting zero according
+				;       write-offset, setting zero
+				;       according
 
 	;; At this point, HL points to KIB_W_OFFSET and A contains
 	;; content of KIB_R_OFFSET
@@ -3529,7 +3545,7 @@ l09a9h:	call RESET_TASKS	;09a9 - Disable multitasking and switch
 
 	;; Main loop (Context 0 - Execution mode)
 C0_MAIN_LOOP:
-	call EXEC_KERNEL	;09c5
+	call C0_KERNEL		;09c5
 	jr C0_MAIN_LOOP		;09c8
 	
 	;; Check memory from 2000h--3FFFh -- e.g. to see if
@@ -3606,8 +3622,8 @@ sub_0a11h:
 
 	jr l09f0h		;0a19 - Jump to address in 0x2002
 
-	;; System Editor Conext main loop (Context 1)
-EDIT_MAIN_LOOP:
+	;; Context 1 main loop
+C1_MAIN_LOOP:
 	call CHECK_STACKP	;0a1b - Check for Parameter Stack underflow
 	call READ_FROM_KIB	; Read next value from KIB (carry set if none)
 
@@ -3615,7 +3631,7 @@ EDIT_MAIN_LOOP:
 				;       keyboard buffer (and if FLAG(3)
 				;       is set)
 
-	call COMPILE_SCREEN	;0a24
+	call COMPILE_SCREEN	;0a24 - If necessary, compile screen
 
 	;; Run background task
 	ld hl,(P_BACKTASK)	;0a27
@@ -3626,13 +3642,14 @@ EDIT_MAIN_LOOP:
 	inc hl			;0a30
 	ld (AUTO_CNT),hl	;0a31
 	
-	jr EDIT_MAIN_LOOP	;0a34
+	jr C1_MAIN_LOOP		;0a34
 
-	;; Part of processing word entered at keyboard (e.g., called
-	;; from 0x07F3)
+	;; Attempt to convert string on Character Stack to number on
+	;; Parameter Stack (in current base)
 	;;
-	;; Possible push token as a number to stack
-sub_0a36h:
+	;; On exit:
+	;;   C - reset okay/ set = not number
+STR_TO_NUM:
 	push hl			;0a36
 	push de			;0a37
 	push bc			;0a38
@@ -4606,17 +4623,22 @@ l0e4ah:	pop de			;0e4a - Restore registers
 
 l0e68h:	call DICT_ADD_RET	;0e68
 
+	;; Balance stack, without returning to DICT_ADD_WORDS
 	pop hl			;0e6b
 	pop hl			;0e6c
-l0e6dh:	pop hl			;0e6d
+EXIT_CDEF:
+	pop hl			;0e6d
 	pop hl			;0e6e
 
 	ret			;0e6f
 
+	;; Forth word ;C
+	;;
+	;; Used to terminate a CODE definition
 	db 0x02+0x80, _SEMICOLON, _C
 	dw 0x0007
 
-	jr l0e6dh		;0e75
+	jr EXIT_CDEF		;0e75
 
 	;; Forth word .
 	;; 
@@ -4726,102 +4748,112 @@ sub_0eebh:
 	nop			;0ef6
 	ld a,020h		;0ef7
 	jp PRINT_A		;0ef9
-	rlca			;0efc
-	inc a			;0efd
-	ld b,d			;0efe
-	ld d,l			;0eff
-l0f00h:
-	ld c,c			;0f00
-	ld c,h			;0f01
-	ld b,h			;0f02
-	ld d,e			;0f03
-	rla			;0f04
-	nop			;0f05
-	call INIT_NEW_WORD		;0f06
-	call DICT_ADD_CALL_HL		;0f09
+
+	;; Forth word <BUILDS
+	;;
+	db 0x07, _LESSTHAN, _B, _U, _I, _L, _D, _S
+	dw 0x0017
+
+	call INIT_NEW_WORD	;0f06
+	call DICT_ADD_CALL_HL	;0f09
 	ld hl,(P_HERE)		;0f0c
 	dec hl			;0f0f
 	dec hl			;0f10
-	ex (sp),hl			;0f11
+	ex (sp),hl		;0f11
 	jp (hl)			;0f12
-	add a,l			;0f13
-	ld b,h			;0f14
-	ld c,a			;0f15
-	ld b,l			;0f16
-	ld d,e			;0f17
-	ld a,01ah		;0f18
-	nop			;0f1a
-	ld hl,l0f27h		;0f1b
-	call DICT_ADD_CALL_HL		;0f1e
-	ld hl,0cfe1h		;0f21
-	jp DICT_ADD_HL		;0f24
-l0f27h:
-	pop de			;0f27
-	pop hl			;0f28
-	ld (hl),e			;0f29
-l0f2ah:
-	inc hl			;0f2a
-	ld (hl),d			;0f2b
-	ret			;0f2c
-	dec b			;0f2d
-	ld b,c			;0f2e
-	ld c,h			;0f2f
-	ld c,h			;0f30
-	ld c,a			;0f31
-	ld d,h			;0f32
-	ld (de),a			;0f33
-	nop			;0f34
 
+	;; Forth word DOES>
+	;; 
+	db 0x80+0x05, _D, _O, _E, _S, _GREATERTHAN
+	dw 0x001A
+
+	ld hl, 0x0F27
+	call DICT_ADD_CALL_HL	;0f1e
+	ld hl,0xCFE1		;0f21 `rst 08h`, `pop hl`
+	jp DICT_ADD_HL		;0f24
+	
+l0f27h:	pop de			;0f27
+	pop hl			;0f28
+	ld (hl),e		;0f29
+l0f2ah:	inc hl			;0f2a
+	ld (hl),d		;0f2b
+
+	ret			;0f2c
+
+	;; Forth word ALLOT
+	;;
+	db 0x05, _A, _L, _L, _O, _T
+	dw 0x0012
+	
 DICT_ALLOT:
-	ld hl,(P_HERE)		;0f35
-	ex de,hl			;0f38
-	rst 10h			;0f39
-	add hl,de			;0f3a
-	ld (P_HERE),hl		;0f3b
+	ld hl,(P_HERE)		;0f35 - Retrieve HERE
+	ex de,hl		;0f38   into DE
+	rst 10h			;0f39 - Retrieve number of bytes to
+				;       allocate from Parameter Stack
+	add hl,de		;0f3a - Advance HERE and 
+	ld (P_HERE),hl		;0f3b   save
+
 	ret			;0f3e
 
-	add a,h			;0f3f
-	ld b,e			;0f40
-	ld c,a			;0f41
-	ld b,h			;0f42
-	ld b,l			;0f43
-	ld a,(0cd00h)		;0f44
-	ld a,a			;0f47
-	rrca			;0f48
-	jr l0f4eh		;0f49
-l0f4bh:
-	call DICT_ADD_CALL_HL		;0f4b
-l0f4eh:
-	call GET_WORD		;0f4e
-	jr c,l0f69h		;0f51
-	call UNSTACK_STRING		;0f53
-	bit 7,(hl)		;0f56
+	;; Forth word CODE
+	;;
+	;; Allows insertion of Z80 opcodes into a colon definition
+	db 0x80 + 0x04, _C, _O, _D, _E
+	dw 0x003A
+
+	call HEX 		; Switch to HEX mode
+	jr CO_LOOP		;0f49
+
+C_ADD_WORD:
+	call DICT_ADD_CALL_HL	;0f4b - Add word to dictionary
+				;       definition
+CO_LOOP:
+	call GET_WORD		;0f4e - Input token (should be either a
+				;       number (Opcode) or an immediate
+				;       word)
+	jr c,C_CHECKNUM		;0f51 - Move on if new word
+
+	call UNSTACK_STRING	;0f53 - Remove from Character Stack
+
+	bit 7,(hl)		;0f56 - Check if immediate word
 	push af			;0f58
 	call FIND_PARAM_FIELD	;0f59
 	pop af			;0f5c
-	jr z,l0f4bh		;0f5d
-	ld de,ERR_RESTART		;0f5f
+	jr z,C_ADD_WORD		;0f5d - Step back, if not immediate
+				;       word, and add to dictionary
+				;       definition
+	ld de,ERR_RESTART	;0f5f - Otherwise execute word
 	push de			;0f62
 	call jump_to_hl		;0f63
 	pop de			;0f66
-	jr l0f4eh		;0f67
-l0f69h:
-	call sub_0a36h		;0f69
+	jr CO_LOOP		;0f67
+
+C_CHECKNUM:
+	call STR_TO_NUM		;0f69 - Convert token to number (leaving
+				;       on Parameter Stack)
+
+	;; Throw error if not a number
 	ld a,_H			;0f6c - Error: token not found nor hex
 	jp c,ERR_RESTART	;0f6e
-	rst 10h			;0f71
-	ld a,l			;0f72
+
+	rst 10h			;0f71 - Pop value off Parameter Stack
+	ld a,l			;0f72 - Add (byte) to dictionary
 	call DICT_ADD_BYTE	;0f73
-	jp l0f4eh		;0f76
-	inc bc			;0f79
-	ld c,b			;0f7a
-	ld b,l			;0f7b
-	ld e,b			;0f7c
-	dec c			;0f7d
-	nop			;0f7e
-	ld hl,PSTACK_TO_HL		;0f7f
+	
+	jp CO_LOOP		;0f76
+
+	
+	;; Forth word HEX
+	;;
+	;; Set BASE to hexadecimal
+	db 0x03, _H, _E, _X
+	dw 0x000D
+
+HEX:	ld hl,0x10		;0f7f
 	ld (BASE),hl		;0f82
+
 	ret			;0f85
+
 	inc bc			;0f86
 	ld b,c			;0f87
 	ld c,(hl)			;0f88
@@ -4868,33 +4900,31 @@ l0f9ch:
 	ld h,a			;0fb5
 	rst 8			;0fb6
 	ret			;0fb7
-	inc b			;0fb8
-	ld (04156h),a		;0fb9
-	ld d,d			;0fbc
-	ld c,000h		;0fbd
-	call sub_0fd1h		;0fbf
+
+	;; Forth word 2VAR
+	db 0x04, _2, _V, _A, _R
+	dw 0x000E
+
+	call VARIABLE		;0fbf
 	rst 10h			;0fc2
 	jp DICT_ADD_HL		;0fc3
-	ex af,af'			;0fc6
-	ld d,(hl)			;0fc7
-	ld b,c			;0fc8
-	ld d,d			;0fc9
-	ld c,c			;0fca
-	ld b,c			;0fcb
-	ld b,d			;0fcc
-	ld c,h			;0fcd
-	ld b,l			;0fce
-	dec de			;0fcf
-	nop			;0fd0
-sub_0fd1h:
-	call INIT_NEW_WORD		;0fd1
-	ld hl,l0fdeh		;0fd4
-	call DICT_ADD_CALL_HL		;0fd7
+
+	;; Forth word VARIABLE
+	db 0x08, _V, _A, _R, _I, _A, _B, _L, _E
+	dw 0x001B
+
+VARIABLE:	
+	call INIT_NEW_WORD	;0fd1
+	
+	ld hl,V_GET_ADDR	;0fd4
+	call DICT_ADD_CALL_HL	;0fd7
 	rst 10h			;0fda
 	jp DICT_ADD_HL		;0fdb
-l0fdeh:
-	pop hl			;0fde
-	rst 8			;0fdf
+
+V_GET_ADDR:
+	pop hl			;0fde - Retrieve address in dictionary
+				;       of variable's storagw
+	rst 8			;0fdf   and push onto parameter stack
 	ret			;0fe0
 
 	;; Forth word TASK
@@ -4905,7 +4935,7 @@ l0fdeh:
 				;       instantiate in dictionary
 
 	;; Set word to be a task
-	ld hl,(START_OF_WORD)	;0feb - Indicates a Task word
+	ld hl,(PSTART_DICT)	;0feb - Indicates a Task word
 	set 6,(hl)		;0fee
 
 	ld hl,(P_HERE)		;0ff0 - Skip forward five bytes
@@ -5933,9 +5963,9 @@ SERVICE_CLOCK:
 	db 0x06, _S, _C, _R, _E, _E, _N
 	dw 0x002C
 
-	call INIT_NEW_WORD		;13f8
-	ld hl,l0fdeh		;13fb
-	call DICT_ADD_CALL_HL		;13fe
+	call INIT_NEW_WORD	;13f8
+	ld hl,V_GET_ADDR	;13fb
+	call DICT_ADD_CALL_HL	;13fe
 	ld hl,0x0000		;1401
 	push hl			;1404
 
@@ -6598,7 +6628,7 @@ l16d5h:	jr z,GT_CONT_2		;16d5 - Jump if TOS <= 20S
 	db 0x05, _V, _L, _I, _S, _T
 	dw 0x001F
 	
-VLIST:	ld hl,(START_OF_WORD)	;173a
+VLIST:	ld hl,(PSTART_DICT)	;173a
 	ld de,0x0008		;173d - Routine to push HL onto
 				;       Parameter Stack
 
@@ -6653,17 +6683,18 @@ l176bh:	pop de			;176b
 l176eh:
 	rst 8			;176e
 	jr l176bh		;176f
-	add a,e			;1771
-	ld c,c			;1772
-	ld c,l			;1773
-	ld c,l			;1774
-	inc c			;1775
-	nop			;1776
-l1777h:
-	ld hl,(UNKNOWN2)		;1777
+
+	;; Forth word IMM
+	;;
+	db 0x80+0x03, _I, _M, _M
+	dw 0x000C
+
+l1777h:	ld hl,(UNKNOWN2)	;1777
 	set 7,(hl)		;177a
+	
 	ret			;177c
 
+	
 	;; Forth word INTEGER
 	db 0x07, 0x49, 0x4E, 0x54, 0x45, 0x47, 0x45, 0x52
 	db 0x38, 0x00
@@ -7107,7 +7138,7 @@ H:	db 0x01, _H
 	db 0x01, _T
 	dw 0x0009
 	
-T:	ld hl,START_OF_WORD	;19ce - Retrieve address
+T:	ld hl,PSTART_DICT	;19ce - Retrieve address
 	rst 8			;19d1 - Push onto Parameter Stack
 
 	ret			;19d2
@@ -7125,7 +7156,7 @@ T:	ld hl,START_OF_WORD	;19ce - Retrieve address
 	ld a,023h		;19dc
 	dec bc			;19de
 	nop			;19df
-	call sub_0a36h		;19e0
+	call STR_TO_NUM		;19e0
 	jp GT_CONT_2		;19e3
 
 
@@ -7433,7 +7464,7 @@ l1b40h:
 sub_1b70h:
 	ld hl,(P_HERE)		;1b70
 	ld (02006h),hl		;1b73
-	ld hl,(START_OF_WORD)	;1b76
+	ld hl,(PSTART_DICT)	;1b76
 	ld (02004h),hl		;1b79
 	ld hl,(MTASK_TAIL)		;1b7c
 	ld (02008h),hl		;1b7f
@@ -7804,14 +7835,14 @@ DEFVARS:
 	dw PRINT_DRV			; PRINTER DRIVER
 	dw OFFSET+0x0200		; DISP_2
 	db 0ffh,000h			; F_WARM_RESTART
-	dw sub_0a36h			; PARSE_NUM_ROUTINE
+	dw STR_TO_NUM			; PARSE_NUM_ROUTINE
 	dw NO_ACTION			; P_BACKTASK
 	db 0x80, 0x80			; KIB_R_OFFSET, KIB_W_OFFSET
 	dw RUN_VSYNC			; NEXT_DISP_ROUT (1DC0)
 	dw RUN_DISPLAY			; P_RUN_DISPLAY
 	dw OFFSET+0x01C0		; PSTACK_C
 	dw 0x000a			; BASE
-	dw 0x0AFB			; START_OF_WORD
+	dw DICT_START			; PSTART_DICT
 	dw 0x4000			; P_HERE
 	dw DICT_START			; START_DICT_DEF
 	dw 0x4000			; UNKNOWN2 (1DCE)
@@ -7823,10 +7854,10 @@ DEFVARS:
 	db 0x00, 0x00, 0xF1, 0xFF
 	db 0xFF, 0xFF, 0x00
 	dw DEF_TASK
-	db 0x00				;1de5 - FLAGS3
-	dw 0x04CF			; CONTEXT
-	dw WRITE_TO_KIB			; Keyboard routine
-	db 0x03				;1dea
+	db 0x00				; FLAGS3 (1DE5)
+	dw PROCESS_KEY			; KBD_ROUT
+	dw WRITE_TO_KIB			; CO_KBD_ROUT
+	db 0x03				; (1DEA)
 	db 0x00				; POSSIBLE_KEY (1DEB)
 	db 0x80				; LAST_KEY
 	db 0x80				;FLAGS
