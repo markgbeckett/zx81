@@ -58,7 +58,7 @@ In addition, I have described below some of what I think are the key elements of
 
 I have sketched out a flowchart that explains how I think ZX81-Forth works.
 
-![hforth_flowchart.png](High-level flow of the monitor)
+![High-level flow of the monitor](hforth_flowchart.png)
 
 As with ZX81 BASIC, quite a lot of time is spent producing a screen display. This is time-critical and has to, effectively, be the controlling process.
 
