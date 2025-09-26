@@ -108,7 +108,7 @@ BOT_BORDER_LINES:	equ 73	; H_FORTH uses 1Eh (74d) / better 55
 DISP_WIDTH:	equ 0x20	; Length of row in display buffer
 DISP_HEIGHT:	equ 0x18	; Number of rows in display buffer
 DBUFFER:	equ 0xFD00	; Address of display buffer in
-				; upper-memory
+				; upper-memory (Minstrel 3 only)
 	
 	;; H Forth  Memory Map (System Variables and Stacks)
 PSTACK_BASE:	equ OFFSET-0x0080 	; Base of Parameter Stack
@@ -3403,7 +3403,7 @@ COLD_RESTART:
 	;; there is)
 	;;
 	if MINSTREL3=1
-	ld hl, 0x4000		; Set RAM size to be 16k ($4000--$7FFF)
+	ld hl, 0x6000		; Set RAM size to be 16k ($4000--$7FFF)
 				; -- we will add the lower RAM (in
 				; $2000--$3FFF) later)
 	
@@ -7905,256 +7905,38 @@ CHARS:	db 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00 ; 00 Space
 	db 0x00, 0x00, 0x10, 0x08, 0x04, 0x08, 0x10, 0x00 ; 1E Greater than
 	db 0x00, 0x3C, 0x42, 0x02, 0x0C, 0x00, 0x08, 0x00 ; 1F Question mark
 
-	nop			;1f00
-	inc a			;1f01
-	ld b,d			;1f02
-	ld e,h			;1f03
-	ld d,d			;1f04
-	ld b,h			;1f05
-	ld a,000h		;1f06
-	nop			;1f08
-	inc a			;1f09
-	ld b,d			;1f0a
-	ld b,d			;1f0b
-	ld a,(hl)			;1f0c
-	ld b,d			;1f0d
-	ld b,d			;1f0e
-	nop			;1f0f
-	nop			;1f10
-	ld a,h			;1f11
-	ld b,d			;1f12
-	ld a,h			;1f13
-	ld b,d			;1f14
-	ld b,d			;1f15
-	ld a,h			;1f16
-	nop			;1f17
-	nop			;1f18
-	inc a			;1f19
-	ld b,d			;1f1a
-	ld b,b			;1f1b
-	ld b,b			;1f1c
-	ld b,d			;1f1d
-	inc a			;1f1e
-	nop			;1f1f
-	nop			;1f20
-	ld a,h			;1f21
-	ld b,d			;1f22
-	ld b,d			;1f23
-	ld b,d			;1f24
-	ld b,d			;1f25
-	ld a,h			;1f26
-	nop			;1f27
-	nop			;1f28
-	ld a,(hl)			;1f29
-	ld b,b			;1f2a
-	ld a,h			;1f2b
-	ld b,b			;1f2c
-	ld b,b			;1f2d
-	ld a,(hl)			;1f2e
-	nop			;1f2f
-	nop			;1f30
-	ld a,(hl)			;1f31
-	ld b,b			;1f32
-	ld a,h			;1f33
-	ld b,b			;1f34
-	ld b,b			;1f35
-	ld b,b			;1f36
-	nop			;1f37
-	nop			;1f38
-	inc a			;1f39
-	ld b,d			;1f3a
-	ld b,b			;1f3b
-	ld b,(hl)			;1f3c
-	ld b,d			;1f3d
-	inc a			;1f3e
-	nop			;1f3f
-	nop			;1f40
-	ld b,d			;1f41
-	ld b,d			;1f42
-	ld a,(hl)			;1f43
-	ld b,d			;1f44
-	ld b,d			;1f45
-	ld b,d			;1f46
-	nop			;1f47
-	nop			;1f48
-	inc e			;1f49
-	ex af,af'			;1f4a
-	ex af,af'			;1f4b
-	ex af,af'			;1f4c
-	ex af,af'			;1f4d
-	inc e			;1f4e
-	nop			;1f4f
-	nop			;1f50
-	ld (bc),a			;1f51
-	ld (bc),a			;1f52
-	ld (bc),a			;1f53
-	ld (bc),a			;1f54
-	ld b,d			;1f55
-	inc a			;1f56
-	nop			;1f57
-	nop			;1f58
-	ld b,d			;1f59
-	ld b,h			;1f5a
-	ld a,b			;1f5b
-	ld c,b			;1f5c
-	ld b,h			;1f5d
-	ld b,d			;1f5e
-	nop			;1f5f
-	nop			;1f60
-	ld b,b			;1f61
-	ld b,b			;1f62
-	ld b,b			;1f63
-	ld b,b			;1f64
-	ld b,b			;1f65
-	ld a,(hl)			;1f66
-	nop			;1f67
-	nop			;1f68
-	ld b,d			;1f69
-	ld h,(hl)			;1f6a
-	ld e,d			;1f6b
-	ld b,d			;1f6c
-	ld b,d			;1f6d
-	ld b,d			;1f6e
-	nop			;1f6f
-	nop			;1f70
-	ld b,d			;1f71
-	ld h,d			;1f72
-	ld d,d			;1f73
-	ld c,d			;1f74
-	ld b,(hl)			;1f75
-	ld b,d			;1f76
-	nop			;1f77
-	nop			;1f78
-	inc a			;1f79
-	ld b,d			;1f7a
-	ld b,d			;1f7b
-	ld b,d			;1f7c
-	ld b,d			;1f7d
-	inc a			;1f7e
-	nop			;1f7f
-	nop			;1f80
-	ld a,h			;1f81
-	ld b,d			;1f82
-	ld b,d			;1f83
-	ld a,h			;1f84
-	ld b,b			;1f85
-	ld b,b			;1f86
-	nop			;1f87
-	nop			;1f88
-	inc a			;1f89
-	ld b,d			;1f8a
-	ld b,d			;1f8b
-	ld b,d			;1f8c
-	ld c,d			;1f8d
-	ld a,000h		;1f8e
-	nop			;1f90
-	ld a,h			;1f91
-	ld b,d			;1f92
-	ld b,d			;1f93
-	ld a,h			;1f94
-	ld b,h			;1f95
-	ld b,d			;1f96
-	nop			;1f97
-	nop			;1f98
-	inc a			;1f99
-	ld b,d			;1f9a
-	jr nc,l1fa9h		;1f9b
-	ld b,d			;1f9d
-	inc a			;1f9e
-	nop			;1f9f
-	nop			;1fa0
-	ld a,008h		;1fa1
-	ex af,af'			;1fa3
-	ex af,af'			;1fa4
-	ex af,af'			;1fa5
-	ex af,af'			;1fa6
-	nop			;1fa7
-	nop			;1fa8
-l1fa9h:
-	ld b,d			;1fa9
-	ld b,d			;1faa
-	ld b,d			;1fab
-	ld b,d			;1fac
-	ld b,d			;1fad
-	inc a			;1fae
-	nop			;1faf
-	nop			;1fb0
-	ld b,d			;1fb1
-	ld b,d			;1fb2
-	ld b,d			;1fb3
-	ld b,d			;1fb4
-	inc h			;1fb5
-	jr l1fb8h		;1fb6
-l1fb8h:
-	nop			;1fb8
-	ld b,d			;1fb9
-	ld b,d			;1fba
-	ld b,d			;1fbb
-	ld e,d			;1fbc
-	ld e,d			;1fbd
-	inc h			;1fbe
-	nop			;1fbf
-	nop			;1fc0
-	ld b,d			;1fc1
-	inc h			;1fc2
-	jr l1fddh		;1fc3
-	inc h			;1fc5
-	ld b,d			;1fc6
-	nop			;1fc7
-	nop			;1fc8
-	ld b,d			;1fc9
-	inc h			;1fca
-	jr $+10		;1fcb
-	ex af,af'			;1fcd
-	ex af,af'			;1fce
-	nop			;1fcf
-	nop			;1fd0
-	ld a,(hl)			;1fd1
-	inc b			;1fd2
-	ex af,af'			;1fd3
-	djnz l1ff6h		;1fd4
-	ld a,(hl)			;1fd6
-	nop			;1fd7
-	nop			;1fd8
-	inc c			;1fd9
-	ex af,af'			;1fda
-	ex af,af'			;1fdb
-	ex af,af'			;1fdc
-l1fddh:
-	ex af,af'			;1fdd
-	inc c			;1fde
-	nop			;1fdf
-	nop			;1fe0
-	jr nz,$+34		;1fe1
-	djnz l1fedh		;1fe3
-	inc b			;1fe5
-	inc b			;1fe6
-	nop			;1fe7
-	nop			;1fe8
-	jr nc,l1ffbh		;1fe9
-	djnz l1ffdh		;1feb
-l1fedh:
-	djnz $+50		;1fed
-	nop			;1fef
-	nop			;1ff0
-	ex af,af'			;1ff1
-	inc e			;1ff2
-	ex af,af'			;1ff3
-	ex af,af'			;1ff4
-	ex af,af'			;1ff5
-l1ff6h:
-	ex af,af'			;1ff6
-	nop			;1ff7
-	nop			;1ff8
-	nop			;1ff9
-	nop			;1ffa
-l1ffbh:
-	nop			;1ffb
-	nop			;1ffc
-l1ffdh:
-	nop			;1ffd
-	nop			;1ffe
-	rst 38h			;1fff
+	db 0x00, 0x3C, 0x42, 0x5C, 0x52, 0x44, 0x3E, 0x00 ; 20 At char
+	db 0x00, 0x3C, 0x42, 0x42, 0x7E, 0x42, 0x42, 0x00 ; 21 'A'
+	db 0x00, 0x7C, 0x42, 0x7C, 0x42, 0x42, 0x7C, 0x00 ; 22 'B'
+	db 0x00, 0x3C, 0x42, 0x40, 0x40, 0x42, 0x3C, 0x00 ; 23 'C'
+	db 0x00, 0x7C, 0x42, 0x42, 0x42, 0x42, 0x7C, 0x00 ; 24 'D'
+	db 0x00, 0x7E, 0x40, 0x7C, 0x40, 0x40, 0x7E, 0x00 ; 25 'E'
+	db 0x00, 0x7E, 0x40, 0x7C, 0x40, 0x40, 0x40, 0x00 ; 26 'F'
+	db 0x00, 0x3C, 0x42, 0x40, 0x46, 0x42, 0x3C, 0x00 ; 27 'G'
+	db 0x00, 0x42, 0x42, 0x7E, 0x42, 0x42, 0x42, 0x00 ; 28 'H'
+	db 0x00, 0x1C, 0x08, 0x08, 0x08, 0x08, 0x1C, 0x00 ; 29 'I'
+	db 0x00, 0x02, 0x02, 0x02, 0x02, 0x42, 0x3C, 0x00 ; 2A 'J'
+	db 0x00, 0x42, 0x44, 0x78, 0x48, 0x44, 0x42, 0x00 ; 2B 'K'
+	db 0x00, 0x40, 0x40, 0x40, 0x40, 0x40, 0x7E, 0x00 ; 2C 'L'
+	db 0x00, 0x42, 0x66, 0x5A, 0x42, 0x42, 0x42, 0x00 ; 2D 'M'
+	db 0x00, 0x42, 0x62, 0x52, 0x4A, 0x46, 0x42, 0x00 ; 2E 'N'
+	db 0x00, 0x3C, 0x42, 0x42, 0x42, 0x42, 0x3C, 0x00 ; 2F 'O'
+	db 0x00, 0x7C, 0x42, 0x42, 0x7C, 0x40, 0x40, 0x00 ; 30 'P'
+	db 0x00, 0x3C, 0x42, 0x42, 0x42, 0x4A, 0x3E, 0x00 ; 31 'Q'
+	db 0x00, 0x7C, 0x42, 0x42, 0x7C, 0x44, 0x42, 0x00 ; 32 'R'
+	db 0x00, 0x3C, 0x42, 0x30, 0x0C, 0x42, 0x3C, 0x00 ; 33 'S'
+	db 0x00, 0x3E, 0x08, 0x08, 0x08, 0x08, 0x08, 0x00 ; 34 'T'
+	db 0x00, 0x42, 0x42, 0x42, 0x42, 0x42, 0x3C, 0x00 ; 35 'U'
+	db 0x00, 0x42, 0x42, 0x42, 0x42, 0x24, 0x18, 0x00 ; 36 'V'
+	db 0x00, 0x42, 0x42, 0x42, 0x5A, 0x5A, 0x24, 0x00 ; 37 'W'
+	db 0x00, 0x42, 0x24, 0x18, 0x18, 0x24, 0x42, 0x00 ; 38 'X'
+	db 0x00, 0x42, 0x24, 0x18, 0x08, 0x08, 0x08, 0x00 ; 39 'Y'
+	db 0x00, 0x7E, 0x04, 0x08, 0x10, 0x20, 0x7E, 0x00 ; 3A 'Z'
+	db 0x00, 0x0C, 0x08, 0x08, 0x08, 0x08, 0x0C, 0x00 ; 3B '['
+	db 0x00, 0x20, 0x20, 0x10, 0x08, 0x04, 0x04, 0x00 ; 3C '\'
+	db 0x00, 0x30, 0x10, 0x10, 0x10, 0x10, 0x30, 0x00 ; 3D ']'
+	db 0x00, 0x08, 0x1C, 0x08, 0x08, 0x08, 0x08, 0x00 ; 3E '^'
+	db 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0xFF ; 3F '_'
 
 HFORTH_END:
 	end
