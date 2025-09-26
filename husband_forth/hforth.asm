@@ -7721,7 +7721,7 @@ RESTART_NEW:
 
 SPARE:	ds 0x1CC0-$
 	
-	;; Jump table of 32 service routines, corresponding to special
+	;; Jump table of 0x20 service routines, corresponding to special
 	;; key presses
 SPECIAL_CHAR_TABLE:		; 1CC0h
 	dw NO_ACTION		; 00 - No action, RET
@@ -7781,19 +7781,15 @@ COPYRIGHT_MSG:
 	
 NEW_LINE_MSG:
 	db 0x02, _ENTER, _DOWN
-	
-l1d37h: db 0x20
+	db _SPACE		; Not used
+
+	;; Keyboard mapping (unshifted)
 KEY_CODES:
-	db 0x00
-l1d39h: db "A", "Q", "1", "0", "P", 0x0D," ", "Z"
-	db "S", "W", "2", "9", "O", "L", ".", "X"
-	db "D", "E", "3", "8", "I", "K", "M"
-l1d50h: db "C"
-	db "F"
-l1d52h: db "R", "4", "7"
-l1d55h: db "U", "J", "N", "V"
-	db "G", "T", "5", "6", "Y", "H"
-l1d5fh: db "B"		; First 40 keys
+	db _NULL, _A, _Q, _1, _0, _P, _ENTER, _SPACE
+	db _Z, _S, _W, _2, _9, _O, _L, _PERIOD
+	db _X, _D, _E, _3, _8, _I, _K, _M
+	db _C, _F, _R, _4, _7, _U, _J, _N
+	db _V, _G, _T, _5, _6, _Y, _H, _B
 
 OK_MSG: db 0x05, _SPACE, _O, _K, _ENTER, _DOWN
 	
@@ -7804,26 +7800,19 @@ CPU_MSG:
 	db 0x09, _ENTER, _DOWN, _Z, _X, _MINUS, _Z, _8
 	db _0, _SPACE
 
-	;; Shifted versions of keys
-	db 0x00
-l1d79h: db 0x0C, 0x18, 0x1E, 0x1B 	; A (CLS), Q (Compile), 1
-					; (Edit), 0 (Rubout)
-	db 0x22, 0x01, 0x80, ":"	; P, Enter, Space, Z
-	db "%", "!", 0x14	 	; S, W, 2 (Fetch PAD)
-l1d84h: db 0x1C, ")", "=", ",", 0x3B 	; 9 (Graphics), O, L, ., X
-	db "'", "@"			; D, E (STEP)
+L1d78:	;; Keyboard mapping (shifted)
+	db _NULL, _CLS, _COMPILE, _EDIT
+	db _RUBOUT, _QUOTES, _HOME, _BREAK
+	db _COLON, _PERCENT, _EXCLAMATION, _FETCHPAD
+	db _INSERTLINE, _RIGHTPARENTH, _EQUALS, _COMMA
+	db _SEMICOLON, _QUOTE, _AT, _PUTPAD
+	db _RIGHT, _LEFTPARENTH, _PLUS, _GREATERTHAN
+	db _QUESTIONMARK, _BACKSLASH, _LEFTSQBRACKET, _DELETELINE
+	db _UP, _DOLLAR, _MINUS, _LESSTHAN
+	db  _SLASH, _POWER, _UNDERSCORE, _LEFT
+	db _DOWN, _RIGHTSQBRACKET, _HASH, _ASTERISK
 
-	db 0x11, 0x09, "(", "+", ">", "?", 0x5C,  "[" ; 3 (Put PAD), 8
-						      ; (Right), I, K,
-						      ; M, C, F, R
-	db 0x1A, 0x0B, 0x24, 0x2D; 4 (Del Line), 7 (Up), U, J
-l1d97h: db  "<", "/", "^"	 ;  N, V, G
-l1d9ah:	db "_"			 ; T
-l1d9bh:	db 0x08			 ; 5 (Left)
-	db 0x0A			; 6 (Down)
-	db "]", "#", "*"	; Y, H, B
-
-	;; Copy of system variables 1DA0--1DFF
+	;; Default values of system variables 0x1DA0--0x1DFF
 DEFVARS:
 	db 0x00, 0x00, 0x00, 0x00	; UNKNOWN5 (7C60)
 	db 0x0F, 0x00, 0x00, 0x00 	; TIC_COUNTER (7C64) - 15 frames
@@ -7869,9 +7858,10 @@ DEFVARS:
 	db 0x0F				; TOKEN_LN
 
 	;; Character ROM (64 characters * 8 pixel-rows per character)
-	;; Needs to be a the start of a RAM page -- that is, 0x??00.
+	;; Needs to be a the start of a RAM page -- by default, it is
+	;; 0x1E00.
 	;;
-	;; When displayed on screen character code is code-20
+	;; When displayed on screen, character code is code-0x20
 CHARS:	db 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00 ; 00 Space
 	db 0x00, 0x08, 0x08, 0x08, 0x08, 0x00, 0x08, 0x00 ; 01 Exclamation
 	db 0x00, 0x12, 0x12, 0x00, 0x00, 0x00, 0x00, 0x00 ; 02 Quotes
@@ -7904,7 +7894,6 @@ CHARS:	db 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00 ; 00 Space
 	db 0x00, 0x00, 0x00, 0x3C, 0x00, 0x3C, 0x00, 0x00 ; 1D Equals
 	db 0x00, 0x00, 0x10, 0x08, 0x04, 0x08, 0x10, 0x00 ; 1E Greater than
 	db 0x00, 0x3C, 0x42, 0x02, 0x0C, 0x00, 0x08, 0x00 ; 1F Question mark
-
 	db 0x00, 0x3C, 0x42, 0x5C, 0x52, 0x44, 0x3E, 0x00 ; 20 At char
 	db 0x00, 0x3C, 0x42, 0x42, 0x7E, 0x42, 0x42, 0x00 ; 21 'A'
 	db 0x00, 0x7C, 0x42, 0x7C, 0x42, 0x42, 0x7C, 0x00 ; 22 'B'
