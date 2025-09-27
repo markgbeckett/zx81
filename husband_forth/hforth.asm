@@ -1303,23 +1303,25 @@ SCROLL_SCRN:
 
 	call GET_SCR_SIZE	;02a7 - Retrieve screen size into BC
 	jr c,l02c2h		;02aa - Done if screen is negative sized
-	call GET_SCR_ADDR		;02ac
+	call GET_SCR_ADDR	;02ac
 
 	ld de,DISP_WIDTH		;02af - Set DE to width of display
 
 	;; Scroll screen
-l02b2h:	dec c			;02b2 - Rows to scroll is screen height-1
+SS_KERNEL:
+	dec c			;02b2 - Rows to scroll is screen height-1
 	jr z,l02bch		;02b3 - Jump forward if only one row on
 				;       screen
 
 	;; Move current row up by one
-l02b5h:	call SCR_ROW_SCROLL	;02b5
+SS_LOOP:
+	call SCR_ROW_SCROLL	;02b5
 
 	;; Advance to next row
 	add hl,de		;02b8
 
 	dec c			;02b9 - Repeat if more rows to scroll
-	jr nz,l02b5h		;02ba
+	jr nz,SS_LOOP		;02ba
 
 l02bch:	ld a,(ix+007h)		;02bc
 	call SCR_BLANK_ROW	;02bf
@@ -1655,28 +1657,39 @@ CHECK_EDIT_MODE:
 	ret			;03bc
 
 sub_03bdh:
+	;; Save registers
 	push hl			;03bd
 	push de			;03be
 	push bc			;03bf
-	call GET_SCR_SIZE		;03c0
-	ld a,(ix+003h)		;03c3
-	push af			;03c6
-	ld a,(ix+005h)		;03c7
-	ld (ix+003h),a		;03ca
-	call GET_SCR_ADDR	;03cd
-	pop af			;03d0
+
+	call GET_SCR_SIZE	;03c0 - Retrieve screen size into BC
+	ld a,(ix+003h)		;03c3 - Retrieve top-most row of window
+	push af			;03c6 - Save it
+	ld a,(ix+005h)		;03c7 - Retrieve bottom-most row 
+	ld (ix+003h),a		;03ca   and set as top row
+	call GET_SCR_ADDR	;03cd - Get start of final row
+
+	pop af			;03d0 - Restore top row value
 	ld (ix+003h),a		;03d1
-	ld de,0xFFE0		;03d4 - not an address, but a width (-32)
-	jp l02b2h		;03d7
-	
+
+	ld de,0xFFE0		;03d4 - -32d (length of a screen row)
+
+	jp SS_KERNEL		;03d7 - Proceed with screen-scroll
+				;       routine
+
+	;; Insert line on editor screen
 sub_03dah:
-	ld a,(ix+003h)		;03da
-	push af			;03dd
-	add a,(ix+001h)		;03de
-	ld (ix+003h),a		;03e1
+	ld a,(ix+003h)		;03da - Retrieve top row of window
+	push af			;03dd - Store it
+	add a,(ix+001h)		;03de - Retrieve current row 
+	ld (ix+003h),a		;03e1 - Set as top of window
+				;       (temporarily)
 	call sub_03bdh		;03e4
-	pop af			;03e7
-	ld (ix+003h),a		;03e8
+
+	;; Restore screen dimensions
+	pop af			;03e7 - Retrieve top row of window
+	ld (ix+003h),a		;03e8 - and store it
+
 	jp CR			;03eb
 
 	;; Insert current line from (editor) screen into display pad.
@@ -4176,7 +4189,7 @@ l0c67h:
 	pop de			;0c6b
 	rst 10h			;0c6c
 	rst 10h			;0c6d
-	call 00da3h		;0c6e
+	call DSWAP		;0c6e
 	pop hl			;0c71
 	pop ix		;0c72
 	ret			;0c74
@@ -4451,7 +4464,7 @@ CHECK_HL_ZERO:
 	db 0x05, _D, _S, _W, _A, _P
 	dw 0x0021
 
-	push hl			;0da5 - Save registers
+DSWAP:	push hl			;0da3 - Save registers
 	push de			;0da4
 	push bc			;0da5
 
@@ -5677,8 +5690,10 @@ l12ach:	ld de,TIME		;12ac - Point to current time
 	call HL_MINUS_DE	;12bb
 	jr l12ach		;12be
 
-sub_12c0h:
-	call sub_12f8h		;12c0
+COMPARE_STACK_DNUM:
+	call FIND_2DP_NUMS	;12c0 - DE and HL point to top and
+				;       second double precision numbers
+				;       on the stack
 
 	;; Compare the 32-bit numbers pointed to by HL and DE
 	;;
@@ -5756,12 +5771,20 @@ HMD_LOOP:
 
 	ret			;12f7
 
-sub_12f8h:
+	;; Retrieve pointers to two double-precision numbers on
+	;; Parameter Stack
+FIND_2DP_NUMS:
+	;; Copy pointer to parameter stack into DE
 	push iy			;12f8
 	pop de			;12fa
+
+	;; Advance four bytes
 	ld hl,0x0004		;12fb
 	add hl,de		;12fe
+
+	;; Done
 	ret			;12ff
+
 	ld (bc),a		;1300
 	ld b,h			;1301
 	dec hl			;1302
@@ -5770,7 +5793,9 @@ sub_12f8h:
 sub_1305h:
 	push hl			;1305
 	push de			;1306
-	call sub_12f8h		;1307
+	call FIND_2DP_NUMS	;1307 - DE and HL point to top and
+				;       second double precision numbers
+				;       on the stack
 	call TIC		;130a
 	rst 10h			;130d
 	rst 10h			;130e
@@ -5784,8 +5809,10 @@ sub_1305h:
 	nop			;1316
 	push hl			;1317
 	push de			;1318
-	call sub_12f8h		;1319
-	call HL_MINUS_DE		;131c
+	call FIND_2DP_NUMS	;1319 - DE and HL point to top and
+				;       second double precision numbers
+				;       on the stack
+	call HL_MINUS_DE	;131c
 	rst 10h			;131f
 	rst 10h			;1320
 	pop de			;1321
@@ -7291,7 +7318,7 @@ l1a74h:	rst 10h			;1a74
 	dec a			;1a8c
 	inc de			;1a8d
 	nop			;1a8e
-	call sub_12c0h		;1a8f
+	call COMPARE_STACK_DNUM		;1a8f
 	rst 10h			;1a92
 	rst 10h			;1a93
 	rst 10h			;1a94
@@ -7316,8 +7343,8 @@ l1a9ah:
 	ld c,(hl)			;1aaf
 	djnz l1ab2h		;1ab0
 l1ab2h:
-	call sub_12c0h		;1ab2
-	call nc,00da3h		;1ab5
+	call COMPARE_STACK_DNUM	;1ab2
+	call nc,DSWAP		;1ab5
 	rst 10h			;1ab8
 	rst 10h			;1ab9
 	ret			;1aba
@@ -7328,8 +7355,8 @@ l1ab2h:
 	ld e,b			;1abf
 	djnz l1ac2h		;1ac0
 l1ac2h:
-	call sub_12c0h		;1ac2
-	call c,00da3h		;1ac5
+	call COMPARE_STACK_DNUM	;1ac2
+	call c,DSWAP		;1ac5
 	rst 10h			;1ac8
 	rst 10h			;1ac9
 	ret			;1aca
@@ -7538,17 +7565,17 @@ PRINT_DRV:
 	ld a,l			;1bd1
 	ld hl,PAD		;1bd2
 	and 07fh		;1bd5
-	cp 060h		;1bd7
+	cp 060h			;1bd7
 	jr c,l1bddh		;1bd9
 	add a,0e0h		;1bdb
-l1bddh:	cp 020h		;1bdd
+l1bddh:	cp 020h			;1bdd
 	jr nc,l1bf6h		;1bdf
-	cp 008h		;1be1
+	cp 008h			;1be1
 	jr nz,l1bech		;1be3
 	xor a			;1be5
 	or (hl)			;1be6
 	jr z,l1beah		;1be7
-	dec (hl)			;1be9
+	dec (hl)		;1be9
 l1beah:	pop hl			;1bea
 
 	ret			;1beb
@@ -7558,20 +7585,21 @@ l1bech:	cp 00dh		;1bec
 	cp 00ah		;1bf0
 	ld a,02eh		;1bf2
 	jr z,l1bfdh		;1bf4
-l1bf6h:
-	call STR_ADD_CHR	;1bf6
+l1bf6h:	call STR_ADD_CHR	;1bf6
 	bit 5,(hl)		;1bf9
 	jr z,l1c02h		;1bfb
-l1bfdh:
-	call sub_1c09h		;1bfd
+l1bfdh:	call sub_1c09h		;1bfd
 	ld (hl),000h		;1c00
-l1c02h:
-	pop hl			;1c02
+
+l1c02h:	pop hl			;1c02
 	ret			;1c03
-	ld (bc),a			;1c04
+
+
+	ld (bc),a		;1c04
 	ld l,050h		;1c05
 	adc a,h			;1c07
 	nop			;1c08
+
 sub_1c09h:
 	xor a			;1c09
 	out (0fdh),a		;1c0a
@@ -7589,14 +7617,12 @@ sub_1c09h:
 	inc hl			;1c1c
 	add a,l			;1c1d
 	ld l,a			;1c1e
-l1c1fh:
-	ld (hl),020h		;1c1f
+l1c1fh:	ld (hl),020h		;1c1f
 	inc hl			;1c21
 	dec e			;1c22
 	jr nz,l1c1fh		;1c23
 	pop hl			;1c25
-l1c26h:
-	inc hl			;1c26
+l1c26h:	inc hl			;1c26
 	ex de,hl			;1c27
 	ld hl,(STACKP_BASE)	;1c28
 	call sub_1c37h		;1c2b
@@ -7605,16 +7631,16 @@ l1c26h:
 	ld a,004h		;1c30
 	out (0fbh),a		;1c32
 	out (0feh),a		;1c34
+
 	ret			;1c36
+
 sub_1c37h:
 	push bc			;1c37
 	ld c,000h		;1c38
-l1c3ah:
-	push de			;1c3a
+l1c3ah:	push de			;1c3a
 	push hl			;1c3b
 	ld b,020h		;1c3c
-l1c3eh:
-	push hl			;1c3e
+l1c3eh:	push hl			;1c3e
 	ld h,000h		;1c3f
 	ld a,(de)			;1c41
 	sub 020h		;1c42
@@ -7649,6 +7675,7 @@ l1c3eh:
 	jr z,l1c3ah		;1c67
 	pop bc			;1c69
 	ret			;1c6a
+
 sub_1c6bh:
 	push hl			;1c6b
 	push de			;1c6c
@@ -7678,6 +7705,7 @@ l1c85h:
 	pop bc			;1c8c
 	pop de			;1c8d
 	pop hl			;1c8e
+
 	ret			;1c8f
 
 	;; Forth word .CN
@@ -7687,24 +7715,33 @@ l1c85h:
 	jp PRINT_STRING		;1c96
 
 	;; Forth word D>
+	;; Double-precision comparison
 	db 0x02, _D, _GREATERTHAN
 	dw 0x000A
-	
-	call 00da3h		;1c9e
-	jr l1ca8h		;1ca1
+
+D_GREATERTHAN:	
+	call DSWAP		;1c9e
+	jr D_LESSTHAN		;1ca1
 
 	;; Forth word D<
+	;; Double-precision comparison
 	db 0x02, _D, _LESSTHAN
 	dw $10000-$1CA3		; Length => next word starts at 0x0000,
-				; which is a special case
+				; which is a special case, indicating
+				; the end of the dictionary
 	
-l1ca8h:	call sub_12c0h		;1ca8
+D_LESSTHAN:
+	call COMPARE_STACK_DNUM	;1ca8 - Carry and Zero indicate result
+
+	;; Balance stack, removing two double-precision numbers
 	rst 10h			;1cab
 	rst 10h			;1cac
 	rst 10h			;1cad
 	rst 10h			;1cae
-	ccf			;1caf
-	jp GT_CONT_2		;1cb0
+
+	ccf			;1caf - Complement carry
+
+	jp GT_CONT_2		;1cb0 - Push resulm onto stack and done
 
 	
 	if MINSTREL3=1
