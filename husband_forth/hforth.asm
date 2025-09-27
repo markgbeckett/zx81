@@ -1637,7 +1637,7 @@ RO_CONT:
 	
 	ret			;03a2 - Done
 
-l03a3h:	ld a,(ix+003h)		;03a3
+DEL_LINE:	ld a,(ix+003h)		;03a3
 	push af			;03a6
 	add a,(ix+001h)		;03a7
 	ld (ix+003h),a		;03aa
@@ -1656,7 +1656,7 @@ CHECK_EDIT_MODE:
 
 	ret			;03bc
 
-sub_03bdh:
+ED_SCROLL:
 	;; Save registers
 	push hl			;03bd
 	push de			;03be
@@ -1678,13 +1678,13 @@ sub_03bdh:
 				;       routine
 
 	;; Insert line on editor screen
-sub_03dah:
+INS_LINE:
 	ld a,(ix+003h)		;03da - Retrieve top row of window
 	push af			;03dd - Store it
 	add a,(ix+001h)		;03de - Retrieve current row 
 	ld (ix+003h),a		;03e1 - Set as top of window
 				;       (temporarily)
-	call sub_03bdh		;03e4
+	call ED_SCROLL		;03e4
 
 	;; Restore screen dimensions
 	pop af			;03e7 - Retrieve top row of window
@@ -1757,11 +1757,14 @@ IL_LOOP:
 
 l041dh:	call CHECK_EDIT_MODE	;041d 
 	ret z			;0420 - Return if in System Execution Context
-	call GET_SCR_SIZE	;0421
+	call GET_SCR_SIZE	;0421 - Retrieve window size into BC
 	ld hl,(P_DBUFFER)	;0424
-	ld de,l0200h		;0427
+
+	;; Advance to row 16
+	ld de,16*0x20		;0427 - Sixteen rows
 	add hl,de		;042a
 	call INVERT_LINE	;042b
+
 	ex de,hl		;042e
 	call CR			;042f
 	call GET_SCR_POSN	;0432
@@ -1771,16 +1774,17 @@ l041dh:	call CHECK_EDIT_MODE	;041d
 	call INSERT_CHAR	;0439
 	ld b,c			;043c
 	call INVERT_LINE	;043d
+
 	ret			;0440
 
 	call CHECK_EDIT_MODE	;0441
 	ret z			;0444
 	call PUT_DPAD		;0445
-	jp l03a3h		;0448
+	jp DEL_LINE		;0448
 
 	call CHECK_EDIT_MODE	;044b
 	ret z			;044e
-	call sub_03dah		;044f
+	call INS_LINE		;044f
 	jp l041dh		;0452
 
 
@@ -7773,9 +7777,9 @@ SPECIAL_CHAR_TABLE:		; 1CC0h
 	dw LEFT			; 08 - Left
 	dw RIGHT		; 09 - Right
 	dw DOWN			; 0A - Down
-	dw 0x02FF		; 0B - Up
+	dw UP			; 0B - Up
 	dw CLS			; 0C - Clear screen
-	dw 0x029F		; 0D
+	dw CR			; 0D - Carriage return
 	dw NO_ACTION		; 0E - No action, RET
 	dw NO_ACTION		; 0F - No action, RET
 
@@ -7790,9 +7794,9 @@ SPECIAL_CHAR_TABLE:		; 1CC0h
 	
 	dw NO_ACTION		; 18 - No action, RET
 	dw NO_ACTION		; 19 - No action, RET
-	dw 0x03A3		; 1A - Delete line
+	dw DEL_LINE		; 1A - Delete line
 	dw RUBOUT		; 1B - Rubout
-	dw 0x03DA		; 1C - Graphics mode
+	dw INS_LINE		; 1C - Graphics mode
 	dw 0x03BD		; 1D - 
 	dw EDIT			; 1E - Edit
 	dw FLASH_CURSOR		; 1F - ? Flashing cursor
