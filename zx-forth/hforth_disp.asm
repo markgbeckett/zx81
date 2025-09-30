@@ -27,6 +27,8 @@
 	;; top border, and bottom border code, with labels VSYNC_ON,
 	;; VSYNC_OFF, TB_ON, TB_OFF, BB_ON, and BB_OFF.
 
+WITH_HALT:		equ 01
+	
 	;; Configuration options (to allow you to adjust timings)
 TOP_BORDER_LINES:	equ 56	; Number of lines in top border: H_FORTH
 				; uses 4Ah (30d) / better 55
@@ -37,12 +39,14 @@ VSYNC_COUNTER:		equ 123 ; H_FORTH uses 60h (96d) / better 124
 	;; Relevant system variables, related to display handling
 DBUFFER:		equ 0x7000		; Location of display
 						; buffer
-NEXT_DISP_ROUTINE: 	equ DBUFFER + 24*32 	; Used to store address
+NEXT_DISP_ROUTINE: 	equ DBUFFER + 24*(32+WITH_HALT)
+ 						; Used to store address
 						; of next display
 						; routine, used at end
 						; of NMI-controlled
 						; border generation
-P_DBUFFER: 		equ DBUFFER + 24*32 + 2	; Pointer to start of
+P_DBUFFER: 		equ DBUFFER + 24*(32+WITH_HALT) + 2
+						; Pointer to start of
 						; display buffer
 
 	org 0x0000		; ROM routine
@@ -70,9 +74,9 @@ RST_00:	out (0xFD),a		; Disable NMI generator
 
 	out (0xFD),a		; Disable NMI Generator
 
-	ld a, %00011110		; Set up ROM-based character set, which
-	ld i,a			; is assumed to start on a page boundary
-				; pointed to by I
+	ld a, 0x1E		; Set up ROM-based character set, which
+	ld i,a			; is assumed to start on a page pointed
+				; to by I
 
 	;; Set next display routine (will be VSync)
 	ld hl, RUN_VSYNC
@@ -135,8 +139,10 @@ I_EXEC_DISPLAY:
 	ld r,a			; (9) Reset refresh counter
 	ei			; (4) Enable interrupts and trigger HSync
 
+	if WITH_HALT=0
 	nop			; (4) Included for timing, to pad
 	nop			; (4) scanline to close to 64us
+	endif
 	
 	jp (hl) 		; (4) Execute next display line
 
@@ -325,10 +331,12 @@ IDLOOP2:
 	
 	djnz IDLOOP2
 	
-	;; ld a,0x76		; HALT
-	;; ld (hl),a
-	;; inc hl
-
+	if WITH_HALT=1
+	ld a,0x76		; HALT
+	ld (hl),a
+	inc hl
+	endif
+	
 	dec c
 	jr nz, IDLOOP
 
@@ -350,6 +358,10 @@ LOOP:	ld a,(hl)		; Cycle character through 0, 1, ..., 7
 
 	ld b, 0x20		; Reset column count (for next row)
 
+	if WITH_HALT=1
+	inc hl
+	endif
+	
 	dec c			; Check if more rows to update
 	jr nz, LOOP
 	
