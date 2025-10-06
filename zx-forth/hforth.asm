@@ -122,7 +122,8 @@ STACKC_BASE:	equ OFFSET+0x01C0	; Base of Character stack
 
 	;; System variables
 VARS_BASE:	equ OFFSET+0x0150	; System variable base addr
-UNKNOWN6:	equ OFFSET+0x0152	; ???
+SCREEN_NUM:	equ OFFSET+0x0152	; Stores screen number during
+					; load/ store
 AUTO_CNT:	equ OFFSET+0x0154	; Counter for auto-mode
 RAM_SIZE:	equ OFFSET+0x0156	; Total RAM
 UNKNOWN4:	equ OFFSET+0x0158	; ???
@@ -4738,16 +4739,20 @@ l0ea2h:
 	rst 10h			;0ed6
 	ld a,l			;0ed7
 	jp PRINT_A		;0ed8
-	ld bc,0c21h		;0edb
-	nop			;0ede
+
+	;; Forth word ! (store to memory)
+	db 0x01, _EXCLAMATION
+	dw 0x000C
+	
 	rst 10h			;0edf
-	ex de,hl			;0ee0
+	ex de,hl		;0ee0
 	rst 10h			;0ee1
-	ex de,hl			;0ee2
-	ld (hl),e			;0ee3
+	ex de,hl		;0ee2
+	ld (hl),e		;0ee3
 	inc hl			;0ee4
-	ld (hl),d			;0ee5
+	ld (hl),d		;0ee5
 	ret			;0ee6
+	
 	ld bc,l0b40h		;0ee7
 	nop			;0eea
 sub_0eebh:
@@ -6196,114 +6201,143 @@ l14f1h:	call sub_14b3h		;14f1
 	ret z			;14fa
 	call PRINT_STR_HL		;14fb
 	jp WARM_RESTART		;14fe
-sub_1501h:
+
+	;; Write bit (based on carry)
+WRITE_PULSE:
 	push af			;1501
-	in a,(0feh)		;1502
+
+	;;  Generate one pulse of leader tone
+	in a,(0feh)		;1502 - Set Cassette Out to low
 	ld a,010h		;1504
-l1506h:
+TOL_LOOP:
 	dec a			;1506
-	jr nz,l1506h		;1507
-	out (0ffh),a		;1509
+	jr nz,TOL_LOOP		;1507
+
+	out (0ffh),a		;1509 - Set Cassette Out to high
+
+	;; Wait
 	ld a,04bh		;150b
-l150dh:
+TOL_WAIT:
 	dec a			;150d
-	jr nz,l150dh		;150e
+	jr nz,TOL_WAIT		;150e
+
 	pop af			;1510
+
 	ret			;1511
-sub_1512h:
+
+WRITE_GAP:
 	push bc			;1512
 	ld b,072h		;1513
-l1515h:
-	djnz l1515h		;1515
+l1515h:	djnz l1515h		;1515
 	pop bc			;1517
 	ret			;1518
-sub_1519h:
+
+WRITE_BYTE:
 	push af			;1519
 	push bc			;151a
+
+	;; Write data bit
 	ld b,00ah		;151b
-	ld a,(hl)			;151d
-	scf			;151e
-l151fh:
-	call sub_1501h		;151f
-	call c,sub_1501h		;1522
-	call nc,sub_1512h		;1525
-	add a,a			;1528
-	djnz l151fh		;1529
+	ld a,(hl)		;151d
+	scf			;151e - Start with one
+l151fh:	call WRITE_PULSE	;151f - Generate pulse
+	call c,WRITE_PULSE	;1522   Double-length for bit=one
+	call nc,WRITE_GAP	;1525 - Gap for zero
+	add a,a			;1528 - Next bit to carry
+	djnz l151fh		;1529 - Repeat (with end with zero?)
+
 	pop bc			;152b
 	pop af			;152c
+
 	ret			;152d
-sub_152eh:
+
+WRITE_HL:
 	push bc			;152e
 	push hl			;152f
+
 	ld hl,l153dh		;1530
 	ld b,07dh		;1533
-l1535h:
-	call sub_1519h		;1535
+l1535h:	call WRITE_BYTE		;1535
 	djnz l1535h		;1538
+
 	pop hl			;153a
 	pop bc			;153b
 	ret			;153c
-l153dh:
-	nop			;153d
-l153eh:
-	and l			;153e
-sub_153fh:
-	ld de,l0200h		;153f
+
+l153dh:	nop			;153d
+
+FILE_ID:	db 0xA5		;153e - Identifier used for ZX-Forth
+				;       files
+
+WRITE_SCREEN:
+	ld de,16*32		;153f - Size of editor screen
 	push bc			;1542
 	push hl			;1543
-	ld bc,0xFFFF		;1544
-l1547h:
-	call sub_1519h		;1547
-	inc hl			;154a
-	ex de,hl			;154b
-	add hl,bc			;154c
-	ex de,hl			;154d
-	jr c,l1547h		;154e
+	ld bc,0xFFFF		;1544 - -1
+
+l1547h:	call WRITE_BYTE		;1547
+	inc hl			;154a - Advance to next byte
+
+	;; Check if finished
+	ex de,hl		;154b - Retrieve counter
+	add hl,bc		;154c - Subtract 1
+	ex de,hl		;154d - Store counter
+	jr c,l1547h		;154e - Repeat if not done
+
 	pop hl			;1550
 	pop bc			;1551
+
 	ret			;1552
-sub_1553h:
+
+WRITE_ID:
 	push hl			;1553
-	ld hl,l153eh		;1554
-	call sub_1519h		;1557
+	ld hl,FILE_ID		;1554
+	call WRITE_BYTE		;1557
 	pop hl			;155a
 	ret			;155b
-sub_155ch:
+
+WRITE_SCR_NUM:
 	push hl			;155c
-	ld hl,UNKNOWN6		;155d
-	call sub_1519h		;1560
+	
+	ld hl,SCREEN_NUM	;155d
+	call WRITE_BYTE		;1560
 	inc hl			;1563
-	call sub_1519h		;1564
+	call WRITE_BYTE		;1564
+
 	pop hl			;1567
 	ret			;1568
-	dec b			;1569
-	ld d,e			;156a
-	ld d,h			;156b
-	ld c,a			;156c
-	ld d,d			;156d
-	ld b,l			;156e
-	sub a			;156f
-	nop			;1570
+
+	;; Forth word STORE
+	;;
+	;; Save screen to cassett
+	db 0x05, _S, _T, _O, _R, _E
+	dw 0x0097
+
+	;; Check Editor screen is visible and return if not
 	ld hl,FLAGS		;1571
 	bit 6,(hl)		;1574
 	ret z			;1576
+
+	;; Retrieve screen number (filename) from TOS and save it
 	rst 10h			;1577
-	ld (UNKNOWN6),hl		;1578
+	ld (SCREEN_NUM),hl	;1578
 
-l157bh:	out (0fdh),a		;157b
+	;; Disable NMI generation (important for accurate timing)
+l157bh:	out (0xFD),a		;157b
 
-	ld hl,(P_DISP_2)		;157d
-	call sub_152eh		;1580
-	call sub_1553h		;1583
-	call sub_155ch		;1586
-	call sub_153fh		;1589
-	call sub_152eh		;158c
+	ld hl,(P_DISP_2)	;157d - Retrieve address of editor screen
+	call WRITE_HL		;1580
+	call WRITE_ID		;1583	
+	call WRITE_SCR_NUM	;1586 - Write screen number
+	call WRITE_SCREEN	;1589 - Write content of screen
+	call WRITE_HL		;158c
 
+	;; Enable NMI generation
 	out (0feh),a		;158f
 
 	ret			;1591
-l1592h:
-	call sub_15a5h		;1592
+
+l1592h:	call sub_15a5h		;1592
 	jr c,l159ch		;1595
 	cp 0a5h		;1597
 	jr nz,l1592h		;1599
@@ -6397,7 +6431,7 @@ sub_15fah:
 	bit 6,(hl)		;160a
 	ret z			;160c
 	rst 10h			;160d
-	ld (UNKNOWN6),hl		;160e
+	ld (SCREEN_NUM),hl		;160e
 l1611h:
 	out (0fdh),a		;1611
 	ld hl,(P_DISP_2)	;1613
@@ -6411,15 +6445,15 @@ l1611h:
 	ld h,a			;1626
 	or l			;1627
 	jr nz,l162dh		;1628
-	ld (UNKNOWN6),hl		;162a
+	ld (SCREEN_NUM),hl		;162a
 l162dh:
 	ex de,hl			;162d
-	ld hl,(UNKNOWN6)		;162e
+	ld hl,(SCREEN_NUM)		;162e
 	ld a,l			;1631
 	or h			;1632
 	jr nz,l163bh		;1633
 	ex de,hl			;1635
-	ld (UNKNOWN6),hl		;1636
+	ld (SCREEN_NUM),hl		;1636
 	jr l163dh		;1639
 l163bh:
 	sbc hl,de		;163b
@@ -6456,12 +6490,12 @@ l1651h:
 
 
 sub_166bh:
-	ld hl,(UNKNOWN6)		;166b
+	ld hl,(SCREEN_NUM)		;166b
 	ld a,l			;166e
 	or h			;166f
 	ret z			;1670
 	inc hl			;1671
-	ld (UNKNOWN6),hl		;1672
+	ld (SCREEN_NUM),hl		;1672
 
 	ret			;1675
 
@@ -7429,7 +7463,7 @@ l1b0eh:
 	ld b,l			;1b16
 	inc c			;1b17
 	nop			;1b18
-	ld hl,UNKNOWN6		;1b19
+	ld hl,SCREEN_NUM	;1b19
 	jr l1b0eh		;1b1c
 	add a,e			;1b1e
 	ld e,e			;1b1f
