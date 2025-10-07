@@ -174,6 +174,7 @@ MSTACK1:	equ OFFSET+0x0196	; Pointer to machine-stack 1
 MTASK_TAIL:	equ OFFSET+0x0198	; ???
 FLAGS3:		equ OFFSET+0x01A5	; 0 - Set if PRINT OK required;
 					; 1 - Set if compile-screen req'ed
+					; 2 - Auto-compile on LOAD
 					; 4 - Set if RAM at 2000--3FFF
 					; 5 - ??? Disabled for PAL
 					; 6 - Reset to stop multitasking
@@ -6340,10 +6341,10 @@ l157bh:	out (0xFD),a		;157b
 	ret			;1591
 
 LOAD_HEADER:
-	call sub_15a5h		;1592
-	jr c,l159ch		;1595
-	cp 0a5h			;1597 - Check for valid file id
-	jr nz,LOAD_HEADER		;1599 - and repeat if invalid
+	call LOAD_BYTE		;1592
+	jr c,l159ch		;1595 - Skip forward if failed
+	cp 0xA5			;1597 - Check for valid file id
+	jr nz,LOAD_HEADER	;1599 - and repeat if invalid
 
 	ret			;159b
 
@@ -6356,31 +6357,38 @@ l159ch:	ld a,07fh		;159c
 
 	ret			;15a4
 
-sub_15a5h:
+	;; Attempt to read a byte from tape
+	;;
+	;; On exit:
+	;;  Carry reset, if succeeds (value in A)
+	;;  Carry set, if failed
+LOAD_BYTE:
 	push de			;15a5
 	push bc			;15a6
+
 	ld e,000h		;15a7
 l15a9h:	ld bc,0x0000		;15a9
 
 	;; Check for tape signal
 l15ach:	ld a,07fh		;15ac
 	in a,(0feh)		;15ae
-	bit 0,a			;15b0 - Check for space
+	bit 0,a			;15b0 - 
 	jr z,l15b9h		;15b2
 	rlca			;15b4 - Rotate signal into Carry
 	jr c,l15bdh		;15b5 - Move on if signal
-	djnz l15ach		;15b7 - Repeat
+	djnz l15ach		;15b7 - Repeat, if not, unless timed out
 
 l15b9h:	pop bc			;15b9
 	pop de			;15ba
+
 	scf			;15bb
 
 	ret			;15bc
 
-	;; Read bit?
 l15bdh:	ld b,03eh		;15bd - Pause
 l15bfh:	djnz l15bfh		;15bf
 	
+	;; Read bit?
 	ld b,025h		;15c1
 l15c3h:	in a,(0feh)		;15c3 - Read tape signal
 	rlca			;15c5 - Move into carry
@@ -6393,10 +6401,15 @@ l15c3h:	in a,(0feh)		;15c3 - Read tape signal
 	ccf			;15ce
 	rl e		;15cf
 	jr nc,l15a9h		;15d1
+
 	pop bc			;15d3
+
 	ld a,e			;15d4
+
 	pop de			;15d5
+
 	or a			;15d6 - Reset carry
+
 	ret			;15d7
 
 	;; Clear editor buffer
@@ -6412,11 +6425,12 @@ ZERO_BYTE:
 
 	ret			;15e2
 
-sub_15e3h:
+	;; Read DE bytes from tape into buffer starting at HL
+LOAD_BLOCK:
 	push de			;15e3
 	push hl			;15e4
-l15e5h:	call sub_15a5h		;15e5
-	jr c,l15f2h		;15e8
+l15e5h:	call LOAD_BYTE		;15e5
+	jr c,l15f2h		;15e8 - Exit, if failed
 	ld (hl),a		;15ea
 	inc hl			;15eb
 	dec e			;15ec
@@ -6431,7 +6445,7 @@ sub_15f5h:
 	ld b,000h		;15f5
 	call sub_15fah		;15f7
 sub_15fah:
-	call sub_15a5h		;15fa
+	call LOAD_BYTE		;15fa
 	djnz sub_15fah		;15fd
 	ret			;15ff
 
@@ -6462,31 +6476,39 @@ l1611h:	out (0fdh),a		;1611
 	jr c,LS_FAIL		;161d - Jump forward if failed
 
 	;; Retrieve screen number
-	call sub_15a5h		;161f
+	call LOAD_BYTE		;161f
 	ld l,a			;1622
-	call sub_15a5h		;1623
+	call LOAD_BYTE		;1623
 	ld h,a			;1626
 	or l			;1627
-	jr nz,l162dh		;1628
-	ld (SCREEN_NUM),hl		;162a
+	jr nz,l162dh		;1628 - Jump forward if screen number is
+				;       non-zero
+	ld (SCREEN_NUM),hl	;162a
 
-l162dh:	ex de,hl			;162d
-	ld hl,(SCREEN_NUM)		;162e
-	ld a,l			;1631
+l162dh:	ex de,hl		;162d - Move screen number (from file)
+				;       to DE
+	ld hl,(SCREEN_NUM)	;162e - Retrieve requested file number
+
+	ld a,l			;1631 - Check is non-zero
 	or h			;1632
 	jr nz,l163bh		;1633
-	ex de,hl			;1635
-	ld (SCREEN_NUM),hl		;1636
+
+	ex de,hl		;1635 - DE = requested file number; HL =
+				;       read file number
+	ld (SCREEN_NUM),hl	;1636
 	jr l163dh		;1639
-l163bh:	sbc hl,de		;163b
-l163dh:	pop hl			;163d
-	jr nz,l164ch		;163e
-	ld de,l0200h		;1640
-	call sub_15e3h		;1643
-	call sub_168ch		;1646
+l163bh:	sbc hl,de		;163b - Check if screen numbers match
+
+l163dh:	pop hl			;163d - Retrieve start of editor window
+	jr nz,l164ch		;163e - Repeat, if no screen-number match 
+	ld de,16*32		;1640 - Length of editor window
+
+	call LOAD_BLOCK		;1643
+	call LOAD_COMPILE	;1646
 
 l1649h:	out (0feh),a		;1649 - Enable NMI
-	ret			;164b
+
+	ret			;164b - Done
 
 l164ch:	call sub_15f5h		;164c
 	jr l1611h		;164f
@@ -6555,13 +6577,18 @@ l167fh:	sbc hl,de		;167f
 	inc d			;1688
 	nop			;1689
 	jr l1692h		;168a
-sub_168ch:
-	ld hl,FLAGS3		;168c
+
+	;; Check for auto-compile
+LOAD_COMPILE:
+	ld hl,FLAGS3		;168c - Check if auto-compile enabled
 	bit 2,(hl)		;168f
-	ret z			;1691
-l1692h:	ld hl,FLAGS3		;1692
+	ret z			;1691 - Return, if not
+
+l1692h:	ld hl,FLAGS3		;1692 - Set compile-screen flag
 	set 1,(hl)		;1695
+
 	ret			;1697
+
 	inc bc			;1698
 	ld b,e			;1699
 	ld c,a			;169a
