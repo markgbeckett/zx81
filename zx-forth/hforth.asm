@@ -6589,22 +6589,22 @@ l1692h:	ld hl,FLAGS3		;1692 - Set compile-screen flag
 
 	ret			;1697
 
-	inc bc			;1698
-	ld b,e			;1699
-	ld c,a			;169a
-	ld c,(hl)		;169b
-	inc c			;169c
-	nop			;169d
+	;; Forth word CON
+	;;
+	;; Turn on auto-compile
+	db 0x03, _C, _O, _N
+	dw 0x000C
+
 	ld hl,FLAGS3		;169e
 	set 2,(hl)		;16a1
 	ret			;16a3
-	inc b			;16a4
-	ld b,e			;16a5
-	ld c,a			;16a6
-	ld b,(hl)			;16a7
-	ld b,(hl)			;16a8
-	dec c			;16a9
-	nop			;16aa
+
+	;; Forth word COFF
+	;; 
+	;; Disable auto-compile mode
+	db 0x04, _C, _O, _F, _F
+	dw 0x000D
+
 	ld hl,FLAGS3		;16ab
 	res 2,(hl)		;16ae
 	ret			;16b0
