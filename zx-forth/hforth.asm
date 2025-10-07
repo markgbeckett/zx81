@@ -6330,56 +6330,65 @@ l157bh:	out (0xFD),a		;157b
 	call WRITE_ID		;1583	
 	call WRITE_SCR_NUM	;1586 - Write screen number
 	call WRITE_SCREEN	;1589 - Write content of screen
-	call WRITE_HL		;158c
+	call WRITE_HL		;158c - Will be address of editor
+				;       screen, as all of the WRITE_*
+				;       routines preserve HL
 
 	;; Enable NMI generation
 	out (0feh),a		;158f
 
 	ret			;1591
 
-l1592h:	call sub_15a5h		;1592
+LOAD_HEADER:
+	call sub_15a5h		;1592
 	jr c,l159ch		;1595
-	cp 0a5h		;1597
-	jr nz,l1592h		;1599
+	cp 0a5h			;1597 - Check for valid file id
+	jr nz,LOAD_HEADER		;1599 - and repeat if invalid
+
 	ret			;159b
-l159ch:
-	ld a,07fh		;159c
+
+	;; Check for Space
+l159ch:	ld a,07fh		;159c
 	in a,(0feh)		;159e
 	rrca			;15a0
 	ccf			;15a1
-	jr nc,l1592h		;15a2
+	jr nc,LOAD_HEADER	;15a2
+
 	ret			;15a4
+
 sub_15a5h:
 	push de			;15a5
 	push bc			;15a6
 	ld e,000h		;15a7
-l15a9h:
-	ld bc,0x0000		;15a9
-l15ach:
-	ld a,07fh		;15ac
+l15a9h:	ld bc,0x0000		;15a9
+
+	;; Check for tape signal
+l15ach:	ld a,07fh		;15ac
 	in a,(0feh)		;15ae
-	bit 0,a		;15b0
+	bit 0,a			;15b0 - Check for space
 	jr z,l15b9h		;15b2
-	rlca			;15b4
-	jr c,l15bdh		;15b5
-	djnz l15ach		;15b7
-l15b9h:
-	pop bc			;15b9
+	rlca			;15b4 - Rotate signal into Carry
+	jr c,l15bdh		;15b5 - Move on if signal
+	djnz l15ach		;15b7 - Repeat
+
+l15b9h:	pop bc			;15b9
 	pop de			;15ba
 	scf			;15bb
+
 	ret			;15bc
-l15bdh:
-	ld b,03eh		;15bd
-l15bfh:
-	djnz l15bfh		;15bf
+
+	;; Read bit?
+l15bdh:	ld b,03eh		;15bd - Pause
+l15bfh:	djnz l15bfh		;15bf
+	
 	ld b,025h		;15c1
-l15c3h:
-	in a,(0feh)		;15c3
-	rlca			;15c5
-	ld a,c			;15c6
+l15c3h:	in a,(0feh)		;15c3 - Read tape signal
+	rlca			;15c5 - Move into carry
+	ld a,c			;15c6 - Add to current byte
 	adc a,000h		;15c7
 	ld c,a			;15c9
 	djnz l15c3h		;15ca
+
 	cp 004h		;15cc
 	ccf			;15ce
 	rl e		;15cf
@@ -6387,23 +6396,28 @@ l15c3h:
 	pop bc			;15d3
 	ld a,e			;15d4
 	pop de			;15d5
-	or a			;15d6
+	or a			;15d6 - Reset carry
 	ret			;15d7
-sub_15d8h:
+
+	;; Clear editor buffer
+CLEAR_EDIT_BUFFER:
 	ld b,000h		;15d8
-	call sub_15ddh		;15da
-sub_15ddh:
+	call ZERO_BYTE		;15da
+
+	;; 
+ZERO_BYTE:
 	ld (hl),000h		;15dd
 	inc hl			;15df
-	djnz sub_15ddh		;15e0
+	djnz ZERO_BYTE		;15e0
+
 	ret			;15e2
+
 sub_15e3h:
 	push de			;15e3
 	push hl			;15e4
-l15e5h:
-	call sub_15a5h		;15e5
+l15e5h:	call sub_15a5h		;15e5
 	jr c,l15f2h		;15e8
-	ld (hl),a			;15ea
+	ld (hl),a		;15ea
 	inc hl			;15eb
 	dec e			;15ec
 	jr nz,l15e5h		;15ed
@@ -6420,25 +6434,34 @@ sub_15fah:
 	call sub_15a5h		;15fa
 	djnz sub_15fah		;15fd
 	ret			;15ff
-	inc b			;1600
-	ld c,h			;1601
-	ld c,a			;1602
-	ld b,c			;1603
-	ld b,h			;1604
-	ld d,h			;1605
-	nop			;1606
+
+	;; Forth word LOAD
+	;;
+	;; Load screen from tape
+	db 0x04, _L, _O, _A, _D
+	dw 0x0054
+
+	;; Check if editor screen is visible, and return if not
+LOAD_SCREEN:
 	ld hl,FLAGS		;1607
 	bit 6,(hl)		;160a
 	ret z			;160c
+
+	;; Retrieve requested screen number and store
 	rst 10h			;160d
-	ld (SCREEN_NUM),hl		;160e
-l1611h:
-	out (0fdh),a		;1611
-	ld hl,(P_DISP_2)	;1613
+	ld (SCREEN_NUM),hl	;160e
+
+	;; Disable NMI (ensures consistent timing)
+l1611h:	out (0fdh),a		;1611
+
+	ld hl,(P_DISP_2)	;1613 - Retrieve address of editor
+				;       screen
 	push hl			;1616
-	call sub_15d8h		;1617
-	call l1592h		;161a
-	jr c,l1651h		;161d
+	call CLEAR_EDIT_BUFFER	;1617 - Clear editor window
+	call LOAD_HEADER	;161a - Load valid header
+	jr c,LS_FAIL		;161d - Jump forward if failed
+
+	;; Retrieve screen number
 	call sub_15a5h		;161f
 	ld l,a			;1622
 	call sub_15a5h		;1623
@@ -6446,8 +6469,8 @@ l1611h:
 	or l			;1627
 	jr nz,l162dh		;1628
 	ld (SCREEN_NUM),hl		;162a
-l162dh:
-	ex de,hl			;162d
+
+l162dh:	ex de,hl			;162d
 	ld hl,(SCREEN_NUM)		;162e
 	ld a,l			;1631
 	or h			;1632
@@ -6455,23 +6478,23 @@ l162dh:
 	ex de,hl			;1635
 	ld (SCREEN_NUM),hl		;1636
 	jr l163dh		;1639
-l163bh:
-	sbc hl,de		;163b
-l163dh:
-	pop hl			;163d
+l163bh:	sbc hl,de		;163b
+l163dh:	pop hl			;163d
 	jr nz,l164ch		;163e
 	ld de,l0200h		;1640
 	call sub_15e3h		;1643
 	call sub_168ch		;1646
-l1649h:
-	out (0feh),a		;1649
+
+l1649h:	out (0feh),a		;1649 - Enable NMI
 	ret			;164b
-l164ch:
-	call sub_15f5h		;164c
+
+l164ch:	call sub_15f5h		;164c
 	jr l1611h		;164f
-l1651h:
+
+LS_FAIL:
 	pop hl			;1651
 	jr l1649h		;1652
+
 	inc bc			;1654
 	dec l			;1655
 	dec l			;1656
