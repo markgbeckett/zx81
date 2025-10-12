@@ -74,6 +74,7 @@
 	;; (Tree Forth original) vs PAL (David Husband's port)
 MINSTREL3:	equ 0x00
 NTSC:		equ 0x00
+FIXBUG:		equ 0x00 	; Fix bugs in original code
 
 	;; 	include "zx81_chars.asm"
 	include "hforth_chars.asm"
@@ -6363,7 +6364,7 @@ WRITE_SCR_NUM:
 	ld (SCREEN_NUM),hl	;1578
 
 	;; Disable NMI generation (important to have accurate timing)
-l157bh:	out (0xFD),a		;157b
+ST_CONT:	out (0xFD),a		;157b
 
 	ld hl,(P_DISP_2)	;157d - Retrieve address of editor screen
 	call WRITE_LEADER	;1580 - Write to cassette port
@@ -6507,7 +6508,7 @@ LOAD_SCREEN:
 	ld (SCREEN_NUM),hl	;160e
 
 	;; Disable NMI (ensures consistent timing)
-l1611h:	out (0fdh),a		;1611
+LS_CONT:	out (0fdh),a		;1611
 
 	ld hl,(P_DISP_2)	;1613 - Retrieve address of editor
 				;       screen
@@ -6553,36 +6554,40 @@ l1649h:	out (0feh),a		;1649 - Enable NMI
 	ret			;164b - Done
 
 l164ch:	call sub_15f5h		;164c
-	jr l1611h		;164f
+	jr LS_CONT		;164f - Load screen
 
 LS_FAIL:
 	pop hl			;1651
 	jr l1649h		;1652
 
-	inc bc			;1654
-	dec l			;1655
-	dec l			;1656
-	ld a,00bh		;1657
-	nop			;1659
-	call sub_166bh		;165a
-	jr l1611h		;165d
-	inc bc			;165f
-	inc a			;1660
-	dec l			;1661
-	dec l			;1662
-	dec h			;1663
-	nop			;1664
-	call sub_166bh		;1665
-	jp l157bh		;1668
+	;; Forth word -->
+	;;
+	;; Load next screen
+	db 0x03, _MINUS, _MINUS, _GREATERTHAN
+	dw 0x000B
+	
+	call INC_SCREEN_NUM	;165a - Increment screen number
+
+	jr LS_CONT		;165d - Load screen
+
+	;; Forth word <--
+	;;
+	;; Store next screen
+	db 0x03, _LESSTHAN, _MINUS, _MINUS
+	dw 0x0025
+
+	call INC_SCREEN_NUM	;1665 - Increment screen number
+
+	jp ST_CONT		;1668 - Store screen
 
 
-sub_166bh:
-	ld hl,(SCREEN_NUM)		;166b
+INC_SCREEN_NUM:
+	ld hl,(SCREEN_NUM)	;166b
 	ld a,l			;166e
 	or h			;166f
 	ret z			;1670
 	inc hl			;1671
-	ld (SCREEN_NUM),hl		;1672
+	ld (SCREEN_NUM),hl	;1672
 
 	ret			;1675
 
@@ -6612,12 +6617,12 @@ l167fh:	sbc hl,de		;167f
 
 	ret			;1683
 
-	inc bc			;1684
-	ld b,e			;1685
-	ld d,b			;1686
-	ld c,h			;1687
-	inc d			;1688
-	nop			;1689
+	;; Forth word CPL
+	;;
+	;; Compile editor screen
+	db 0x03, _C, _P, _L
+	dw 0x0014
+
 	jr l1692h		;168a
 
 	;; Check for auto-compile
@@ -6681,8 +6686,10 @@ GT_CONT_2:
 				;numbers reversed
 
 	;; Forth word =
+	;; 
 	db 0x01, _EQUALS
 	dw 0x000F
+
 	rst 10h			;16cf - Retrieve TOS to DE
 	ex de,hl		;16d0
 	rst 10h			;16d1 - Retrieve 2OS to HL 
@@ -6691,58 +6698,88 @@ l16d5h:	jr z,GT_CONT_2		;16d5 - Jump if TOS <= 20S
 	or a			;16d7 - Reset carry
 	jr GT_CONT_1		;16d8
 
-	ld (bc),a			;16da
-	ld b,e			;16db
-	dec a			;16dc
-	dec bc			;16dd
-	nop			;16de
+	;; Forth word C=
+	;;
+	db 0x02, _C, _EQUALS
+	dw 0x000B
+	
 	rst 10h			;16df
 	ld a,l			;16e0
 	rst 10h			;16e1
 	cp l			;16e2
 	jr l16d5h		;16e3
-	ld bc,l0a3fh		;16e5
-	nop			;16e8
+
+
+	db 0x01, _QUESTIONMARK
+	dw 0x000A
+
 	call sub_0eebh		;16e9
+
 	jp l0e7bh		;16ec
-	ld (bc),a		;16ef
-	dec hl			;16f0
-	ld hl,0x0012		;16f1
-	rst 10h			;16f4
-	push hl			;16f5
-	ld e,(hl)		;16f6
+
+	
+	;; Forth word +! ( INC ADDR -- )
+	;;
+	;; Add 2OS to address pointed to by TOS
+	db 0x02, _PLUS, _EXCLAMATION
+	dw 0x0012
+
+	rst 10h			;16f4 - Retrieve address
+
+	push hl			;16f5 - Save it
+
+	ld e,(hl)		;16f6 - Retrieve (HL) into DE
 	inc hl			;16f7
 	ld d,(hl)		;16f8
-	rst 10h			;16f9
+	
+	rst 10h			;16f9 - Retrieve addition into HL
 	add hl,de		;16fa
-	ex de,hl		;16fb
-	pop hl			;16fc
-	ld (hl),e		;16fd
+
+	ex de,hl		;16fb - Put sum into DE
+
+	pop hl			;16fc - Retrieve address
+
+	ld (hl),e		;16fd - Store new value
 	inc hl			;16fe
 	ld (hl),d		;16ff
+
 	ret			;1700
-	ld (bc),a		;1701
-	dec hl			;1702
-	dec l			;1703
-	inc d			;1704
-	nop			;1705
-	rst 10h			;1706
+
+	;; Forth word +- 
+	;;
+	;; Swap sign - apply sign of TOS to 2OS
+	db 0x02, _PLUS, _MINUS
+	dw 0x0014
+	
+	rst 10h			;1706 - Retrieve TOS and check if negative (NZ)
 	bit 7,h			;1707
-	push af			;1709
-	rst 10h			;170a
-	call ABS_SGN_HL		;170b
+
+	push af			;1709 - Save flag
+
+	rst 10h			;170a - Retrieve 2OS
+	call ABS_SGN_HL		;170b - Drop sign
+
 	pop af			;170e
 
-	if NTSC=1
-	nop
-	call nz,0x0B1E
-	else
+	if FIXBUG=1
+	call nz,NEG_HL		; If TOS was negative, negate number
+
+	rst 8			;1713 - Push result onto Parameter Stack
+
+	ret			;1714
+
+	nop			; Padding
+	
+	else			; *** BUG: result not put on stack, if positive!
+
 	ret z			;170f - BUG fix - `nop`
 	call NEG_HL		;1710 - BUG fix - `call nz, ...`
-	endif
 
-	rst 8			;1713
+	rst 8			;1713 - Push result onto Parameter Stack
+
 	ret			;1714
+
+	endif
 
 	;; Forth word ,
 	db 0x01, _COMMA
@@ -6779,8 +6816,6 @@ l16d5h:	jr z,GT_CONT_2		;16d5 - Jump if TOS <= 20S
 
 	ret			;1731
 
-
-	;; GOT THIS FAR
 	;; Forth word VLIST
 	db 0x05, _V, _L, _I, _S, _T
 	dw 0x001F
@@ -6789,7 +6824,8 @@ VLIST:	ld hl,(PSTART_DICT)	;173a
 	ld de,0x0008		;173d - Routine to push HL onto
 				;       Parameter Stack
 
-VL_NEXT_WORD:	call PUSH_STRING	;1740 - Add next word name to
+VL_NEXT_WORD:
+	call PUSH_STRING	;1740 - Add next word name to
 					;character stack
 	call PAD_WORD		;1743
 	call FIND_NEXT_WORD	;1746
@@ -6803,10 +6839,10 @@ VL_NEXT_WORD:	call PUSH_STRING	;1740 - Add next word name to
 
 	ret			;1750
 
-	ld (bc),a		;1751
-	ld d,a			;1752
-	ld a,020h		;1753
-	nop			;1755
+	;; Forth word W>
+	db 0x02, _W, _GREATERTHAN
+	dw 0x0020
+	
 	rst 10h			;1756
 	ex de,hl		;1757
 
@@ -7053,16 +7089,17 @@ l186bh:
 
 
 	;; Forth word EOFF
+	;; 
 	db 0x04, _E, _O, _F, _F
 	dw 0x0016
 	
 	ld hl,FLAGS		;18a0
 	res 6,(hl)		;18a3
 
-	ld l,0b9h		;18a5 - Console Screen status
+	ld l,0xB9		;18a5 - Console Screen status
 	ld a,(hl)		;18a7 - Retrieve top-row value
-	ld (hl),000h		;18a8 - Set top-row to be zero
-	ld l,0b7h		;18aa - Point to row count
+	ld (hl),0x00		;18a8 - Set top-row to be zero
+	ld l,0xB7		;18aa - Point to row count
 	add a,(hl)		;18ac - Expand to fill space previously
 	ld (hl),a		;18ad   occupied by Editor Screen
 
@@ -7078,18 +7115,15 @@ EO_DONE:
 	jp l1797h		;18ba
 
 
-	rlca			;18bd
-	ld b,h			;18be
-	ld b,l			;18bf
-	ld b,e			;18c0
-	ld c,c			;18c1
-	ld c,l			;18c2
-	ld b,c			;18c3
-	ld c,h			;18c4
-	djnz l18c7h		;18c5
-l18c7h:
+	;; Forth word DECIMAL
+	;; 
+	db 0x07, _D, _E, _C, _I, _M, _A, _L
+	dw 0x0010
+	
+DECIMAL:
 	ld hl,BASE		;18c7
-	ld (hl),00ah		;18ca
+	ld (hl),0x0A		;18ca
+
 	ret			;18cc
 
 	;; Forth word BACK
@@ -7449,53 +7483,61 @@ U_HASH:	rst 10h			;1a74 - Retrieve TOS into HL
 	jp PRINT_STRING		;1a87
 
 
-	ld (bc),a		;1a8a
-	ld b,h			;1a8b
-	dec a			;1a8c
-	inc de			;1a8d
-	nop			;1a8e
-	call COMPARE_STACK_DNUM		;1a8f
+	;; Forth word D=
+	;; 
+	;; Compare two double-precision numbers from Parameter Stack
+	db 0x02, _D, _EQUALS
+	dw 0x0013
+	
+	call COMPARE_STACK_DNUM	;1a8f
 	rst 10h			;1a92
 	rst 10h			;1a93
 	rst 10h			;1a94
 	rst 10h			;1a95
-
+	
 l1a96h:	scf			;1a96
 	jr nz,l1a9ah		;1a97
 	ccf			;1a99
+
 l1a9ah:	jp GT_CONT_2		;1a9a
-	inc bc			;1a9d
-	ld b,h			;1a9e
-	jr nc,l1adeh		;1a9f
-	ld c,000h		;1aa1
+
+
+	;; Forth word D0=
+	;;
+	;; Check if double-precision number on TOS is zero
+	db 0x03, _D, _0, _EQUALS
+	dw 0x000E
+	
 	call UNSTACK_DEHL	;1aa3
 	call CHECK_DEHL_ZERO	;1aa6
-	jr l1a96h		;1aa9
-	inc b			;1aab
-	ld b,h			;1aac
-	ld c,l			;1aad
-	ld c,c			;1aae
-	ld c,(hl)			;1aaf
-	djnz l1ab2h		;1ab0
-l1ab2h:
-	call COMPARE_STACK_DNUM	;1ab2
-	call nc,DSWAP		;1ab5
-	rst 10h			;1ab8
-	rst 10h			;1ab9
-	ret			;1aba
-	inc b			;1abb
-	ld b,h			;1abc
-	ld c,l			;1abd
-	ld b,c			;1abe
-	ld e,b			;1abf
-	djnz l1ac2h		;1ac0
-l1ac2h:
-	call COMPARE_STACK_DNUM	;1ac2
-	call c,DSWAP		;1ac5
-	rst 10h			;1ac8
-	rst 10h			;1ac9
-	ret			;1aca
 
+	jr l1a96h		;1aa9
+
+	;; Forth word DMIN
+	;; 
+	db 0x04, _D, _M, _I, _N
+	dw 0x0010
+	
+l1ab2h:	call COMPARE_STACK_DNUM	;1ab2 - Compare numbers
+	call nc,DSWAP		;1ab5   Swap, if bigger number is TOS
+
+	rst 10h			;1ab8 - Discard double on TOS (smaller of 
+	rst 10h			;1ab9   two numbers)
+
+	ret			;1aba
+
+	;; Forth word DMAX
+	;; 
+	db 0x04, _D, _M, _A, _X
+	dw 0x0010
+	
+l1ac2h:	call COMPARE_STACK_DNUM	;1ac2 - Compare numbers
+	call c,DSWAP		;1ac5 - Swap, if smaller is TOS
+
+	rst 10h			;1ac8 - Discard double on TOS (larger of
+	rst 10h			;1ac9   two numbers)
+
+	ret			;1aca
 
 	;; Forth word W=
 	;;
@@ -7508,32 +7550,34 @@ l1ac2h:
 	jr l1a96h		;1ad3
 
 
-	ld (bc),a		;1ad5
-	ld d,e			;1ad6
-	dec a			;1ad7
-	dec bc			;1ad8
-	nop			;1ad9
+	;; Forth word S=
+	;; 
+	db 0x02, _S, _EQUALS
+	dw 0x000B
+	
 	rst 10h			;1ada
 	call MATCH_STRING	;1adb
-l1adeh:
+
+SEQ_CONT:	
 	jr l1a96h		;1ade
 
+	;; Forth word TIME
+	;; 
 	db 0x04, _T, _I, _M, _E
 	dw 0x000C
+
 	ld hl,TIME		;1ae7
 	rst 8			;1aea - Push HL onto Parameter Stack
 
 	ret			;1aeb
 
+	;; Forth word PER
+	db 0x03, _P, _E, _R
+	dw 0x000B
+	
+	ld hl,PER		;1af2 - Retrieve PER and push onto
+	rst 8			;1af5   Parameter Stack
 
-	inc bc			;1aec
-	ld d,b			;1aed
-	ld b,l			;1aee
-	ld d,d			;1aef
-	dec bc			;1af0
-	nop			;1af1
-	ld hl,PER		;1af2
-	rst 8			;1af5
 	ret			;1af6
 
 	;; Forth word +ORG ( OFFSET -- ADDR )
