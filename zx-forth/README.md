@@ -246,19 +246,13 @@ A ZX81-Forth frame consists of a VSync signal (taking 402us), 105 border lines (
 
 However, when investigating the ZX81-Forth display code, I also spotted that the Z80 is never set to interrupt mode 1. This means it will operate in Interrupt Mode 0, which retrieves and executes an instruction from the data bus when an interrupt is generated.
 
-### 
-
-8 scan lines = 512 us = 1,664 T states
-
-Would like scanlines to be 12 T states longer
-
 ## Dictionary Layout
 
 All Forth environments rely on a dictionary of words, which the user adds to to provide the functionality they need. On ZX81-Forth, the core of the dictionary is held in ROM and users add to it (with a colon-defined word, for example) in RAM.
 
-A typical H Forth word has three components:
-* It begins with a one-byte name-length-field, which is primarily used to hold the length of the word name. The lowest six bits hold the word-name length. The remaining tow bits are used to hold word properties (bit 6 indicates a task word and bit 7 indicates an immediate word).
-* The name-length-field is followed immediately by the name (as a sequence of ASCII characters)
+A typical ZX-Forth word has three components:
+* It begins with a one-byte name-length-field, which is primarily used to hold the length of the word name. The lowest six bits hold the word-name length. The remaining two bits are used to hold word properties (bit 6 indicates a task word and bit 7 indicates an immediate word).
+* The name-length-field is followed immediately by the name (as a sequence of ASCII characters).
 * Third, a two-byte, link field which records the offset to the next word in the dictionary (in a linked-list structure). This is used by the monitor to step through the dictionary -- e.g., when searching for a Forth word. 
 * Fourth, the body of the word -- that is, its parameter field. For colon-defined words, this is a Z80 machine-code routine executed when the word is actioned.
 
@@ -266,13 +260,13 @@ A task word is slightly more complicate. It has four components:
 * It begins with a one-byte name-length-field, like a colon definition.
 * The name-length-field is followed immediately by the name.
 * Third, a two-byte, word-length field which records the total size of the word in memory.
-* Fourth, the address of the parameter field is stored, which is later in the defintion
+* Fourth, the address of the parameter field is stored, which is later in the definition
 * Fifth is a sixteen-byte data structure containing key information about the task.
 * Finally, there is the parameter field, which contains a link to the parameter field of the word that the task actions.
 
-Further, the beginning (tail) and end (head) of the dictionary are stored in two system variables. New words are added to the head of the dictionary.
+Further, the beginning (tail) and end (head) of the dictionary are stored in two system variables, at address 0x7C88 and 0x7C8A, respectively. New words are added to the head of the dictionary.
 
-The ROM part of the dictionary is actually backwards. The last word in the user's dictionary has a word-length field that effectively points to the head of the ROM dictionary: that is, to `M*`.
+The ROM part of the dictionary is actually backwards. The last word in the user's dictionary has a word-length field that effectively points to the head of the ROM dictionary -- that is, to `M*` -- which is the first word in the dictionary.
 
 ## Character Stack
 
@@ -288,19 +282,33 @@ The restart routines at 18h and 20h are used to push/ pop characters onto/ off t
 
 ## Multitasking
 
-ZX81-Forth has a relatively sophisticated preemptive, multitasking capability, which allows you to schedule tasks to occur at certain times, with certain regularities, or as soon as possible.
+ZX81-Forth has a relatively sophisticated, preemptive, multitasking capability, which allows you to schedule tasks to occur at certain times, with certain regularities, or as soon as possible.
 
-Tasks are ordered in a linked list and on each frame (fifty or sixty times per second), the monitor will walk through the list and execute any tasks that are due.
+Tasks are ordered in a linked list. On each frame (fifty or sixty times per second), the monitor will walk through the list and execute any tasks that are due.
 
-The task list always contains at least one task, which is a monitor-service routine that will update the clock, check for out-of-memory error, and flash the cursor.
+The task list always contains at least one task, which is a monitor-service routine that will update the clock, check for an out-of-memory error, and flash the cursor.
 
 A task is described by a 13-byte structure, with the following elements:
-- Bytes 0 and 1 are the link field pointing to the next task in the list (or holding 0x0000, if it is the end of the list).
-- Bytes 2 through 5 contain a counter that is updated each frame and is used to determine when a task should be scheduled to run.
-- Bytes 6 through 9 contain a base time, which is used to reset the counter when it has run down.
+- Bytes 0 and 1 are the link field pointing to the next task in the list (or holding 0x0000, if the task is at the end of the list).
+- Bytes 2 through 5 contain a counter that is incremented each frame and is used to determine when a task is due to run. This happens when the counter rolls over to 0x00000000, which causes the task status counter to be incremented.
+- Bytes 6 through 9 contain a base time, which is used to reset the counter when it has rolled over.
 - Byte 10 is the task status byte. The lower six bits contain a backlog counter of task instances to be run. If the lower six bits are non-zero then the task is due to run (potentially multiple runs, if the scheduler is overloaded with tasks). Bit 6 is a flag indicating if the task is stopped. Bit 7 is a flag indicating if this and subsequent task in the list are locked (see manual for info).
 - Bytes 11 and 12 contain a link to the code field of the Forth word that contains the action of the task.
 
-The system task's data structure is held within the system variables (usually, starting at address 0x7C98 on Minstrel 3 (or 0xFC98 on ZX81). Subsequent tasks are held within Forth words in the dictionary, created with the `TASK` command.
+The system task's data structure is held within the system variables (usually, starting at address 0x7C98 on the Minstrel 3 (or address 0xFC98 on ZX81). Subsequent tasks are held within Forth words in the dictionary, created with the `TASK` command.
 
-Task words have bit 6 of their name-length field set. The task's data structure is the inserted int the parameter field of the task word.
+Task words have bit 6 of their name-length field set. The task's data structure is then inserted into the parameter field of the task word.
+
+## Cassette storage
+
+ZX-Forth allows the user to save the contents of the Editor screen  o cassette for future use. The format used for this is specific to ZX-Forth and consists of the following elements:
+
+- A leader tone of 7Dh zero bytes
+- Identifier byte (has value 0xA5), which is used to check for a ZX-Forth file during loading.
+- Screen number (as specified by the user (2 bytes)
+- Screen contents (512 bytes)
+- Another leader tone of 7Dh zero bytes
+
+When loading back from tape, ZX-Forth searchers for the identifier byte 0xA5 and then loads and checks the screen number. If all is as should be, it then populates the screen from the cassette buffer. If auto-compile is enabled, the screen is compiled once loaded.
+
+Note that the Editor Screen must be visible for `LOAD` to work and that the Editor Screen is cleared at the beginning of the `LOAD` operation, so any previous content will be lost. 
