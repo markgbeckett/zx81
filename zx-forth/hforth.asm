@@ -74,7 +74,8 @@
 	;; (Tree Forth original) vs PAL (David Husband's port)
 MINSTREL3:	equ 0x00
 NTSC:		equ 0x00
-	
+
+	;; 	include "zx81_chars.asm"
 	include "hforth_chars.asm"
 
 	;; ROM configuration options
@@ -2457,37 +2458,54 @@ PRINT_OK:
 
 
 	;; Convert a character into a digit, in current base
-ATOI:
-	and %01111111		;0677
-	cp 060h			;0679 - Check for letter
+	;;
+	;; Assumes digits are 0, 1, 2, ..., 9, A, B, ..., up to limit
+	;; for current base
+	;;
+	;; On entry:
+	;;   A - ASCII character code to convert
+	;;
+	;; On exit:
+	;;   A - numerical value
+	;; 
+ATOI:	and %01111111		;0677 - Mask off inverse flag
+	cp 060h			;0679 - Check for lower-case letter
 	jr c,l067fh		;067b
-	add a,0e0h		;067d - Subtract 0x20
-l067fh:	add a,0d0h		;067f - Add 
-	cp 010h			;0681
+	add a,0e0h		;067d - Convert to upper case (Subtract 0x20)
+l067fh:	add a,0d0h		;067f - Subtract 0x30 ('0' mapped to 0,
+				;       and so on)
+	cp 010h			;0681 - Check for digit and return, if so
 	ret c			;0683
 
-	add a,0f9h		;0684
+	add a,0f9h		;0684 - Subtract 7 (so that 'A' = 10, and so on)
 
 	ret			;0686
 
+	;; Pop string from character stack and write to memory (usually
+	;; into dictionary)
+	;; 
 	;; On entry:
-	;; - HL - HERE
+	;; - HL - Destination address for string (usually HERE in dictionary)
 	;; - Token is on Character Stack (with length on Parameter Stack)
-TOKEN_TO_MEM:
-	push af			;0687
+	;;
+	;; On exit:
+	;; - String has been removed from Character Stack
+STRING_TO_MEM:
+	push af			;0687 - Save registers
 	push hl			;0688
 	push de			;0689
 	
-	ex de,hl		;068a - DE = head of dictionary
-	rst 10h			;068b - Retrieve token length
+	ex de,hl		;068a - Move destination address to DE
+	rst 10h			;068b - Pop string length into HL
 
-	ld a,l			;068c - Maximum length is 0x3F (63d)
-	and 03fh		;068d
+	ld a,l			;068c - Maximum string length is 0x3F (63d)
+	and %00111111		;068d
 	
-	ld (de),a		;068f - Store token length
-	jr z,TOM_DONE		;0690 - Check if done
+	ld (de),a		;068f - Store string length
+	jr z,TOM_DONE		;0690 - Check if done (zero flag set by
+				;       `and` command above)
 
-	ld l,a			;0692
+	ld l,a			;0692 - String length to L
 
 TOM_LOOP:
 	inc de			;0693 - Advance dictionary pointer
@@ -2505,15 +2523,17 @@ TOM_DONE:
 	ret			;069c
 
 
-sub_069dh:
-	push hl			;069d
+MATCH_STACK_STRINGS:
+	push hl			;069d - Save registers
 	push de			;069e
 	push bc			;069f
-	rst 10h			;06a0
-	ex de,hl			;06a1
-	rst 10h			;06a2
-	ld a,(hl)			;06a3
-	inc hl			;06a4
+	
+	rst 10h			;06a0 - Retrieve TOS into DE
+	ex de,hl		;06a1
+	rst 10h			;06a2 - Retrieve 2OS into HL
+	ld a,(hl)		;06a3 - Retrieve string length and
+	inc hl			;06a4   advance pointer
+
 	jr l06b1h		;06a5
 
 	;; Match string
@@ -2851,7 +2871,7 @@ TOKEN_TO_DICT:
 	ld hl,(P_HERE)		;07a8
 	call DUP		;07ab - Duplicate token length (on
 				;       Parameter Stack)
-	call TOKEN_TO_MEM	;07ae
+	call STRING_TO_MEM	;07ae
 	ex de,hl		;07b1 - DE = HERE
 	rst 10h			;07b2 - Pop token length
 	add hl,de		;07b3 - Update dictionary pointer to
@@ -4254,7 +4274,7 @@ l0cabh:
 	db 0x11, 0x00
 
 D_SLASH:
-	call 0x0B9B
+	call UNSTACK_DEHL
 	call sub_0cfbh		;0cc8
 	call STACK_DEHL		;0ccb
 	jp l0c3ah		;0cce
@@ -6131,38 +6151,51 @@ l1484h:
 	inc hl			;1494
 	rst 8			;1495
 	ret			;1496
-	add a,c			;1497
-	ld (0003bh),hl		;1498
-	ld hl,l14beh		;149b
-l149eh:
-	call DICT_ADD_CALL_HL		;149e
+
+	;; Forth word "
+	;;
+	;; 
+	db 0x01+0x80, _QUOTES
+	dw 0x003B
+
+	ld hl,QUOTE		;149b
+l149eh:	call DICT_ADD_CALL_HL	;149e
 	ld hl,(P_HERE)		;14a1
-	ld a,0ffh		;14a4
-l14a6h:
-	call DICT_ADD_BYTE		;14a6
-	inc (hl)			;14a9
+	ld a,0xFF		;14a4
+l14a6h:	call DICT_ADD_BYTE	;14a6
+	inc (hl)		;14a9
 	or a			;14aa
 	call sub_14c5h		;14ab
-	cp 022h		;14ae
+	cp 022h			;14ae
 	jr nz,l14a6h		;14b0
+
 	ret			;14b2
-sub_14b3h:
-	pop de			;14b3
-	pop hl			;14b4
-	push de			;14b5
-	ld e,(hl)			;14b6
+
+Q_FIND_STR:
+	pop de			;14b3 - Retrieve second value from
+	pop hl			;14b4   parameter stack, which is
+	push de			;14b5   start of string, into HL
+
+	;; Retrieve the length of the string
+	ld e,(hl)		;14b6
 	ld d,000h		;14b7
-	ex de,hl			;14b9
-	add hl,de			;14ba
+	ex de,hl		;14b9 
+
+	;; Point HL to end of string
+	add hl,de		;14ba
 	inc hl			;14bb
-	ex de,hl			;14bc
+	ex de,hl		;14bc - HL points to string; DE points
+				;to next command
+
 	ret			;14bd
-l14beh:
-	call sub_14b3h		;14be
-	push de			;14c1
+
+	;; Runtime part of " word
+QUOTE:	call Q_FIND_STR		;14be
+	push de			;14c1 - Set return address
+
 	jp PUSH_STRING		;14c2
 
-sub_14c5h:
+                                                                                sub_14c5h:
 	call SWITCH_TO_MSTACK1	;14c5
 	and 07fh		;14c8
 	call PRINT_A		;14ca
@@ -6174,25 +6207,25 @@ sub_14c5h:
 	db 0x02+0x80, _PERIOD, _QUOTES
 	dw 0x0011
 	
-	ld hl, 0x14DC
+	ld hl, DOTQ
 	jr 0x149E
 
-	call 0x14B3
+	;; Execution kernel for ."
+DOTQ:	call 0x14B3		;14dc
 	push de			;14df
 	jp PRINT_STR_HL		;14e0
 
 
-	add a,(hl)		;14e3
-	ld b,c			;14e4
-	ld b,d			;14e5
-	ld c,a			;14e6
-	ld d,d			;14e7
-	ld d,h			;14e8
-	ld (0x0086),hl		;14e9 - ??? ROM
+	;; Forth word ABORT"
+	;;
+	;;
+	db 0x06+0x80, _A, _B, _O, _R, _T, _QUOTES
+	dw 0x0086
+	
 	ld hl,l14f1h		;14ec
 	jr l149eh		;14ef
 
-l14f1h:	call sub_14b3h		;14f1
+l14f1h:	call Q_FIND_STR		;14f1
 	push de			;14f4
 	push hl			;14f5
 	rst 10h			;14f6
@@ -6252,12 +6285,12 @@ l151fh:	call WRITE_PULSE	;151f - Generate pulse
 
 	ret			;152d
 
-WRITE_HL:
+WRITE_LEADER:
 	push bc			;152e
 	push hl			;152f
 
-	ld hl,l153dh		;1530
-	ld b,07dh		;1533
+	ld hl,P_NULL		;1530
+	ld b,0x7D		;1533
 l1535h:	call WRITE_BYTE		;1535
 	djnz l1535h		;1538
 
@@ -6265,7 +6298,7 @@ l1535h:	call WRITE_BYTE		;1535
 	pop bc			;153b
 	ret			;153c
 
-l153dh:	nop			;153d
+P_NULL:	db 0x00			;153d
 
 FILE_ID:	db 0xA5		;153e - Identifier used for ZX-Forth
 				;       files
@@ -6308,30 +6341,38 @@ WRITE_SCR_NUM:
 	pop hl			;1567
 	ret			;1568
 
-	;; Forth word STORE
+	;; Forth word STORE ( SCREEN_NUM -- )
 	;;
-	;; Save screen to cassett
+	;; Save screen to cassette.
+	;;
+	;; On entry:
+	;;   TOS - screen number
+	;;
+	;; On exit
 	db 0x05, _S, _T, _O, _R, _E
 	dw 0x0097
 
-	;; Check Editor screen is visible and return if not
+	;; Check if Editor screen is visible, and return if not
 	ld hl,FLAGS		;1571
 	bit 6,(hl)		;1574
 	ret z			;1576
 
-	;; Retrieve screen number (filename) from TOS and save it
+	;; Retrieve screen number (used as filename) from TOS and store
+	;; it for later
 	rst 10h			;1577
 	ld (SCREEN_NUM),hl	;1578
 
-	;; Disable NMI generation (important for accurate timing)
+	;; Disable NMI generation (important to have accurate timing)
 l157bh:	out (0xFD),a		;157b
 
 	ld hl,(P_DISP_2)	;157d - Retrieve address of editor screen
-	call WRITE_HL		;1580
-	call WRITE_ID		;1583	
+	call WRITE_LEADER	;1580 - Write to cassette port
+	call WRITE_ID		;1583 - Write id code (used to confirm
+				;       is a ZX-Forth file, when loading back
+				;       into computer)
 	call WRITE_SCR_NUM	;1586 - Write screen number
 	call WRITE_SCREEN	;1589 - Write content of screen
-	call WRITE_HL		;158c - Will be address of editor
+	call WRITE_LEADER	;158c - Will be address of editor
 				;       screen, as all of the WRITE_*
 				;       routines preserve HL
 
@@ -6501,7 +6542,8 @@ l163bh:	sbc hl,de		;163b - Check if screen numbers match
 
 l163dh:	pop hl			;163d - Retrieve start of editor window
 	jr nz,l164ch		;163e - Repeat, if no screen-number match 
-	ld de,16*32		;1640 - Length of editor window
+
+	ld de,16*32		;1640 - Set DE to size of editor window in memory
 
 	call LOAD_BLOCK		;1643
 	call LOAD_COMPILE	;1646
@@ -7007,7 +7049,7 @@ l186bh:
 	ld d,a			;1891
 	ld hl,0008h+1		;1892
 	rst 10h			;1895
-	jp TOKEN_TO_MEM		;1896
+	jp STRING_TO_MEM	;1896
 
 
 	;; Forth word EOFF
@@ -7275,11 +7317,9 @@ T:	ld hl,PSTART_DICT	;19ce - Retrieve address
 	jp GT_CONT_2		;19e3
 
 
-	inc bc			;19e6
-	ld l,043h		;19e7
-	ld c,a			;19e9
-	ld (de),a			;19ea
-	nop			;19eb
+	db 0x03, _PERIOD, _C, _O
+	dw 0x0012
+
 	rst 10h			;19ec
 	xor a			;19ed
 	or l			;19ee
@@ -7314,7 +7354,7 @@ l19f0h:	rst 20h			;19f0
 	db 0x05, _U, _SLASH, _M, _O, _D
 	dw 0x0014
 	
-sub_1a1bh:
+U_SLASH_MOD:
 	rst 10h			;1a1b
 	push hl			;1a1c
 	pop bc			;1a1d
@@ -7329,48 +7369,48 @@ sub_1a1bh:
 	db 0x04, _U, _M, _O, _D
 	dw 0x000F
 	
-	call sub_1a1bh		;1a2e
-	call SWAP		;1a31
-	rst 10h			;1a34
+	call U_SLASH_MOD	;1a2e
+	call SWAP		;1a31 - Swap remainder and quotient
+
+	rst 10h			;1a34 - Discard quotient
+
 	ret			;1a35
 
+	
 	;; Forth word U<
 	;;
-	
-	ld (bc),a			;1a36
-	ld d,l			;1a37
-	inc a			;1a38
-	ld c,000h		;1a39
-	call UNSTACK_DEHL		;1a3b
+	db 0x02, _U, _LESSTHAN
+	dw 0x000E
+
+	call UNSTACK_DEHL	;1a3b
 	or a			;1a3e
 	sbc hl,de		;1a3f
 	jp GT_CONT_2		;1a41
 
-
-	inc bc			;1a44
-	ld c,l			;1a45
-	ld c,c			;1a46
-	ld c,(hl)			;1a47
-	ld de,0cd00h		;1a48
-	sbc a,e			;1a4b
-	dec bc			;1a4c
+	;; Forth word MIN
+	db 0x03, _M, _I, _N
+	dw 0x0011
+	
+	call UNSTACK_DEHL	;1a4a	
 	call DE_GT_HL		;1a4d
-l1a50h:
-	jr c,l1a53h		;1a50
-	ex de,hl			;1a52
-l1a53h:
-	rst 8			;1a53
+
+MIN_CONT:
+	jr c,l1a53h		;1a50 - Swap if DE > HL
+	ex de,hl		;1a52
+
+l1a53h:	rst 8			;1a53 - Push HL onto stack
+	
 	ret			;1a54
-	inc bc			;1a55
-	ld c,l			;1a56
-	ld b,c			;1a57
-	ld e,b			;1a58
-	rrca			;1a59
-	nop			;1a5a
-	call UNSTACK_DEHL		;1a5b
-	call DE_GT_HL		;1a5e
-	ccf			;1a61
-	jr l1a50h		;1a62
+
+
+	;; Forth word MAX
+	db 0x03, _M, _A, _X	
+	dw 0x000F
+	
+	call UNSTACK_DEHL	;1a5b - Retrieve TOS and 20S into HL and DE
+	call DE_GT_HL		;1a5e - Carry indicates if DE > HL
+	ccf			;1a61 - Complement, so flag indicates HL > DE
+	jr MIN_CONT		;1a62 - Continue as for MIN
 
 	;; Forth word PAD
 	db 0x03, _P, _A, _D  	; 1a64
@@ -7383,25 +7423,33 @@ l1a53h:
 
 
 	;; Forth word U# (1a6f)
+	;;
+	;; Convert (unsigned) integer to string
 	db 0x02, _U, _HASH
 	dw 0x0010
-	
-l1a74h:	rst 10h			;1a74
+
+	;; Convert TOS to string (treating as unsigned integer)
+U_HASH:	rst 10h			;1a74 - Retrieve TOS into HL
 	ld de,0x0000		;1a75
 	ex de,hl		;1a78
-	rst 8			;1a79
-	ex de,hl		;1a7a
-	rst 8			;1a7b
-	jp D_TOS_TO_STRING	;1a7c
+
+	;; Turn into 32-bit integer, by prepending with 0x0000
+	rst 8			;1a79 - Push 0x0000 onto stack
+	ex de,hl		;1a7a - Retrieve number
+	rst 8			;1a7b   and restore to stack
+	jp D_TOS_TO_STRING	;1a7c - Convert to string
 
 
-	ld (bc),a		;1a7f
-	ld d,l			;1a80
-	ld l,00bh		;1a81
-	nop			;1a83
-	call l1a74h		;1a84
+	;; Forth word U.
+	;; 
+	db 0x02, _U, _PERIOD
+	dw 0x000B
+
+	call U_HASH		;1a84
 	jp PRINT_STRING		;1a87
-	ld (bc),a			;1a8a
+
+
+	ld (bc),a		;1a8a
 	ld b,h			;1a8b
 	dec a			;1a8c
 	inc de			;1a8d
@@ -7411,12 +7459,11 @@ l1a74h:	rst 10h			;1a74
 	rst 10h			;1a93
 	rst 10h			;1a94
 	rst 10h			;1a95
-l1a96h:
-	scf			;1a96
+
+l1a96h:	scf			;1a96
 	jr nz,l1a9ah		;1a97
 	ccf			;1a99
-l1a9ah:
-	jp GT_CONT_2		;1a9a
+l1a9ah:	jp GT_CONT_2		;1a9a
 	inc bc			;1a9d
 	ld b,h			;1a9e
 	jr nc,l1adeh		;1a9f
@@ -7448,13 +7495,19 @@ l1ac2h:
 	rst 10h			;1ac8
 	rst 10h			;1ac9
 	ret			;1aca
-	ld (bc),a		;1acb
-	ld d,a			;1acc
-	dec a			;1acd
-	ld a,(bc)		;1ace
-	nop			;1acf
-	call sub_069dh		;1ad0
+
+
+	;; Forth word W=
+	;;
+	;; Compare (counted) strings pointed to by TOS and 2OS
+	;; 
+	db 0x02, _W, _EQUALS
+	dw 0x000A
+	
+	call MATCH_STACK_STRINGS ;1ad0
 	jr l1a96h		;1ad3
+
+
 	ld (bc),a		;1ad5
 	ld d,e			;1ad6
 	dec a			;1ad7
