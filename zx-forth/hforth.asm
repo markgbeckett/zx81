@@ -1393,13 +1393,14 @@ RIGHT:
 	ld a,(ix+000h)		;02eb - Get current column 
 	inc a			;02ee - Advance right
 	cp b			;02ef - Compare to screen width
-	jr c,l02f8h		;02f0 - Jump forward if not past end of screen
+	jr c,AC_CONT		;02f0 - Jump forward if not past end of screen
 	
 	call CR			;02f2 - Reset current column
 
 	jp LINE_FEED		;02f5 - Advance to next row and done
 
-l02f8h:	ld (ix+000h),a		;02f8 - Store current column and done
+AC_CONT:
+	ld (ix+000h),a		;02f8 - Store current column and done
 
 AC_DONE:
 	pop bc			;02fb
@@ -1408,6 +1409,7 @@ AC_DONE:
 
 	ret			;02fe
 
+	;; Move cursor up one screen row (assuming not at top)
 UP:	ld a,(ix+001h)		;02ff - Retrieve current row 
 	or a			;0302 - No action, if top of screen
 	ret z			;0303
@@ -1424,7 +1426,7 @@ UP:	ld a,(ix+001h)		;02ff - Retrieve current row
 	;; 
 	;; On exit:
 	;; 
-LEFT:	ld a,(ix+000h)		;0308 - Retrieve current colmn
+LEFT:	ld a,(ix+000h)		;0308 - Retrieve current column
 	or a			;030b - Check if beginning of line
 	ld b,a			;030c
 	jr nz,LEFT_CONT		;030d - and skip forward if not
@@ -1432,7 +1434,7 @@ LEFT:	ld a,(ix+000h)		;0308 - Retrieve current colmn
 	call UP			;030f - Start of line, so move up
 	nop			;0312
 	call GET_SCR_SIZE	;0313 - Set B to last column
-	ret c			;0316
+	ret c			;0316 - Return if zero-sized screen
 
 LEFT_CONT:
 	dec b			;0317 - Decrease column index 
@@ -1440,6 +1442,7 @@ LEFT_CONT:
 
 	ret			;031b - Done
 	
+	;; Not sure if this is ever called
 	call GET_SCR_SIZE	;031c
 	dec c			;031f
 	ld (ix+001h),c		;0320
@@ -7042,8 +7045,7 @@ l184eh:
 	ret			;1857
 	ld (bc),a			;1858
 	jr nc,$+62		;1859
-l185bh:
-	dec bc			;185b
+l185bh:	dec bc			;185b
 	nop			;185c
 	rst 10h			;185d
 	rlc h			;185e
@@ -7054,37 +7056,57 @@ l185bh:
 	nop			;1867
 	rst 10h			;1868
 	rlc h		;1869
-l186bh:
-	jp GT_CONT_2		;186b
-	ld (bc),a			;186e
-	jr nc,EO_DONE		;186f
-	dec c			;1871
-	nop			;1872
-	rst 10h			;1873
+
+l186bh:	jp GT_CONT_2		;186b
+	
+	;; Forth word 0=
+	;;
+	;; Check if TOS is 0
+	db 0x02, _0, _EQUALS
+	dw 0x000D
+
+	rst 10h			;1873 - Retrieve TOS
+
 	xor a			;1874
-	cp l			;1875
+	cp l			;1875 - Check LSB
 	jr c,l186bh		;1876
-	cp h			;1878
+	cp h			;1878 - Check MSB
 	jr l186bh		;1879
-	ld (bc),a			;187b
-	ld (l092ah),a		;187c
-	nop			;187f
-	rst 10h			;1880
-	add hl,hl			;1881
-	rst 8			;1882
+
+	;; Forth word 2*
+	db 0x02, _2, _ASTERISK
+	dw 0x0009
+	
+	rst 10h			;1880 - Retrieve TOS
+	add hl,hl		;1881 - Multiply by 2
+	rst 8			;1882 - Push to Parameter Stack
+
 	ret			;1883
-	ld (bc),a			;1884
-	ld (0c2fh),a		;1885
-	nop			;1888
-	rst 10h			;1889
-	sra h		;188a
-	rr l		;188c
-	rst 8			;188e
+
+	;; Forth word 2/
+	;;
+	;; Divide TOS by 2
+	db 0x02, _2, _SLASH
+	dw 0x000C
+
+	rst 10h			;1889 - Retrieve TOS into HL
+
+	sra h			;188a - Divide by 2
+	rr l			;188c
+
+	rst 8			;188e - Return to Parameter Stack
+	
 	ret			;188f
-	ld (bc),a			;1890
-	ld d,a			;1891
-	ld hl,0008h+1		;1892
-	rst 10h			;1895
+
+	;; Forth word W!
+	;;
+	;; Store character string to address on TOS
+	;; 
+	db 0x02, _W, _EXCLAMATION
+	dw 0x0009
+	
+	rst 10h			;1895 - Retrieve destination address
+	
 	jp STRING_TO_MEM	;1896
 
 
@@ -7107,8 +7129,8 @@ EO_DONE:
 	ret			;18ae - Done
 
 	;; FORTH word BASE 
-	db 0x84, 0x42, 0x41, 0x53, 0x45
-	db 0x0E, 0x00
+	db 0x84, _B, _A, _S, _E
+	dw 0x000E
 	
 	ld hl,BASE		;18b6
 	push hl			;18b9
