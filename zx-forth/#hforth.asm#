@@ -1542,11 +1542,11 @@ SCR_PR_CHR:
 	;; by uppercase)
 	and %01111111		;033a - Mask off Bit 7 of character to
 				;       print
-	cp "`"			;033c - Is it < "£" symbol (same as
+	cp "`"			;033c - Is it < "Â£" symbol (same as
 				;       ASCII "`" or 60h)
 	jr c,SPC_CONT		;033e - Jump forward, if so
 
-	add a,"A"-"a"		;0340 - Values in 0x60 -- 0x7F (i.e., £,
+	add a,"A"-"a"		;0340 - Values in 0x60 -- 0x7F (i.e., Â£,
 				;       a, b, ..., z, ... are shifted to
 				;       0x40 -- 0x5F (note that Bit 7 of
 				;       code already masked off). This
@@ -7082,6 +7082,7 @@ l17abh:	ld a,02ah		;17ab
 	else
 	ld a,0xC2		;17f2 - Z80 op code for JP NZ,NN
 	endif
+
 	call DICT_ADD_CHAR_AND_HL	;17f4
 	
 	inc hl			;17f7
