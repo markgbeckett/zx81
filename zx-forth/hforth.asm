@@ -480,6 +480,34 @@ NMI_DONE: ; 0x006C
 	ld hl,(NEXT_DISP_ROUT) 	; Proceed to next routine (either
 	jp (hl)	     		; RUN_VSYNC or RUN_DISPLAY)
 
+	if MINSTREL4=1
+RUN_DISPLAY:	
+		;; Write bit (based on carry)
+WRITE_PULSE_4:
+	push af			;1501
+
+	;;  Generate one pulse of leader tone
+	and %11110111
+	out (0xFE),a		;1502 - Set Cassette Out to low
+	ld a,010h		;1504
+TOL4_LOOP:
+	dec a			;1506
+	jr nz,TOL4_LOOP		;1507
+
+	or %00001000
+	out (0xFE),a		;1509 - Set Cassette Out to high
+
+	;; Wait
+	ld a,04bh		;150b
+TOL_WAIT4:	
+	dec a			;150d
+	jr nz,TOL_WAIT4		;150e
+
+	pop af			;1510
+
+	ret			;1511
+
+	else
 	;; Continuation of NMI cycle when top border has been
 	;; generated. This code segment produces main character display,
 	;; using the maskable interrupt.
@@ -566,7 +594,9 @@ RD_KERNEL:
 				; interrupt. It returns to the calling
 				; program (by dropping the first return
 				; address)
-
+	endif
+	
+	ds 0x0098-$		; Spacer for Minstrel 4th
 
 	;; ----------------------------------------------------------------
 	;; Video handling routine (VSync and read keyboard)
@@ -6374,8 +6404,13 @@ WRITE_BYTE:
 	ld b,00ah		;151b
 	ld a,(hl)		;151d
 	scf			;151e - Start with one
+	if MINSTREL4=1
+l151fh:	call WRITE_PULSE_4	;151f - Generate pulse
+	call c,WRITE_PULSE_4	;1522   Double-length for bit=one
+	else
 l151fh:	call WRITE_PULSE	;151f - Generate pulse
 	call c,WRITE_PULSE	;1522   Double-length for bit=one
+	endif
 	call nc,WRITE_GAP	;1525 - Gap for zero
 	add a,a			;1528 - Next bit to carry
 	djnz l151fh		;1529 - Repeat (with end with zero?)
@@ -6538,9 +6573,9 @@ l15c3h:	in a,(0feh)		;15c3 - Read tape signal
 	ld c,a			;15c9
 	djnz l15c3h		;15ca
 
-	cp 004h		;15cc
+	cp 004h			;15cc
 	ccf			;15ce
-	rl e		;15cf
+	rl e			;15cf
 	jr nc,l15a9h		;15d1
 
 	pop bc			;15d3
@@ -7082,6 +7117,7 @@ l17abh:	ld a,02ah		;17ab
 	else
 	ld a,0xC2		;17f2 - Z80 op code for JP NZ,NN
 	endif
+
 	call DICT_ADD_CHAR_AND_HL	;17f4
 	
 	inc hl			;17f7
