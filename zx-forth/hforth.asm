@@ -74,13 +74,14 @@
 	;; (Tree Forth original) vs PAL (David Husband's port)
 MINSTREL3:	equ 0x00
 NTSC:		equ 0x00
-FIXBUG:		equ 0x00 	; Fix bugs in original code
+FIXBUG:		equ 0x01 	; Fix bugs in original code
+MINSTREL4:	equ 0x01
 
 	;; 	include "zx81_chars.asm"
 	include "hforth_chars.asm"
 
 	;; ROM configuration options
-	if MINSTREL3=1
+	if MINSTREL3+MINSTREL4>0
 OFFSET:		equ 0x7B00 	; Offset to system memory
 
 	if NTSC=1
@@ -163,7 +164,7 @@ P_STACKC:	equ OFFSET+0x0184	; Address of next entry in Character
 BASE:		equ OFFSET+0x0186	; 16-bit base for processing numbers
 PSTART_DICT:	equ OFFSET+0x0188	; Special string (used with
 					; expansion ROM)
-P_HERE:		equ OFFSET+0x018A 	; Current entry point in
+P_HERE:		equ OFFSET+0x018A 	; Store for current entry point in
 					; dictionary
 START_DICT_DEF:	equ OFFSET+0x018C
 UNKNOWN2:	equ OFFSET+0x018E 	; Start of currently being
@@ -230,10 +231,16 @@ TOKEN_LN:	equ OFFSET+0x01BF	; Track length of currently
 	;; RST 0x00 - Cold or warm restart
 	;; 
 RESTART:
+	if MINSTREL4=1
+	nop
+	nop
+	else
 	out (0xFD),a		;0000 - Disable NMI Generator
+	endif
+	
 	ld sp,STACK0_BASE	;0002 - Reset stack pointer
 
-	if MINSTREL3=1
+	if MINSTREL3+MINSTREL4>0
 l0005h:	jp RESTART_NEW		;0005 - Continue with augmented reset,
 				;       for Minstrel 3
 
@@ -333,6 +340,12 @@ INT:
 
 				; Hsync signal enabled
 
+	if MINSTREL4=1
+	di
+	push hl
+	jp RUN_VSYNC
+
+	else
 	dec c			; (4) Decrement scan-line counter
 
 	jp nz, I_NEXT_SCANLINE	; (10) Skip forward if more scan lines
@@ -343,6 +356,7 @@ INT:
 	pop hl			; (10) Retrieve return address (next
 				; character to execute in display
 				; buffer)
+	endif
 
 				; Hsync turned off by flip-flop circuit
 	
@@ -478,7 +492,7 @@ RUN_DISPLAY:
 	ld hl, RUN_VSYNC	; Store address of next but one display
 	ld (NEXT_DISP_ROUT), hl ; routine (VSync)
 
-	if MINSTREL3=1
+	if MINSTREL3+MINSTREL4>0
 	ld hl, DBUFFER
 
 	else
@@ -548,6 +562,7 @@ RD_KERNEL:
 	;; ----------------------------------------------------------------
 	;; Video handling routine (VSync and read keyboard)
 RUN_VSYNC:
+	if MINSTREL4=0
 BB_OFF:	out (0xFD),a		;0098 - Disable NMI Generator
 VS_ON:	in a,(0xFE)		;009a - Turn on VSync
 
@@ -561,14 +576,16 @@ VS_ON:	in a,(0xFE)		;009a - Turn on VSync
 				; cycle. Note that one top-border scan
 				; line is executed by RUN_DISPLAY, hence
 				; the '-1'
-
 	;; Set next display routine
 	ld hl,(P_RUN_DISP)	; (16) 009f - Usually contains 0071h
 	ld (NEXT_DISP_ROUT),hl 	; (16)
 
+	endif
+	
 	;; Timing = 42 T states for prep
 	push bc			; (11) 00a5
 	push af			; (11) 00a6
+
 
 	;; Read keyboard
 	ld hl,0x0000		; (10) 00a7 - Initialise buffer for key press
@@ -707,9 +724,16 @@ l00fah:	ld hl,POSSIBLE_KEY	; (10) 00fa
 
 	;; *** End of VSYNC generation phase of display routine ***
 l0100h:
+	if MINSTREL4=1
+	nop
+	nop
+	nop
+	nop
+	else
 VS_OFF:	out (0ffh),a	; (11) 0100 - Disable VSync REPLACE - was at 0x100
 TB_ON:	out (0feh),a	; (11) 0102 - Enable NMI Generator
-
+	endif
+	
 	jr nz,l0109h	; (12/7) 0104 - Jump forward if key other than
 			;       shift pressed
 
@@ -1017,8 +1041,13 @@ l01fdh:	pop af			;01fd - End of RUN_VSYNC routine
 	pop bc			;01fe
 	pop hl			;01ff- Corresponds to `push hl` in NMI_DONE
 
+	if MINSTREL4=1
+	ei
+	endif
 l0200h:	ret			;0200
 
+	ds $0201-$		; Spacer for Minstrel 4th (cut-down)
+				; version of RUN_VSYNC
 
 	;; Continuation of PUSHC_A (rst 18)
 	;; 
@@ -1466,7 +1495,11 @@ SCR_INV_CUR:
 	ld a,(hl)		;0329 - Retrieve character
 
 	;; Manipulate character
+	if MINSTREL4=1
+	and %01111111		;032a - Mask off bits 7
+	else
 	and %00111111		;032a - Mask off bits 7 and 6
+	endif
 	xor (ix+006h)		;032c - Invert with 0x00
 
 	ld (hl),a		;032f - Replace character
@@ -1538,7 +1571,13 @@ SPC_DONE:
 	;; Handle printable character (20--5F, with codes 60--7F shifted
 	;; down to 40--5F)
 SPC_PRINT_IT:
+	if MINSTREL4=1
+	nop
+	nop
+	else
 	add a,0xE0		;0357 - Shift character code to 00--3F
+	endif
+	
 	call GET_SCR_POSN	;0359 - Get current screen location
 				;       (into HL)
 	xor (ix+006h)		;035c - Apply cursor mask
@@ -2129,7 +2168,13 @@ CL_LINE_TO_KIB:
 	cp b			;0575
 	ret z			;0576
 l0577h:	ld a,(hl)		;0577
+	if MINSTREL4=1
+	nop
+	nop
+	else
 	add a,020h		;0578
+	endif
+	
 	call CL_WRITE_TO_KIB		;057a - Write to KKIB
 	inc hl			;057d
 	djnz l0577h		;057e
@@ -2929,8 +2974,8 @@ DICT_ADD_JP_HL:
 DICT_ADD_CALL_HL:
 	ld a,0xCD		;07d3 - Opcode for 'CALL'
 
-DICT_ADD_CHAR_AND_HL:	call DICT_ADD_BYTE		;07d5
-
+DICT_ADD_CHAR_AND_HL:
+	call DICT_ADD_BYTE	;07d5
 	jp DICT_ADD_HL		;07d8
 
 DICT_ADD_NUMBER:
@@ -3005,9 +3050,9 @@ PT_WORD:
 PT_IMM_WORD:
 	call jump_to_hl		;0819
 
-	call DICT_ADD_RET		;081c
+	call DICT_ADD_RET	;081c
 
-	ld hl,(UNKNOWN2)		;081f
+	ld hl,(UNKNOWN2)	;081f
 	call jump_to_hl		;0822
 
 	call INIT_DICT		;0825
@@ -3131,13 +3176,16 @@ DAW_ADD_CALL:
 	;; Add a sequence of predefined words and numbers to the
 	;; dictionary
 	;;
-	;; 
+	;; On entry:
+
 DICT_ADD_WORDS:
 	call GET_WORD		;0881
 	jr c,DAW_CHECK_NUM	;0884 - Jump forward if not word, to see
 				;       if is number
 
-	call UNSTACK_STRING	;0886
+	;; HL points to matched word in dictionary, character stack
+	;; contains word (with length on parameter stack)
+	call UNSTACK_STRING	;0886 - Discard word 
 	bit 7,(hl)		;0889 - Check if immediate word
 
 	push af			;088b
@@ -3145,11 +3193,11 @@ DICT_ADD_WORDS:
 				;       word (in HL)
 	pop af			;088f
 
-	jr z,DAW_ADD_CALL	;0890 - Jump to add `call HL` to
-				;       dictionary, which immediately
-				;       preceeds this function, so will
-				;       effectively loop back to
-				;       DICT_ADD_WORDS
+	jr z,DAW_ADD_CALL	;0890 - If not immediate word, jump to
+				;add `call HL` to dictionary, which
+				;immediately preceeds this function, so
+				;will effectively loop back to
+				;DICT_ADD_WORDS
 
 	;; Execute immediate word
 	ld de,ERR_RESTART	;0892
@@ -3157,7 +3205,7 @@ DICT_ADD_WORDS:
 	call jump_to_hl		;0896
 	pop de			;0899
 
-	jr DICT_ADD_WORDS	;089a
+	jr DICT_ADD_WORDS	;089a and repeat
 
 DAW_CHECK_NUM:	rst 10h		;089c - Retrieve token length
 
@@ -3167,8 +3215,7 @@ DAW_CHECK_NUM:	rst 10h		;089c - Retrieve token length
 
 	rst 8			;08a1 - Push token length back onto
 				;       Parameter Stack
-	ld hl,(PARSE_NUM_ROUT)
-				;08a2 - Retrieve address of and call
+	ld hl,(PARSE_NUM_ROUT)	;08a2 - Retrieve address of and call
 	call jump_to_hl		;08a5   PARSE_NUM routine
 
 	call DAW_ADD_NUM	;08a8
@@ -3439,13 +3486,34 @@ l094dh:	ld hl,F_WARM_RESTART	;094d - Check if warm restart is
 
 	;; Continuation of cold-restart routine
 COLD_RESTART:
+	if MINSTREL4
+	nop
+	nop
+	else
 	out (0xFD),a		;0953 - Disable NMI Generator
-
+	endif
+	
 	;; 
 	;; Check memory configuation of machine (i.e., how much memory
 	;; there is)
 	;;
-	if MINSTREL3=1
+	if MINSTREL4=1
+		;; Populate Ace character RAM
+	ld de,0x2C00+0x20*8	; Start of character set in ROM
+	ld hl,CHARS
+	ld bc, 0x40*8
+	ldir
+	
+	ld hl, 0x6000		; Set RAM size to be 16k ($4000--$7FFF)
+				; -- we will add the lower RAM (in
+				; $2000--$3FFF) later)
+
+	ds 0x0964-$ 		; This is four bytes short of the end of
+				; the original routine, to allow extra
+				; space for zeroing memory
+
+	else
+	if MINSTREL3+MINSTREL4>0
 	ld hl, 0x6000		; Set RAM size to be 16k ($4000--$7FFF)
 				; -- we will add the lower RAM (in
 				; $2000--$3FFF) later)
@@ -3480,12 +3548,13 @@ l0965h:	cpl			;0965 - Calculate $10000-HL
 	inc hl			;0967
 
 	endif
+	endif
 	
 	;; Save current registers
 	exx			;0968
 
  	;; Zero RAM (up to 0x8000)
-	if MINSTREL3=1 		
+	if MINSTREL3+MINSTREL4>0 		
 	ld hl,0x4000
 	ld de,0x4001
 	ld bc,0x3FFE
@@ -3510,7 +3579,7 @@ l0970h:	ld (hl),a		;0970
 	ldir			;097d
 
 	;; Padding (for Minstrel 3 version)
-	if MINSTREL3=1
+	if MINSTREL3+MINSTREL4>0
 	ds 0x097f-$
 	endif
 	
@@ -3536,7 +3605,13 @@ l0970h:	ld (hl),a		;0970
 				;       change if largest RAM
 				;       configuration
 
+	if MINSTREL4=1
+l0991h:	nop
+	nop
+	nop
+	else
 l0991h:	call CHECK_FP_ROM	;0991 - check if ROM/ RAM in 2000--3FFF
+	endif
 	
 	;; Display copyright message
 	ld hl,COPYRIGHT_MSG	;0994
@@ -3565,9 +3640,15 @@ l09a9h:	call RESET_TASKS	;09a9 - Disable multitasking and switch
 	ld iy,(STACKP_BASE)	;09b5 - Reset parameter stack
 
 	;; Set I register to point to page containing character set
+	if MINSTREL4=1
+	xor a
+	ld (0x2700),a
+	ei
+	ds 0x09BF-$
+	else
 	ld a,CHARS>>8		;09b9 - High byte of character-map addr
 	ld i,a			;09bb
-
+	
 	;; Initiate display production
 	out (0xFE),a		;09bd - Enable NMI Generator, to start
 				;       display handling (Note AF' (used
@@ -3575,6 +3656,7 @@ l09a9h:	call RESET_TASKS	;09a9 - Disable multitasking and switch
 				;       been set). Initially,
 				;       NEXT_DISP_ROUT is set to be
 				;       0x0098
+	endif
 	
 	;; Check if system variables are corrupted (assumed if value at
 	;; FC40 is non-zero, as is zeroed as part of cold restart)
@@ -4432,10 +4514,10 @@ CDUP_DONE:
 UNSTACK_STRING:
 	push hl			;0d6b - Save HL
 	
-	rst 10h			;0d6c - Retrieve length of word
+	rst 10h			;0d6c - Retrieve length of word into HL
 
 	ld a,l			;0d6d - Isolate low 6 bits
-	and 03fh		;0d6e
+	and 0x3F		;0d6e
 
 	jr z,US_DONE		;0d70 - Skip forward if zero length
 	ld l,a			;0d72
@@ -5152,23 +5234,28 @@ STORE_DEHL:
 
 	ret			;10bb
 
-	
-	add a,d			;10bc
-	ld c,c			;10bd
-	ld b,(hl)			;10be
-	rra			;10bf
-	nop			;10c0
-	ld hl,l10d7h		;10c1
-	call DICT_ADD_CALL_HL		;10c4
+	;; Forth word IF
+	db 0x80+0x02, _I, _F
+	dw 0x001F
+
+	;; Add check on TOS
+	ld hl,IF_TEST		;10c1
+	call DICT_ADD_CALL_HL	;10c4
+
 	ld hl,(P_HERE)		;10c7
 	inc hl			;10ca
 	push hl			;10cb
-	ld a,0cah		;10cc
-	call DICT_ADD_CHAR_AND_HL		;10ce
-	call DICT_ADD_WORDS		;10d1
+	ld a,0xCA		;10cc - Z80 opcode JP Z, NN
+	call DICT_ADD_CHAR_AND_HL	;10ce
+
+	call DICT_ADD_WORDS	;10d1 - Only returns, if error
+
 	jp ERR_RESTART		;10d4
-l10d7h:	rst 10h			;10d7
+
+IF_TEST:
+	rst 10h			;10d7
 	jp CHECK_HL_ZERO	;10d8
+
 	
 	add a,h			;10db
 	ld b,l			;10dc
@@ -6928,117 +7015,140 @@ l17abh:	ld a,02ah		;17ab
 	ld hl,FLAGS3		;17ba
 	set 5,(hl)		;17bd
 	ret			;17bf
-	add a,l			;17c0
-	ld b,d			;17c1
-	ld b,l			;17c2
-	ld b,a			;17c3
-	ld c,c			;17c4
-	ld c,(hl)		;17c5
-	rrca			;17c6
-	nop			;17c7
-	ld hl,(P_HERE)		;17c8
-	push hl			;17cb
-	call DICT_ADD_WORDS	;17cc
-	add a,l			;17cf
-	ld b,c			;17d0
-	ld b,a			;17d1
-	ld b,c			;17d2
-	ld c,c			;17d3
-	ld c,(hl)		;17d4
-	rrca			;17d5
-	nop			;17d6
+
+	;; Forth word BEGIN
+	db 0x80+0x05, _B, _E, _G, _I, _N
+	dw 0x000F
+	
+	ld hl,(P_HERE)		;17c8 - Retrieve dictionary entry point
+	push hl			;17cb   and save it
+	
+	call DICT_ADD_WORDS	;17cc - Will not return here
+
+	;; Forth word AGAIN
+	db 0x80+0x05, _A, _G, _A, _I, _N
+	dw 0x000F
+
+	;; Balance stack by dropping:
+	;; - return address to DICT_ADD_WORDS
+	;; - previous value of DE
+	;; - return address from BEGIN
 	pop hl			;17d7
 	pop hl			;17d8
 	pop hl			;17d9
+
+	;; Retrieve dictionary instruction immediately after BEGIN and
+	;; add jump to dictionary
 	pop hl			;17da
-	jp DICT_ADD_JP_HL		;17db
-	add a,l			;17de
-	ld d,a			;17df
-	ld c,b			;17e0
-	ld c,c			;17e1
-	ld c,h			;17e2
-	ld b,l			;17e3
-	ld e,000h		;17e4
+	jp DICT_ADD_JP_HL	;17db - Returns to command entry
+
+	
+	;; Forth word WHILE
+	db 0x80+0x05, _W, _H, _I, _L, _E
+	dw 0x001E
+	
+	;; Balance stack by dropping:
+	;; - previous value of DE
+	;; Retrieve return address to DICT_ADD_WORDS
 	pop de			;17e6
+
+	;; Discard previous value of DE
 	pop hl			;17e7
+
+	;; Discard return address from BEGIN, as is meaningless
 	pop hl			;17e8
-	ld hl,l182bh		;17e9
-	call DICT_ADD_CALL_HL		;17ec
-	ld hl,(P_HERE)		;17ef
-	ld a,0c2h		;17f2
-	call DICT_ADD_CHAR_AND_HL		;17f4
+
+	;; Add check that TOS is zero to dictionary
+	ld hl,TOS_ZERO_CHECK	;17e9
+	call DICT_ADD_CALL_HL	;17ec
+
+	;; Add conditional jump to next word (will be updated as part of
+	;; RETURN)
+	ld hl,(P_HERE)		;17ef - Retrieve current dictionary
+				;       entry point
+
+	if FIXBUG=1		; WHILE condition test on ZX-FORTH is
+	ld a,0xCA		; non-standard
+	else
+	ld a,0xC2		;17f2 - Z80 op code for JP NZ,NN
+	endif
+	call DICT_ADD_CHAR_AND_HL	;17f4
+	
 	inc hl			;17f7
 	push hl			;17f8
 	push hl			;17f9
-	ex de,hl			;17fa
+	ex de,hl		;17fa - Move return address to
+				;       DICT_ADD_WORDS to HL ready to
+				;       return to it
 	jp (hl)			;17fb
-	add a,(hl)			;17fc
-	ld d,d			;17fd
-	ld b,l			;17fe
-	ld d,b			;17ff
-	ld b,l			;1800
-	ld b,c			;1801
-	ld d,h			;1802
-	jr l1805h		;1803
 
-l1805h:	pop hl			;1805
-	pop hl			;1806
-	pop de			;1807
-	pop hl			;1808
-l1809h:	call DICT_ADD_JP_HL	;1809
-	ld hl,(P_HERE)		;180c
-	ex de,hl		;180f
-	ld (hl),e		;1810
-	inc hl			;1811
-	ld (hl),d		;1812
-	ret			;1813
+	;; Forth word REPEAT
+	db 0x80+0x06, _R, _E, _P, _E, _A, _T
+	dw 0x0018
 	
-sub_1814h:
-	add a,l			;1814
-	ld d,l			;1815
-	ld c,(hl)			;1816
-	ld d,h			;1817
-	ld c,c			;1818
-	ld c,h			;1819
-	dec e			;181a
-	nop			;181b
-	pop hl			;181c
-	pop hl			;181d
-	pop hl			;181e
-	ld hl,l182bh		;181f
-	call DICT_ADD_CALL_HL		;1822
-	pop hl			;1825
-	ld a,0cah		;1826
-	jp DICT_ADD_CHAR_AND_HL		;1828
-l182bh:
-	rst 10h			;182b
+l1805h:	pop hl			;1805 - Discard return address
+	pop hl			;1806 - Discard ???
+	pop de			;1807 - Retrieve location of WHILE
+				;       jump-to address
+	pop hl			;1808 - Retrieve address of BEGIN
+l1809h:	call DICT_ADD_JP_HL	;1809 - Add JP BEGIN to dictionary
+	ld hl,(P_HERE)		;180c - Retrieve current dictionary location
+	ex de,hl		;180f - Move to DE, moving address of
+				;       WHILE jump to HL
+	ld (hl),e		;1810 - Update jump-to address to be next
+	inc hl			;1811   dictionary location 
+	ld (hl),d		;1812
+	
+	ret			;1813 - Return to wrap-up of immediate word
+
+	;; Forth word UNTIL
+	db 0x80+0x05, _U, _N, _T, _I, _L
+	dw 0x001D
+	
+	pop hl			;181c - Discard return address
+	pop hl			;181d - Discard previous value of DE
+	pop hl			;181e - Discard return address for
+				;       BEGIN, as is meaningless
+	ld hl,TOS_ZERO_CHECK	;181f - Add a check for TOS=0 to
+	call DICT_ADD_CALL_HL	;1822   dictionary
+	pop hl			;1825 - Ratrieve address of BEGIN in
+				;       dictionary
+	ld a,0xCA		;1826 - Set up conditional loop using
+	jp DICT_ADD_CHAR_AND_HL	;1828   Z80 op code for JP Z, NN
+
+TOS_ZERO_CHECK:
+	rst 10h			;182b - Retrieve TOS
+
+	;; Check if HL zero
 	xor a			;182c
 	cp l			;182d
 	ret nz			;182e
 	cp h			;182f
+	
 	ret			;1830
-	inc bc			;1831
-	ld c,e			;1832
-	ld b,l			;1833
-	ld e,c			;1834
-	add hl,de			;1835
-	nop			;1836
-l1837h:
-	ld a,01fh		;1837
+
+	;; Forth word KEY
+	db 0x03, _K, _E, _Y
+	dw 0x0019
+	
+l1837h:	ld a,_FLASH		;1837
 	call PRINT_A		;1839
 	call SWITCH_TO_MSTACK1	;183c
+
 	and 07fh		;183f
-	cp 01fh		;1841
+	cp _FLASH		;1841
 	jr z,l1837h		;1843
+
 	ld h,000h		;1845
 	ld l,a			;1847
 	rst 8			;1848
+	
 	ret			;1849
-	add a,c			;184a
-	jr z,l185bh		;184b
-	nop			;184d
-l184eh:
-	call sub_14c5h		;184e
+
+	;; Forth word (
+	db 0x80+0x01, _LEFTPARENTH
+	dw 0x000E
+l184eh:	call sub_14c5h		;184e
 	and 07fh		;1851
 	cp 029h		;1853
 	jr nz,l184eh		;1855
@@ -7171,7 +7281,7 @@ DECIMAL:
 	ret			;18e5
 
 FREE_MEM:
-	if MINSTREL3=1
+	if MINSTREL3+MINSTREL4>0
 	ld de,(P_HERE)		; Retrieve end of dictionary
 	push iy			; Retrieve head (bottom) of Parameter
 	pop hl			; Stack
@@ -7206,7 +7316,7 @@ CHECK_MEM:
 	ld de,0xFFE0		;1903 - That is, -32
 	add hl,de		;1906 - HL = HL-32
 
-	if MINSTREL3=1
+	if MINSTREL3+MINSTREL4>0
 	ret c
 	
 	ds 0x190E-$
@@ -7951,7 +8061,7 @@ D_LESSTHAN:
 	jp GT_CONT_2		;1cb0 - Push resulm onto stack and done
 
 	
-	if MINSTREL3=1
+	if MINSTREL3+MINSTREL4>0
 RESTART_NEW:
 	im 1			; System relies on Interrupt Mode 1
 				; (interrupt-service routine at 0x0038)
@@ -8029,12 +8139,20 @@ NEW_LINE_MSG:
 
 	;; Keyboard mapping (unshifted)
 KEY_CODES:
+	if MINSTREL4=1
+	db _NULL, _A, _Q, _1, _0, _P, _ENTER, _SPACE
+	db _PERIOD, _S, _W, _2, _9, _O, _L, _M
+	db _Z, _D, _E, _3, _8, _I, _K, _N
+	db _X, _F, _R, _4, _7, _U, _J, _B
+	db _C, _G, _T, _5, _6, _Y, _H, _V
+	else
 	db _NULL, _A, _Q, _1, _0, _P, _ENTER, _SPACE
 	db _Z, _S, _W, _2, _9, _O, _L, _PERIOD
 	db _X, _D, _E, _3, _8, _I, _K, _M
 	db _C, _F, _R, _4, _7, _U, _J, _N
 	db _V, _G, _T, _5, _6, _Y, _H, _B
-
+	endif
+	
 OK_MSG: db 0x05, _SPACE, _O, _K, _ENTER, _DOWN
 	
 ERR_MSG:
@@ -8045,6 +8163,18 @@ CPU_MSG:
 	db _0, _SPACE
 
 L1d78:	;; Keyboard mapping (shifted)
+	if MINSTREL4=1
+	db _NULL, _CLS, _COMPILE, _EDIT
+	db _RUBOUT, _QUOTES, _HOME, _BREAK
+	db _COMMA, _PERCENT, _EXCLAMATION, _FETCHPAD
+	db _INSERTLINE, _RIGHTPARENTH, _EQUALS, _GREATERTHAN
+	db _COLON, _QUOTE, _AT, _PUTPAD
+	db _RIGHT, _LEFTPARENTH, _PLUS, _LESSTHAN
+	db _SEMICOLON, _BACKSLASH, _LEFTSQBRACKET, _DELETELINE
+	db _DOWN, _DOLLAR, _MINUS, _ASTERISK
+	db  _QUESTIONMARK, _POWER, _UNDERSCORE, _LEFT
+	db _UP, _RIGHTSQBRACKET, _HASH, _SLASH
+	else
 	db _NULL, _CLS, _COMPILE, _EDIT
 	db _RUBOUT, _QUOTES, _HOME, _BREAK
 	db _COLON, _PERCENT, _EXCLAMATION, _FETCHPAD
@@ -8055,18 +8185,27 @@ L1d78:	;; Keyboard mapping (shifted)
 	db _UP, _DOLLAR, _MINUS, _LESSTHAN
 	db  _SLASH, _POWER, _UNDERSCORE, _LEFT
 	db _DOWN, _RIGHTSQBRACKET, _HASH, _ASTERISK
-
+	endif
+	
 	;; Default values of system variables 0x1DA0--0x1DFF
 DEFVARS:
 	db 0x00, 0x00, 0x00, 0x00	; UNKNOWN5 (7C60)
 	db 0x0F, 0x00, 0x00, 0x00 	; TIC_COUNTER (7C64) - 15 frames
 	db 0x00, 0x1A, 0x4F, 0x00	; PER (7C68)
 	dw 0x4000			; RAM_START
+	if MINSTREL4=1
+	dw 0x2400
+	else
 	dw OFFSET+0x0200		; P_DBUFFER
+	endif
 	dw OFFSET+0x0198		; PMTASK_LIST_HD (1db0)
 	dw 0x2000			; FENCE
 	dw PRINT_DRV			; PRINTER DRIVER
+	if MINSTREL4=1
+	dw 0x2400
+	else
 	dw OFFSET+0x0200		; DISP_2
+	endif
 	db 0ffh,000h			; F_WARM_RESTART
 	dw STR_TO_NUM			; PARSE_NUM_ROUTINE
 	dw NO_ACTION			; P_BACKTASK
@@ -8094,10 +8233,18 @@ DEFVARS:
 	db 0x00				; POSSIBLE_KEY (1DEB)
 	db 0x80				; LAST_KEY
 	db 0x80				;FLAGS
+	if MINSTREL4
+	db 0x00, 0x00, 0x00, 0x00	; SCREEN_INFO_EE (1DEE)
+	db 0x1F, 0x0F, 0x00, 0x20
+	db 0x00, 0x00, 0x00, 0x00	; SCREEN_INFO_CO (1DF6)
+	db 0x1F, 0x17, 0x00, 0x20
+	else
 	db 0x00, 0x00, 0x00, 0x00	; SCREEN_INFO_EE (1DEE)
 	db 0x1F, 0x0F, 0x00, 0x00
 	db 0x00, 0x00, 0x00, 0x00	; SCREEN_INFO_CO (1DF6)
 	db 0x1F, 0x17, 0x00, 0x00
+	endif
+	
 	db 0x00				; FLAGS2
 	db 0x0F				; TOKEN_LN
 
