@@ -83,8 +83,8 @@
 	;; elements of the original programme
 MINSTREL3:	equ 0x00
 NTSC:		equ 0x00
-FIXBUG:		equ 0x00
-MINSTREL4:	equ 0x00
+FIXBUG:		equ 0x01
+MINSTREL4:	equ 0x01
 
 	;; 	include "zx81_chars.asm"
 	include "hforth_chars.asm"
@@ -152,7 +152,9 @@ P_DBUFFER:	equ OFFSET+0x016E	; Address of display buffer. Set
 PMTASK_LIST_HD:	equ OFFSET+0x0170	; Pointer to head of task list
 FENCE:		equ OFFSET+0x0172	; Location of any fence set
 PRINT_DRVR:	equ OFFSET+0x0174	; Address of printer driver
-P_DISP_2:	equ OFFSET+0x0176	; Also points to display???
+P_EDIT_SCREEN:	equ OFFSET+0x0176	; Pointer to Editor screen
+					; (usually start of display
+					; buffer)
 F_WARM_RESTART:	equ OFFSET+0x0178 	; Set to FF during restart, to
 					; indicate warm restart is
 					; possible
@@ -3620,7 +3622,7 @@ l0970h:	ld (hl),a		;0970
 	ld hl,0xBD00		;0988 - Need to adjust memory
 				;       configuration for 48k RAM.
 	ld (P_DBUFFER),hl	;098b - By default, these variables
-	ld (P_DISP_2),hl	;098e   contain FD00, so only need to
+	ld (P_EDIT_SCREEN),hl	;098e   contain FD00, so only need to
 				;       change if largest RAM
 				;       configuration
 
@@ -5254,6 +5256,7 @@ STORE_DEHL:
 	ret			;10bb
 
 	;; Forth word IF
+	;; 
 	db 0x80+0x02, _I, _F
 	dw 0x001F
 
@@ -5275,61 +5278,65 @@ IF_TEST:
 	rst 10h			;10d7
 	jp CHECK_HL_ZERO	;10d8
 
+	;; Forth word ELSE
+	;;
+	db 0x80+0x04, _E, _L, _S, _E
+	dw 0x001E
 	
-	add a,h			;10db
-	ld b,l			;10dc
-	ld c,h			;10dd
-	ld d,e			;10de
-	ld b,l			;10df
-	ld e,000h		;10e0
 	pop hl			;10e2
 	pop hl			;10e3
 	pop hl			;10e4
 	pop de			;10e5
-	call DICT_ADD_JP_HL		;10e6
+	call DICT_ADD_JP_HL	;10e6
 	ld hl,(P_HERE)		;10e9
-	ex de,hl			;10ec
-	ld (hl),e			;10ed
+	ex de,hl		;10ec
+	ld (hl),e		;10ed
 	inc hl			;10ee
-	ld (hl),d			;10ef
+	ld (hl),d		;10ef
 	dec de			;10f0
 	dec de			;10f1
 	push de			;10f2
-	call DICT_ADD_WORDS		;10f3
+	call DICT_ADD_WORDS	;10f3
 	jp ERR_RESTART		;10f6
-	add a,h			;10f9
-	ld d,h			;10fa
-	ld c,b			;10fb
-	ld b,l			;10fc
-	ld c,(hl)			;10fd
-	inc de			;10fe
-	nop			;10ff
+
+	;; Forth word THEN
+	db 0x80+0x04, _T, _H, _E, _N
+	dw 0x0013
+
 	pop hl			;1100
 	pop hl			;1101
 	pop hl			;1102
 	pop de			;1103
-	ld hl,(P_HERE)		;1104
-	ex de,hl			;1107
-	ld (hl),e			;1108
+	ld hl,(P_HERE)		;1104 - Retrieve current dictionary
+	ex de,hl		;1107   into DE, swapping DE to HL
+	
+	ld (hl),e		;1108
 	inc hl			;1109
-	ld (hl),d			;110a
+	ld (hl),d		;110a
+
 	ret			;110b
-	inc bc			;110c
-	ld d,d			;110d
-	ld b,l			;110e
-	ld d,(hl)			;110f
-	dec d			;1110
-	nop			;1111
-	ld de,l0005h+1		;1112
-	rst 10h			;1115
-	add hl,de			;1116
-	ld a,080h		;1117
-	xor (hl)			;1119
-	ld (hl),a			;111a
-	inc hl			;111b
-	ld a,080h		;111c
-	xor (hl)			;111e
-	ld (hl),a			;111f
+
+	;; Forth word REV
+	;;
+	db 0x03, _R, _E, _V
+	dw 0x0015
+
+	ld de,0x0006		;1112 - Set offset to blanking character
+	rst 10h			;1115 - Retrieve screen id from
+				;       Parameter Stack
+	
+	add hl,de		;1116 - Point to mask character
+	ld a,080h		;1117   and set REV mask
+
+	xor (hl)		;1119 - Update mask character
+ 	ld (hl),a		;111a
+	
+	inc hl			;111b - Point to space character
+	ld a,080h		;111c   and set REV mask
+	
+	xor (hl)		;111e - Update space character
+	ld (hl),a		;111f
+	
 	ret			;1120
 
 	;; Forth word LOCK
@@ -6153,13 +6160,16 @@ SERVICE_CLOCK:
 	ex de,hl		;1413
 	call DICT_ADD_HL	;1414
 
-	pop hl			;1417 - Done (though note, do not set
+	pop hl			;1417 - Done
 
 	if MINSTREL4=1
 	jp SCREEN_CONT
 	else
-	jp DICT_ADD_HL		;1418   the blank character nor character
-				;       bitmask *** BUG ***
+	jp DICT_ADD_HL		;1418 *** BUG *** Screen initialisation
+				;     does not set the masking character
+				;     and blanking character (assuming
+				;     the memory locations will contain
+				;     zero already)
 	endif
 	
 	;; Forth word .C
@@ -6493,7 +6503,7 @@ WRITE_SCR_NUM:
 	;; Disable NMI generation (important to have accurate timing)
 ST_CONT:	out (0xFD),a		;157b
 
-	ld hl,(P_DISP_2)	;157d - Retrieve address of editor screen
+	ld hl,(P_EDIT_SCREEN)	;157d - Retrieve address of editor screen
 	call WRITE_LEADER	;1580 - Write to cassette port
 	call WRITE_ID		;1583 - Write id code (used to confirm
 				;       is a ZX-Forth file, when loading back
@@ -6637,7 +6647,7 @@ LOAD_SCREEN:
 	;; Disable NMI (ensures consistent timing)
 LS_CONT:	out (0fdh),a		;1611
 
-	ld hl,(P_DISP_2)	;1613 - Retrieve address of editor
+	ld hl,(P_EDIT_SCREEN)	;1613 - Retrieve address of editor
 				;       screen
 	push hl			;1616
 	call CLEAR_EDIT_BUFFER	;1617 - Clear editor window
@@ -7771,7 +7781,7 @@ SEQ_CONT:
 	db 0x80+0x03, _B, _L, _K
 	dw 0x000D
 	
-	ld hl,P_DISP_2		;1b0b
+	ld hl,P_EDIT_SCREEN	;1b0b
 l1b0eh:	push hl			;1b0e
 
 	jp l1797h		;1b0f
