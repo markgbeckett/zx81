@@ -83,8 +83,8 @@
 	;; elements of the original programme
 MINSTREL3:	equ 0x00
 NTSC:		equ 0x00
-FIXBUG:		equ 0x01 
-MINSTREL4:	equ 0x01
+FIXBUG:		equ 0x00
+MINSTREL4:	equ 0x00
 
 	;; 	include "zx81_chars.asm"
 	include "hforth_chars.asm"
@@ -482,30 +482,10 @@ NMI_DONE: ; 0x006C
 
 	if MINSTREL4=1
 RUN_DISPLAY:	
-		;; Write bit (based on carry)
-WRITE_PULSE_4:
-	push af			;1501
-
-	;;  Generate one pulse of leader tone
-	and %11110111
-	out (0xFE),a		;1502 - Set Cassette Out to low
-	ld a,010h		;1504
-TOL4_LOOP:
-	dec a			;1506
-	jr nz,TOL4_LOOP		;1507
-
-	or %00001000
-	out (0xFE),a		;1509 - Set Cassette Out to high
-
-	;; Wait
-	ld a,04bh		;150b
-TOL_WAIT4:	
-	dec a			;150d
-	jr nz,TOL_WAIT4		;150e
-
-	pop af			;1510
-
-	ret			;1511
+SCREEN_CONT:
+	ld hl, 0x2000		; Screen attributes (char mask and _SPACE)
+	
+	jp DICT_ADD_HL
 
 	else
 	;; Continuation of NMI cycle when top border has been
@@ -1336,8 +1316,8 @@ CLS:	call GET_SCR_SIZE	;0283 - BC = width, height of screen
 	call GET_SCR_ADDR	;0287 - HL = start of screen
 
 	ld de,DISP_WIDTH	;028a - DE = row length
-	ld a,(ix+007h)		;028d - Retrieve blank character for screen
 
+	ld a,(ix+007h)		;028d - Retrieve blank character for screen
 CLS_LOOP:
 	call SCR_BLANK_ROW	;0290
 	add hl,de		;0293 - Advance to next row
@@ -5091,7 +5071,7 @@ VARIABLE:
 
 V_GET_ADDR:
 	pop hl			;0fde - Retrieve address in dictionary
-				;       of variable's storagw
+				;       of variable's storage
 	rst 8			;0fdf   and push onto parameter stack
 	ret			;0fe0
 
@@ -6150,29 +6130,38 @@ SERVICE_CLOCK:
 	db 0x06, _S, _C, _R, _E, _E, _N
 	dw 0x002C
 
-	call INIT_NEW_WORD	;13f8
-	ld hl,V_GET_ADDR	;13fb
+	call INIT_NEW_WORD	;13f8 - Code adds new screen's parameter
+	ld hl,V_GET_ADDR	;13fb   field address to Parameter stack
 	call DICT_ADD_CALL_HL	;13fe
-	ld hl,0x0000		;1401
-	push hl			;1404
 
-	call DICT_ADD_HL	;1405
+	ld hl,0x0000		;1401 - Initialise current location 
+	push hl			;1404   to (0,0)
+
+	call DICT_ADD_HL	;1405 - Retrieve upper limit into D
 	rst 10h			;1408
-	ld d,l			;1409
-	rst 10h			;140a
+	ld d,l			;1409 
+
+	rst 10h			;140a - Retrieve left limit into E
 	ld e,l			;140b
 	rst 10h			;140c
-	ld a,l			;140d
-	rst 10h			;140e
+
+	ld a,l			;140d - Retrieve lower limit into H
+	rst 10h			;140e   and right limit into L
 	ld h,a			;140f
-	call DICT_ADD_HL	;1410
+	
+	call DICT_ADD_HL	;1410 - Add coordinates to dictionary
 	ex de,hl		;1413
 	call DICT_ADD_HL	;1414
-	pop hl			;1417
-	jp DICT_ADD_HL	;1418
 
+	pop hl			;1417 - Done (though note, do not set
 
-
+	if MINSTREL4=1
+	jp SCREEN_CONT
+	else
+	jp DICT_ADD_HL		;1418   the blank character nor character
+				;       bitmask *** BUG ***
+	endif
+	
 	;; Forth word .C
 	db 0x02, _PERIOD, _C
 	dw 0x0011
@@ -6190,26 +6179,35 @@ SERVICE_CLOCK:
 	
 	ret			;142b
 
-	ld (bc),a		;142c
-	ld l,057h		;142d
-	ld a,(de)		;142f
-	nop			;1430
-	rst 10h			;1431
-	push hl			;1432
-	ex (sp),ix		;1433
-	rst 10h			;1435
+	;; Forth word .W ( LEN SCR -- , STRING C-C -- )
+	;;
+	;; Print string to screen
+	db 0x02, _PERIOD, _W
+	dw 0x001A
+	
+	rst 10h			;1431 - Retrieve screen id from
+	push hl			;1432   parameter stack and save it
+
+	ex (sp),ix		;1433 - Move screen id into IX (saving
+				;       IX to stack at same time)
+	rst 10h			;1435 - Retrieve string length
 	ld a,l			;1436
 	and 03fh		;1437
-	jr z,l1443h		;1439
+	
+	jr z,l1443h		;1439 - Jump forward if empty string
 	ld l,a			;143b
 
-l143ch:	rst 20h			;143c
-	call SCR_PR_CHR		;143d
-	dec l			;1440
+l143ch:	rst 20h			;143c - Retrieve next character
+	call SCR_PR_CHR		;143d   and print
+
+	dec l			;1440 - Decrement character count
 	jr nz,l143ch		;1441
 
-l1443h:	pop ix			;1443
-	ret			;1445
+l1443h:	pop ix			;1443 - Retrieve previous value of IX
+	
+	ret			;1445 - Done
+
+	
 	ld bc,00723h		;1446
 	nop			;1449
 	jp TOS_TO_STRING	;144a
@@ -6404,13 +6402,8 @@ WRITE_BYTE:
 	ld b,00ah		;151b
 	ld a,(hl)		;151d
 	scf			;151e - Start with one
-	if MINSTREL4=1
-l151fh:	call WRITE_PULSE_4	;151f - Generate pulse
-	call c,WRITE_PULSE_4	;1522   Double-length for bit=one
-	else
 l151fh:	call WRITE_PULSE	;151f - Generate pulse
 	call c,WRITE_PULSE	;1522   Double-length for bit=one
-	endif
 	call nc,WRITE_GAP	;1525 - Gap for zero
 	add a,a			;1528 - Next bit to carry
 	djnz l151fh		;1529 - Repeat (with end with zero?)
@@ -7034,7 +7027,7 @@ l1787h:	call INIT_NEW_WORD		;1787
 	jp l1777h		;1794
 
 	
-	;; Jump here from definition of BASE
+	;; Jump here from definition of BASE (and other things)
 l1797h:	ld hl,FLAGS3		;1797 - FLAGs
 	bit 5,(hl)		;179a
 	res 5,(hl)		;179c
@@ -7770,34 +7763,40 @@ SEQ_CONT:
 	rst 8			;1b03
 
 	ret			;1b04
+
+	;; Forth word BLK
+	;;
+	;; Integer variable containing the address from which/ to which
+	;; tape operations move data
+	db 0x80+0x03, _B, _L, _K
+	dw 0x000D
 	
-	add a,e			;1b05
-	ld b,d			;1b06
-	ld c,h			;1b07
-	ld c,e			;1b08
-	dec c			;1b09
-	nop			;1b0a
 	ld hl,P_DISP_2		;1b0b
-l1b0eh:
-	push hl			;1b0e
+l1b0eh:	push hl			;1b0e
+
 	jp l1797h		;1b0f
-	add a,h			;1b12
-	ld d,b			;1b13
-	ld b,c			;1b14
-	ld b,a			;1b15
-	ld b,l			;1b16
-	inc c			;1b17
-	nop			;1b18
+
+
+	;; Forth work PAGE
+	;;
+	;; Most recent page number stored to/ loaded from cassette
+	db 0x80+0x04, _P, _A, _G, _E
+	dw 0x000C
+	
 	ld hl,SCREEN_NUM	;1b19
 	jr l1b0eh		;1b1c
-	add a,e			;1b1e
-	ld e,e			;1b1f
-	ld e,a			;1b20
-	ld e,l			;1b21
-	inc c			;1b22
-	nop			;1b23
+
+	;; Forth word [_]
+	;;
+	;; Suppress execution of the subsequent immediate word
+	db 0x80+0x03, _LEFTSQBRACKET, _UNDERSCORE, _RIGHTSQBRACKET
+	dw 0x000C
+	
 	call TICK_WORD		;1b24
 	jp DICT_ADD_CALL_HL	;1b27
+
+
+	
 	inc bc			;1b2a
 	ld c,b			;1b2b
 	ld a,041h		;1b2c
@@ -8278,7 +8277,7 @@ DEFVARS:
 	db 0x03				; (1DEA)
 	db 0x00				; POSSIBLE_KEY (1DEB)
 	db 0x80				; LAST_KEY
-	db 0x80				;FLAGS
+	db 0x80				; FLAGS
 	if MINSTREL4
 	db 0x00, 0x00, 0x00, 0x00	; SCREEN_INFO_EE (1DEE)
 	db 0x1F, 0x0F, 0x00, 0x20
