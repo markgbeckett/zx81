@@ -312,3 +312,37 @@ ZX-Forth allows the user to save the contents of the Editor screen  o cassette f
 When loading back from tape, ZX-Forth searchers for the identifier byte 0xA5 and then loads and checks the screen number. If all is as should be, it then populates the screen from the cassette buffer. If auto-compile is enabled, the screen is compiled once loaded.
 
 Note that the Editor Screen must be visible for `LOAD` to work and that the Editor Screen is cleared at the beginning of the `LOAD` operation, so any previous content will be lost. 
+
+# Porting ZX-Forth to Jupiter Ace (and Minstrel 4th)
+
+ZX-Forth is designed to run on the ZX81, which has many similarities to the Jupiter Ace. In some ways, the Jupiter Ace was a successor to the ZX81. Notable for here, the Ace did not require significant time from the Z80 to generate a display signal and had an improved tape-storage library. Potentially, ZX-Forth would be an excellent candidate to run on a Jupiter Ace, with significantly improved performance and more reliable screen handling, when compared to the ZX81.
+
+It transpired that a basic port is relatively straightforward, involving the following high-level tasks:
+- The display buffer needs to be located at 0x2400 (which is where Ace hardware expects to find it). The display buffer format is almost suitable already, though the Ace display expects characters to be stored with their ASCII encoding, whereas on the ZX81 the characters are encoded with ASCII code - 0x20.
+- During initialisation, the character RAM needs to be populated.
+- The memory discovery code needs to be updated, to reflect the different memory layout on the Ace (upper memory is not a copy of lower memory and addresses during 0x2000-0x3FFF can not be used as general-purpose RAM.
+- The display-generation code, used for ZX81, needs to be disabled.
+- The keyboard/ multitasking routine needs to be triggered appropriately - that is, using the maskable interrupt.
+
+Benchmark
+
+```
+: KERNEL 0 S->D 5000 0 DO I S->D D+ LOOP D. ;
+: BENCH 10 0 DO KERNEL LOOP ;
+
+```
+- ZX81 ZX-Forth (PAL, SLOW)
+  1:30 
+
+- ZX81 ZX-Forth (PAL, AUTO)
+  0:30 
+
+- Ace ZX-Forth
+  0:22
+
+- Ace Ace Forth (SLOW)
+  0:38
+
+- Ace Ace Forth (FAST)
+
+  0:25
