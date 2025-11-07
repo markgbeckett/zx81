@@ -3830,7 +3830,7 @@ l0a4ch:	rst 20h			;0a4c - Pop from character stack into A
 	call DSTAR		;0a5a
 	rst 8			;0a5d - Push HL onto param stack
 	call S_TO_D		;0a5e
-	call sub_1305h		;0a61
+	call D_PLUS		;0a61
 
 	djnz l0a4ch		;0a64
 
@@ -4767,7 +4767,7 @@ l0e4ah:	pop de			;0e4a - Restore registers
 	db 0x01+0x80, _SEMICOLON
 	dw 0x000C
 
-l0e68h:	call DICT_ADD_RET	;0e68
+END_COLON_DEF:	call DICT_ADD_RET	;0e68
 
 	;; Balance stack, without returning to DICT_ADD_WORDS
 	pop hl			;0e6b
@@ -5256,6 +5256,9 @@ STORE_DEHL:
 	ret			;10bb
 
 	;; Forth word IF
+	;;
+	;; Conditionally expect sequence of instructions based on
+	;; boolean test of TOS
 	;; 
 	db 0x80+0x02, _I, _F
 	dw 0x001F
@@ -5264,66 +5267,98 @@ STORE_DEHL:
 	ld hl,IF_TEST		;10c1
 	call DICT_ADD_CALL_HL	;10c4
 
-	ld hl,(P_HERE)		;10c7
-	inc hl			;10ca
-	push hl			;10cb
+	ld hl,(P_HERE)		;10c7 - Retrieve current dictionary
+	inc hl			;10ca   entry point and advance one
+				;       element (which will be the
+				;       address parameter of conditional
+				;       jump statement entered next)
+	push hl			;10cb - Save it for use in future ELSE/
+				;       THEN word
+	
 	ld a,0xCA		;10cc - Z80 opcode JP Z, NN
 	call DICT_ADD_CHAR_AND_HL	;10ce
 
-	call DICT_ADD_WORDS	;10d1 - Only returns, if error
+	;; Proceed to fill in body of IF block, until reach an ELSE or
+	;; THEN statement
+	call DICT_ADD_WORDS	;10d1 - Only returns, if error.
 
 	jp ERR_RESTART		;10d4
 
 IF_TEST:
-	rst 10h			;10d7
-	jp CHECK_HL_ZERO	;10d8
+	rst 10h			;10d7 - Retrieve parameter from TOS
+	jp CHECK_HL_ZERO	;10d8 - Check if boolean
 
+	
 	;; Forth word ELSE
 	;;
+	;; Indicate alternative command sequence, if an IF condition
+	;; fails
+	;; 
 	db 0x80+0x04, _E, _L, _S, _E
 	dw 0x001E
 	
-	pop hl			;10e2
-	pop hl			;10e3
-	pop hl			;10e4
-	pop de			;10e5
-	call DICT_ADD_JP_HL	;10e6
-	ld hl,(P_HERE)		;10e9
-	ex de,hl		;10ec
-	ld (hl),e		;10ed
-	inc hl			;10ee
+	pop hl			;10e2 - Discard top two entries from
+	pop hl			;10e3   stack (as exiting DICT_ADD_WORDS)
+
+	pop hl			;10e4 - Retrieve return address (should
+				;       be 0x10D4, in code field for IF
+				;       statement)
+	pop de			;10e5 - Retrieve pointer to branch
+				;       address for JP Z,nn command,
+				;       used if IF condition test fails
+	call DICT_ADD_JP_HL	;10e6 - Jump command, initial with dummy
+				;       address, which will be updated as part
+				;       of THEN word later
+	ld hl,(P_HERE)		;10e9 - Retrieve current location into DE,
+	ex de,hl		;10ec   moving IF condition test address
+				;       into HL
+	ld (hl),e		;10ed - Replace with address of ELSE
+	inc hl			;10ee   command body
 	ld (hl),d		;10ef
-	dec de			;10f0
-	dec de			;10f1
-	push de			;10f2
+
+	dec de			;10f0 - Set to call address of
+	dec de			;10f1   dictionary entry above)
+
+	push de			;10f2 - Save it
+
 	call DICT_ADD_WORDS	;10f3
+
 	jp ERR_RESTART		;10f6
 
+	
 	;; Forth word THEN
+	;;
+	;; Used to signify end of IF conditional code
+	;; 
 	db 0x80+0x04, _T, _H, _E, _N
 	dw 0x0013
 
-	pop hl			;1100
+	pop hl			;1100 - Discard top two entries from stack
 	pop hl			;1101
-	pop hl			;1102
-	pop de			;1103
+	pop hl			;1102 - Retrieve return address from
+				;       DICT_ADD_WORDS - should be in IF or
+				;       ELSE code field
+	pop de			;1103 - Retrieve address field of branch
+				;       instruction
 	ld hl,(P_HERE)		;1104 - Retrieve current dictionary
 	ex de,hl		;1107   into DE, swapping DE to HL
 	
-	ld (hl),e		;1108
-	inc hl			;1109
+	ld (hl),e		;1108 - Replace branch address with
+	inc hl			;1109   current location in dictionary
 	ld (hl),d		;110a
 
-	ret			;110b
+	ret			;110b - Done
 
+	
 	;; Forth word REV
 	;;
 	db 0x03, _R, _E, _V
 	dw 0x0015
 
-	ld de,0x0006		;1112 - Set offset to blanking character
+	ld de,0x0006		;1112 - Set offset to mask character
 	rst 10h			;1115 - Retrieve screen id from
-				;       Parameter Stack
+				;       Parameter Stack (effectively
+				;       pointer to screen info)
 	
 	add hl,de		;1116 - Point to mask character
 	ld a,080h		;1117   and set REV mask
@@ -5339,34 +5374,35 @@ IF_TEST:
 	
 	ret			;1120
 
+
 	;; Forth word LOCK
 	db 0x04, _L, _O, _C, _K
 	dw 0x0011
 
-LOCK:	ld hl,(MTASK_TAIL)	;1128 - Set HL to point to tail of task list
+LOCK:	ld hl,(MTASK_TAIL)	;1128 - Set HL to point to tail of task
+				;       list
 	ld de,$000A		;       Skip forward to byte 10
 	add hl,de		;112e
 	set 7,(hl)		;112f - Set lock flag
 	
 	ret			;1131 - Done
 
+	;; Forth word UNLOCK
+	;;
+	db 0x06, _U, _N, _L, _O, _C, _K
+	dw 0x0013
 	
-	ld b,055h		;1132
-	ld c,(hl)			;1134
-	ld c,h			;1135
-	ld c,a			;1136
-	ld b,e			;1137
-	ld c,e			;1138
-	inc de			;1139
-	nop			;113a
-	ld hl,(MTASK_TAIL)		;113b
-l113eh:
-	ld de,0x000A		;113e
-	add hl,de			;1141
-	res 7,(hl)		;1142
+	ld hl,(MTASK_TAIL)	;113b - Set HL to point to tail of task
+				;       list
+l113eh:	ld de,0x000A		;113e - Skip forward 10 bytes
+	add hl,de		;1141
+	res 7,(hl)		;1142 - Reset lock flag
+
 	ret			;1144
 
+	
 	;; Forth word STOP
+	;; 
 	db 0x04, _S, _T, _O, _P
 	dw 0x000E
 
@@ -5398,6 +5434,8 @@ l113eh:
 	ret			;1161
 
 	;; Forth word IN
+	;;
+	;; Schedule task to execute after a time interval
 	db 0x02, _I, _N
 	dw 0x000A
 
@@ -5752,57 +5790,77 @@ l124eh:	call S_TO_D		;124e - Convert TOS to double
 	jr l1223h		;1257 - Stack HLDE and D*
 
 
-	add a,h			;1259
-	ld b,e			;125a
-	ld b,c			;125b
-	ld d,e			;125c
-	ld b,l			;125d
-	and a			;125e
-	nop			;125f
-	ld hl,l128bh		;1260
-	call DICT_ADD_CALL_HL		;1263
-	ld hl,(P_HERE)		;1266
-	push hl			;1269
-	call DICT_ADD_HL		;126a
-	ld de,l0e68h		;126d
-l1270h:
-	call TICK_WORD		;1270
-	call DE_CMP_HL		;1273
-	jr z,l127dh		;1276
-	call DICT_ADD_HL	;1278
-	jr l1270h		;127b
-l127dh:
-	ld hl,(P_HERE)		;127d
-	dec hl			;1280
-	dec hl			;1281
-	pop de			;1282
-	or a			;1283
-	sbc hl,de		;1284
-	ex de,hl			;1286
-	ld (hl),e			;1287
-	inc hl			;1288
-	ld (hl),d			;1289
-	ret			;128a
-l128bh:	pop hl			;128b
-	ld e,(hl)			;128c
-	inc hl			;128d
-	ld d,(hl)			;128e
-	inc hl			;128f
-	push hl			;1290
-	add hl,de			;1291
-	ex (sp),hl			;1292
-	push hl			;1293
-	rst 10h			;1294
-	add hl,hl			;1295
-	call DE_CMP_HL		;1296
-	jr nc,l12a0h		;1299
-	pop de			;129b
-	add hl,de			;129c
-	jp JP_ADDR_HL		;129d
+	;; Forth word CASE
+	;;
+	;; Execute (n-1)th word, based on TOS
+	;; 
+	db 0x80+0x04, _C, _A, _S, _E
+	dw 0x00A7
 
-l12a0h:	pop hl			;12a0
+	ld hl,CASE_EXEC		;1260 
+	call DICT_ADD_CALL_HL	;1263
+
+	ld hl,(P_HERE)		;1266 - Retrieve pointer to current
+	push hl			;1269   dictionary position and save it
+	call DICT_ADD_HL	;126a - Store in dictionary: will be
+				;       updated later to otherwise
+				;       option.
+	ld de,END_COLON_DEF	;126d - Code field for `;`, which will
+				;       indicate end of CASE word list
+
+CASE_LOOP:
+	call TICK_WORD		;1270 - Wait for word
+	call DE_CMP_HL		;1273 - Check if `;` for end of case
+	jr z,CASE_DONE		;1276   options, and jump forward if is
+	call DICT_ADD_HL	;1278 - Add code-field address of word to
+	jr CASE_LOOP		;127b   dictionary
+
+CASE_DONE:
+	ld hl,(P_HERE)		;127d - Retrieve current dictionary
+				;       location
+	dec hl			;1280 - Step back to start of last
+	dec hl			;1281   CASE word
+
+	pop de			;1282 - Retrieve pointer to otherwise
+	or a			;1283   offset
+	sbc hl,de		;1284
+
+	ex de,hl		;1286 - Store offset to final CASE word
+	ld (hl),e		;1287
+	inc hl			;1288
+	ld (hl),d		;1289
+
+	ret			;128a - Done
+
+CASE_EXEC:
+	pop hl			;128b - Retrieve return address (start
+				;       of CASE list)
+	ld e,(hl)		;128c - Store OTHERWISE offset into DE
+	inc hl			;128d
+	ld d,(hl)		;128e
+	inc hl			;128f - Advance to first word
+	push hl			;1290   and save
+	add hl,de		;1291 - Work out end of CASE list
+	ex (sp),hl		;1292   and set as default return address
+				;       (retrieving pointer to start of
+				;       CASE list into HL)
+	push hl			;1293 - Save it
+	rst 10h			;1294 - Retrieve TOS
+	add hl,hl		;1295   and multiply by 2
+
+	call DE_CMP_HL		;1296 - Check if beyond end of list
+	jr nc,l12a0h		;1299 - Skip forward to user otherwise
+				;       case, if so
+	pop de			;129b - Retrieve word address
+	add hl,de		;129c
+	jp JP_ADDR_HL		;129d - and jump to it (return address
+				;       is on stack)
+
+l12a0h:	pop hl			;12a0 - Balance stack
+	
 	ret			;12a1
 
+	
 	;; Check if DE>HL
 	;;
 	;; On entry:
@@ -5932,39 +5990,50 @@ FIND_2DP_NUMS:
 	;; Done
 	ret			;12ff
 
-	ld (bc),a		;1300
-	ld b,h			;1301
-	dec hl			;1302
-	ld (de),a		;1303
-	nop			;1304
-sub_1305h:
-	push hl			;1305
+
+	;; Forth word D+
+	;;
+	;; 32-bit addition
+	db 0x02, _D, _PLUS
+	dw 0x0012
+
+D_PLUS:	push hl			;1305 - Save registers
 	push de			;1306
+
 	call FIND_2DP_NUMS	;1307 - DE and HL point to top and
 				;       second double precision numbers
 				;       on the stack
-	call TIC		;130a
+	call TIC		;130a - Increment
 	rst 10h			;130d
 	rst 10h			;130e
-	pop de			;130f
+
+	pop de			;130f - Restore registers
 	pop hl			;1310
+
 	ret			;1311
-	ld (bc),a			;1312
-	ld b,h			;1313
-	dec l			;1314
-	ld (de),a			;1315
-	nop			;1316
+
+	;; Forth word D-
+	;;
+	;; 32-bit subtraction
+	db 0x02, _D, _MINUS
+	dw 0x0012
+
 	push hl			;1317
 	push de			;1318
+
 	call FIND_2DP_NUMS	;1319 - DE and HL point to top and
 				;       second double precision numbers
 				;       on the stack
 	call HL_MINUS_DE	;131c
 	rst 10h			;131f
 	rst 10h			;1320
+
 	pop de			;1321
 	pop hl			;1322
+
 	ret			;1323
+
+	;; GOT THIS FAR
 	inc bc			;1324
 	ld b,e			;1325
 	ld c,h			;1326
