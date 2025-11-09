@@ -6743,10 +6743,19 @@ LS_CONT:
 	di
 	call READ_FROM_TAPE
 	ei
+
+	ret z
 	
 	;; Try again, if not successful
 	jr nc, LS_CONT
 
+	;; Report what was found
+	ld hl,SCREEN_MSG
+	call PRINT_STR_HL
+	ld hl,PAD
+	ld (hl), 0x0A
+	call PRINT_STR_HL
+	
 	;; Check if right screen number
 	ld hl,PAD + 0x01
 	call GETNUM
@@ -6767,6 +6776,8 @@ LS_CONT:
 	call READ_FROM_TAPE
 	ei
 
+	ret z
+	
 	call LOAD_COMPILE
 LS_FAIL:
 	ret
@@ -9078,6 +9089,9 @@ P_LOOP:	djnz P_LOOP
 
 	ret
 
+SCREEN_MSG:
+	db 0x08, _S, _C, _R, _E, _E, _N, _COLON, _SPACE
+	
 	ds $4000-$
 
 	endif
