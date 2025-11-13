@@ -313,36 +313,49 @@ When loading back from tape, ZX-Forth searchers for the identifier byte 0xA5 and
 
 Note that the Editor Screen must be visible for `LOAD` to work and that the Editor Screen is cleared at the beginning of the `LOAD` operation, so any previous content will be lost. 
 
-# Porting ZX-Forth to Jupiter Ace (and Minstrel 4th)
+# Porting ZX-Forth to Minstrel 4th
 
-ZX-Forth is designed to run on the ZX81, which has many similarities to the Jupiter Ace. In some ways, the Jupiter Ace was a successor to the ZX81. Notable for here, the Ace did not require significant time from the Z80 to generate a display signal and had an improved tape-storage library. Potentially, ZX-Forth would be an excellent candidate to run on a Jupiter Ace, with significantly improved performance and more reliable screen handling, when compared to the ZX81.
+ZX-Forth is designed to run on the ZX81, which has many similarities to the Minstrel 4th (a modern-day Jupiter Ace compatible). In some ways, the Jupiter Ace was  (and, hence, Minstrel 4th is) a successor to the ZX81. Notable for here, the Ace (and 4th) does not require significant time from the Z80 to generate a display signal and has an improved tape-storage library. Potentially, ZX-Forth would be an excellent candidate to run on a Jupiter Ace (Minstrel 4th), with significantly improved performance and more reliable screen handling, when compared to the ZX81.
 
-It transpired that a basic port is relatively straightforward, involving the following high-level tasks:
+It transpired that a basic port to the Minstrel 4th is relatively straightforward, involving the following high-level tasks:
 - The display buffer needs to be located at 0x2400 (which is where Ace hardware expects to find it). The display buffer format is almost suitable already, though the Ace display expects characters to be stored with their ASCII encoding, whereas on the ZX81 the characters are encoded with ASCII code - 0x20.
 - During initialisation, the character RAM needs to be populated.
-- The memory discovery code needs to be updated, to reflect the different memory layout on the Ace (upper memory is not a copy of lower memory and addresses during 0x2000-0x3FFF can not be used as general-purpose RAM.
+- The memory checking code needs to be updated, to reflect the different memory layout on the Ace (upper memory is not a copy of lower memory and addresses during 0x2000-0x3FFF can not be used as general-purpose RAM).
 - The display-generation code, used for ZX81, needs to be disabled.
 - The keyboard/ multitasking routine needs to be triggered appropriately - that is, using the maskable interrupt.
 
-Benchmark
+Note that the current port only works on the Minstrel 4th (and not on a Jupiter Ace). My port relies on the extra ROM at address 0x2800--0x4000 to hold a new tape interface, plus other extra routines. I do not expect this is a significant limitation, since it is unlikely anyone who has an original Jupiter Ace would want to swap out the ROM.
+
+The ZX-Forth tape storage routines have been replaced by the Ace Forth equivalents. The Ace Forth routines are, I believe, much more robust than the Ace Forth ones. This means you cannot share tapes between a ZX81 and a Minstrel 4th though you can share files between ZX-Forth on the Minstrel 4th and Ace Forth (screens are saved a code blocks, which can then be loaded into Ace Forth using `BLOAD`).
+
+
+## Differences
+
+I think ZX-Forth runs well on the Minstrel 4th, but there are a few differences to be aware of:
+- The key meanings (especially, some of the symbols) are different on ZX-Forth from Ace Forth, so you can not rely on the keyboard legends for some characters. If in doubt, consult the final page of the ZX81-Forth [manual](https://www.retrocomputers.gr/media/kunena/attachments/169/zx81-forth-manual.pdf), which lists all key presses. Also, there is no Period key on the Minstrel 4th. The Minstrel 4th's Symbol Shift key (which is not needed is mapped to the ZX81's period key).
+- The `SLOW`, `FAST`, and `AUTO` words are implemented but do nothing on the Minstrel 4th.
+- As noted above, `LOAD` and `STORE` work with Jupiter Ace tape-file format. Specifically, screens are stored as binary code blocks, which could be loaded into Ace Forth with `BLOAD` though can not be intepretted by Ace Forth.
+
+## Speed
+
+As noted, a potential advantage of running on the Minstrel 4th is the speed advantage (as the Minstrel 4th does not need time from the Z80 to display the screen). To test how significant this speedup is, I have written a simple benchmark based on the Sieve of Eratosthenes:
 
 ```
-: KERNEL 0 S->D 5000 0 DO I S->D D+ LOOP D. ;
-: BENCH 10 0 DO KERNEL LOOP ;
-
+: ?PRIME HERE + C@ 0= ;
+: COMPOSITE! HERE + 1 SWAP C! ;
+: 2DUP OVER OVER ;
+: SIEVE HERE OVER 0 FILL
+  2 BEGIN
+    2DUP DUP * > WHILE
+      DUP ?PRIME IF
+        2DUP DUP DO
+          I COMPOSITE! DUP +LOOP
+      THEN 1 +
+    REPEAT
+  DROP ." PRIMES: " 2 DO
+    I ?PRIME IF I . THEN LOOP
+;
 ```
-- ZX81 ZX-Forth (PAL, SLOW)
-  1:30 
 
-- ZX81 ZX-Forth (PAL, AUTO)
-  0:30 
+Using thie program to compute all prime numbers in the first 1,000 integers takes 11 seconds on the ZX81 (slow) or 4 second in auto mode. On the Minstrel 4th, the same benchmark takes a little under 3 seconds.
 
-- Ace ZX-Forth
-  0:22
-
-- Ace Ace Forth (SLOW)
-  0:38
-
-- Ace Ace Forth (FAST)
-
-  0:25
