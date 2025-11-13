@@ -1874,15 +1874,41 @@ EDIT:	push hl			;0455
 				;       info   (would be IX+3)
 	ld (hl),0x11		;0467 - Set top row of console to 17d
 
-	ld a,_PUTPAD		;0469 - Copy first line of screen
-				;       (copyright) into PAD
+	if FIXBUG=1
+	;; Reset cursor to row 0 to avoid issue with SCR_PR_CHR
+	dec l			; 0469
+	dec l
+	xor a
+	ld (hl),a		; 046c
+
+	call E_RESET		; Additional code to reset screen, which
+				; does not fit in existing ROM
+
+	ds $0476-$
+	
+	else
+
+	ld a,_PUTPAD		;0469 - Copy first line of screen into
+				;       PAD. *** INFO *** Likely not
+				;       useful to copy whatever happens
+				;       to be in first line into pad. If
+				;       done after a cold restart, will
+				;       copy over the copyright message,
+				;       which might be intentional.
 	call PROCESS_KEY	;046b
 
-	ld a,_CLS		;046e
+	ld a,_CLS		;046e - Initialise the Editor screeen
 	call PROCESS_KEY	;0470
 
-	call SCR_PR_CHR		;0473
-
+	call SCR_PR_CHR		;0473 - Clear console screen (A still
+				;contains '_CLS' from previous
+				;call). *** BUG *** If the console
+				;cursor were previously in the lower
+				;screen (anything below Row 7) then this
+				;will cause a write to memory beyond the
+				;end of the display buffer.
+	endif
+	
 E_DONE:	pop hl			;0476
 
 	ret			;0477
@@ -8232,6 +8258,7 @@ l1c85h:
 	
 	jp PRINT_STRING		;1c96
 
+	
 	;; Forth word D>
 	;; Double-precision comparison
 	db 0x02, _D, _GREATERTHAN
@@ -8241,12 +8268,18 @@ D_GREATERTHAN:
 	call DSWAP		;1c9e
 	jr D_LESSTHAN		;1ca1
 
+	
 	;; Forth word D<
 	;; Double-precision comparison
 	db 0x02, _D, _LESSTHAN
+
+	if MINSTREL4=1
+	dw TX-D_LESSTHAN
+	else
 	dw $10000-$1CA3		; Length => next word starts at 0x0000,
 				; which is a special case, indicating
 				; the end of the dictionary
+	endif
 	
 D_LESSTHAN:
 	call COMPARE_STACK_DNUM	;1ca8 - Carry and Zero indicate result
@@ -8521,7 +8554,7 @@ CHARS:	db 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00 ; 00 Space
 
 	if MINSTREL4=1
 
-	ds $2800-$
+	ds $2900-$
 
 	;; -------------------------------------------------------------
 	;; JUPITER ACE 'CASSETTE INTERFACE' ROUTINES
@@ -9092,9 +9125,392 @@ P_LOOP:	djnz P_LOOP
 SCREEN_MSG:
 	db 0x08, _S, _C, _R, _E, _E, _N, _COLON, _SPACE
 	
+
+	;; Software serial interface code, thanks to Dave Curran
+	;; (Tynemouth Software)
+
+
+	;;  IO on $FF
+	;; 
+	;; Output port
+	;; Using 74HC175 /Q outputs, so reset sets all outputs high (inactive)
+
+	;; D0    TX out      0 sets output high (1)      1 sets output low (0)
+	;; D1    RTS out     0 sets output high (busy)   1 sets output low
+	;; 				                 (request to send)
+	;; D2    TX LED      0 TX is LED off             1 triggers 50mS pulse
+	;; D3    RX LED      0 RX is LED off             1 triggers 50mS pulse
+
+	;; Input port
+	;; Using 74HC125 gated, no inversion
+	;; D6    CTS in      0 is clear to send          1 is not clear to send
+	;; D7    RX in       0 is low (0)                1 is high (1)
+
+	;; All 0s at reset
+	;; 
+	;; There will be a 50ms pulse from both LEDs at power on, which
+	;; is useful anyway send data at 57600 baud at 3.25MHz = 56
+	;; cycles per bit actual speed is 58035.6 baud, which is 0.76%
+	;; fast (recommended is < 5%)
+
+SENDW:
+SSEND:
+	di 	; TODO check CTS??? or add TXB which checks CTS?
+
+				; start bit (low)
+	cpl                     ; invert A
+	ld b, a                 ; B = inverse of data to send     
+	ld c, $ff               ; C holds output port address
+	ld a, $05               ; trigger TX LED flash, RX LED off, serial data 0
+	out (c),a               ; [12] output start bit 
+
+				; cycle exact timing starts from here, 56 cycles per bit
+
+				; bit 0 (LSB)
+	ld a, $00               ; [7] repeat for padding
+	ld a, $00               ; [7]
+	ld a, $00               ; [7]
+	rr b                    ; [8] carry = next bit to send
+	rl a                    ; [8] bit 0 = carry
+	or $04                  ; [7] TX LED on
+	out (c),a               ; [12] output serial bit to d0
+
+				; bit 1
+	ld a, $00               ; [7] repeat for padding
+	ld a, $00               ; [7]
+	ld a, $00               ; [7]
+	rr b                    ; [8] carry = next bit to send
+	rl a                    ; [8] bit 0 = carry
+	or $04                  ; [7] TX LED on
+	out (c),a               ; [12] output serial bit to d1
+
+				; bit 2
+	ld a, $00               ; [7] repeat for padding
+	ld a, $00               ; [7]
+	ld a, $00               ; [7]
+	rr b                    ; [8] carry = next bit to send
+	rl a                    ; [8] bit 0 = carry
+	or $04                  ; [7] TX LED on 
+	out (c),a               ; [12] output serial bit to d2
+
+				; bit 3
+	ld a, $00               ; [7] repeat for padding
+	ld a, $00               ; [7]
+	ld a, $00               ; [7]
+	rr b                    ; [8] carry = next bit to send
+	rl a                    ; [8] bit 0 = carry
+	or $04                  ; [7] TX LED on 
+	out (c),a               ; [12] output serial bit to d3
+
+				; bit 4
+	ld a, $00               ; [7] repeat for padding
+	ld a, $00               ; [7]
+	ld a, $00               ; [7]
+	rr b                    ; [8] carry = next bit to send
+	rl a                    ; [8] bit 0 = carry
+	or $04                  ; [7] TX LED on  
+	out (c),a               ; [12] output serial bit to d4
+
+				; bit 5
+	ld a, $00               ; [7] repeat for padding
+	ld a, $00               ; [7]
+	ld a, $00               ; [7]
+	rr b                    ; [8] carry = next bit to send
+	rl a                    ; [8] bit 0 = carry
+	or $04                  ; [7] TX LED on 
+	out (c),a               ; [12] output serial bit to d5
+
+				; bit 6
+	ld a, $00               ; [7] repeat for padding
+	ld a, $00               ; [7]
+	ld a, $00               ; [7]
+	rr b                    ; [8] carry = next bit to send
+	rl a                    ; [8] bit 0 = carry
+	or $04                  ; [7] TX LED on 
+	out (c),a               ; [12] output serial bit to d6
+
+				; bit 7 (MSB)
+	ld a, $00               ; [7] repeat for padding
+	ld a, $00               ; [7]
+	ld a, $00               ; [7]
+	rr b                    ; [8] carry = next bit to send
+	rl a                    ; [8] bit 0 = carry
+	or $04                  ; [7] TX LED on   
+	out (c),a               ; [12] output serial bit to d7
+
+				; stop bit (1)
+	ld a, $00               ; [7] RTS off, TX idle, TX LED off, RX LED off
+	ld a, $00               ; [7] repeat for padding
+	ld a, $00               ; [7]
+	ld a, $00               ; [7]
+	nop                     ; [4] maintain timing for bit 7
+	nop                     ; [4] 
+	nop                     ; [4] 
+	nop                     ; [4] 
+	out (c),a               ; [12] output stop bit
+
+				; cycle exact timing ends continue in
+				; this state for at least 56 cycles
+				; before next byte
+
+	and a		        ; Clear carry to indicates success	
+
+	ei
+	
+	ret                     ; 
+
+	
+	;; ========================================================
+	;; receive byte from serial port
+	;; 
+	;; On entry:
+	;; 	    none
+	;; On exit,
+	;;     	Carry Set 	- No data, A corrupted
+	;;     	Carry Clear - A = value read
+	;;     	Always 		- BC corrupt
+	;; ========================================================
+RECVW:
+SRECVW:
+	ld bc, $0800	; retry max times (but still timesout)
+	jr SR_INIT
+    
+RECV:
+SRECV:     		; Non-blocking read
+	ld b, $0001	; quick check only
+
+SR_INIT:
+	di			; Disable interrupts for timing
+	
+	push de         ; preserve de and hl
+	push hl         ;
+	
+	ld d, b		; d = counter msb
+	inc d           ; d++ to make loop logic easier
+	ld b, c         ; b = counter lsb
+	ld c, $ff       ; c = output register
+	ld h, $02       ; RTS active, TX idle, both LEDs off
+	ld l, $00       ; RTS inactive, TX idle, LEDs off
+
+SR_WAITSTART:
+	out (c), h              ; [12] RTS
+	in a, (c)               ; [12] read port
+	jp p, SR_START            ; [10/10] start bit received if bit 7 was positive (0)
+	out (c), l              ; [12] not RTS
+    
+	in a, (c)               ; [12] read port
+	jp p, SR_START            ; [10/10] start bit received if bit 7 was positive (0)
+
+	in a, (c)               ; [12] read port
+	jp p, SR_START            ; [10/10] start bit received if bit 7 was positive (0)
+
+	in a, (c)               ; [12] read port
+	jp p, SR_START            ; [10/10] start bit received if bit 7 was positive (0)
+
+	in a, (c)               ; [12] read port
+	jp p, SR_START            ; [10/10] start bit received if bit 7 was positive (0)
+
+	in a, (c)               ; [12] read port
+	jp p, SR_START            ; [10/10] start bit received if bit 7 was positive (0)
+
+	in a, (c)               ; [12] read port
+	jp p, SR_START            ; [10/10] start bit received if bit 7 was positive (0)
+
+	in a, (c)               ; [12] read port
+	jp p, SR_START            ; [10/10] start bit received if bit 7 was positive (0)
+
+	in a, (c)               ; [12] read port
+	jp p, SR_START            ; [10/10] start bit received if bit 7 was positive (0)
+
+	in a, (c)               ; [12] read port
+	jp p, SR_START            ; [10/10] start bit received if bit 7 was positive (0)
+
+	in a, (c)               ; [12] read port
+	jp p, SR_START            ; [10/10] start bit received if bit 7 was positive (0)
+
+	in a, (c)               ; [12] read port
+	jp p, SR_START            ; [10/10] start bit received if bit 7 was positive (0)
+
+	in a, (c)               ; [12] read port
+	jp p, SR_START            ; [10/10] start bit received if bit 7 was positive (0)
+
+	djnz SR_WAITSTART         ; [13] loop around until start or timeout
+	dec d                   ; [4] decrement loop MSB
+	jp nz, SR_WAITSTART       ; [10/10] loop back if not zero
+
+SR_ERROR:	
+    ; timeout or no stop bit
+	ld a, $00               ; RTS inactive, TX idle, LEDs off
+	out (c), a              ; No more bytes please
+	pop hl                  ; Restore registers
+	pop de                  ;
+	scf			; Set carry, to indicate error
+
+	ei
+	
+	ret                     ;
+
+SR_START:			; 22 cycles since start of instruction
+				; when start bit detected
+	
+				; start bit
+	ld a, $08               ; [7] RTS inactive, TX ide, RX LED on, TX LED off
+	out (c), a              ; [12]
+	ld a, $ff               ; [7] Padding
+	ld a, $ff               ; [7]
+	ld a, $ff               ; [7]
+	ld a, $ff               ; [7]
+	nop                     ; [4]
+	
+				; bit 0 (LSB)
+	in a, (c)               ; [12] read port
+	rl a                    ; [8] carry = bit 0
+	rr b                    ; [8] b = 0xxx xxxx
+	ld a, $ff               ; [7] Padding
+	ld a, $ff               ; [7]
+	ld a, $ff               ; [7]
+	ld a, $ff               ; [7]
+
+				; bit 1
+	in a, (c)               ; [12] read port
+	rl a                    ; [8] carry = bit 1
+	rr b                    ; [8] b = 10xx xxxx
+	ld a, $ff               ; [7] Padding
+	ld a, $ff               ; [7]
+	ld a, $ff               ; [7]
+	ld a, $ff               ; [7]
+
+				; bit 2
+	in a, (c)               ; [12] read port
+	rl a                    ; [8] carry = bit 2
+	rr b                    ; [8] b = 210x xxxx
+	ld a, $ff               ; [7] Padding
+	ld a, $ff               ; [7]
+	ld a, $ff               ; [7]
+	ld a, $ff               ; [7]
+
+				; bit 3
+	in a, (c)               ; [12] read port
+	rl a                    ; [8] carry = bit 3
+	rr b                    ; [8] b = 3210 xxxx
+	ld a, $ff               ; [7] Padding
+	ld a, $ff               ; [7]
+	ld a, $ff               ; [7]
+	ld a, $ff               ; [7]
+
+				; bit 4
+	in a, (c)               ; [12] read port
+	rl a                    ; [8] carry = bit 4
+	rr b                    ; [8] b = 4321 0xxx
+	ld a, $ff               ; [7] Padding
+	ld a, $ff               ; [7]
+	ld a, $ff               ; [7]
+	ld a, $ff               ; [7]
+
+				; bit 5
+	in a, (c)               ; [12] read port
+	rl a                    ; [8] carry = bit 5
+	rr b                    ; [8] b = 5432 10xx
+	ld a, $ff               ; [7] Padding
+	ld a, $ff               ; [7]
+	ld a, $ff               ; [7]
+	ld a, $ff               ; [7]
+
+				; bit 6
+	in a, (c)               ; [12] read port
+	rl a                    ; [8] carry = bit 6
+	rr b                    ; [8] b = 6543 210x
+	ld a, $ff               ; [7] Padding
+	ld a, $ff               ; [7]
+	ld a, $ff               ; [7]
+	ld a, $ff               ; [7]
+
+				; bit 7 (MSB)
+	in a, (c)               ; [12] read port
+	rl a                    ; [8] carry = bit 7
+	rr b                    ; [8] b = 7654 3210
+	ld a, $ff               ; [7] Padding
+	ld a, $ff               ; [7]
+	ld a, $ff               ; [7]
+	ld a, $ff               ; [7]
+
+				; stop bit
+	in a, (c)               ; [12] read port
+	cpl                     ; [4] invert A
+	rla                     ; [4] carry = inverse of stop bit
+	
+				; if carry = 1, invalid data
+
+	ld a, $00               ; [7] RTS inactive, TX idle, LEDs off
+	out (c), a              ; [12]
+
+	jp c, SR_ERROR            ; invalid data
+
+				; valid data
+
+	ld a,b                  ; A = byte read
+
+	pop hl                  ; restore registers
+	pop de                  ;
+
+	ei
+	
+	ret                     ; return with carry clear to indicate success
+
+	;; Forth word TX
+	db 0x02, _T, _X
+	dw RX-TX	
+	
+TX:	rst 0x10		; Retrieve TOS into HL
+	ld a,l
+
+	call SENDW
+
+	ld hl, 0xFFFF
+	jr nc, TX_CONT
+	inc hl
+
+TX_CONT:
+	rst 0x08
+
+	ret
+
+	;; Forth word RX
+	db 0x02, _R, _X
+	dw 0x10000-($-0x03)	; End of dictionary
+
+RX:	call RECVW		; Call serial input routine
+
+	ld l,a			; Move result to HL (assuming
+	ld h,0x00		; successful)
+
+	jr nc, RX_CONT 		; Check if successful
+	ld l,0x00		; Zeroing result, if not
+
+RX_CONT:
+	rst 0x08		; Push to Parameter stack
+
+	ret
+
+	
+	;; Revised routine for initialising the split-screen display
+	;; when Editor screen is first activated. Called from routine
+	;; 'EDIT' at 0x0455
+E_RESET:
+	ld a,_CLS		; Clear Editor screen
+	call PROCESS_KEY	;
+
+	call SCR_PR_CHR		; Clear Console screen
+	
+	ld a,_PUTPAD		; Initialise visual pad (to be
+	call PROCESS_KEY	; blank)
+
+	ret
+
+	
 	ds $4000-$
 
 	endif
-	
+
 HFORTH_END:
 	end
