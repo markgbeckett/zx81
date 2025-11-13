@@ -83,8 +83,8 @@
 	;; elements of the original programme
 MINSTREL3:	equ 0x00
 NTSC:		equ 0x00
-FIXBUG:		equ 0x01
-MINSTREL4:	equ 0x01
+FIXBUG:		equ 0x00
+MINSTREL4:	equ 0x00
 
 	;; 	include "zx81_chars.asm"
 	include "hforth_chars.asm"
@@ -1874,7 +1874,7 @@ EDIT:	push hl			;0455
 				;       info   (would be IX+3)
 	ld (hl),0x11		;0467 - Set top row of console to 17d
 
-	if FIXBUG=1
+	if FIXBUG*MINSTREL4=1 
 	;; Reset cursor to row 0 to avoid issue with SCR_PR_CHR
 	dec l			; 0469
 	dec l
@@ -2175,7 +2175,7 @@ COMPILE_LN:
 CL_CONT:
 	ld a,(hl)		;0550 - Retrieve character at end of
 	and 07fh		;0551   line and check if actionable
-	jr nz,CL_FULL_LINE		;0553 - Skip forward if so
+	jr nz,CL_FULL_LINE	;0553 - Skip forward if so
 
 	;; Scan left along line to be compiled until find an actionable
 	;; character
