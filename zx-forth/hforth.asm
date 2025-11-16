@@ -83,8 +83,8 @@
 	;; elements of the original programme
 MINSTREL3:	equ 0x00
 NTSC:		equ 0x00
-FIXBUG:		equ 0x00
-MINSTREL4:	equ 0x00
+FIXBUG:		equ 0x01
+MINSTREL4:	equ 0x01
 
 	;; 	include "zx81_chars.asm"
 	include "hforth_chars.asm"
@@ -9477,7 +9477,7 @@ TX_CONT:
 
 	;; Forth word RX
 	db 0x02, _R, _X
-	dw 0x10000-($-0x03)	; End of dictionary
+	dw INPW-$+0x03
 
 RX:	call RECVW		; Call serial input routine
 
@@ -9492,7 +9492,38 @@ RX_CONT:
 
 	ret
 
+
+	;; Forth word INP
+INPW:	db 0x03, _I, _N, _P
+	dw OUTPW-$+0x04	
+
+INP:	rst 0x10		; Retrieve port number from Parameter
+				; Stack
+	ld b,h
+	ld c,l
+
+	in l,(c)		; Read port value
+	ld h,0x00
+
+	rst 0x08		; Put result onto parameter stack
+
+	ret
+
+	;; Forth word INP
+OUTPW:	db 0x04, _O, _U, _T, _P
+	dw 0x10000-($-0x05)	; End of dictionary
+
+OUTP:	rst 0x10 		; Retrieve address from Parameter Stack
+	ld b,h			; and transfer to BC
+	ld c,l
+
+	rst 0x10		; Retrieve value from Parameter stack
+
+	out (c),l		; Write to port
+
+	ret			; Done
 	
+
 	;; Revised routine for initialising the split-screen display
 	;; when Editor screen is first activated. Called from routine
 	;; 'EDIT' at 0x0455
