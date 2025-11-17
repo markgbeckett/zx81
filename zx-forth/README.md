@@ -8,25 +8,25 @@ Forth was relatively popular in the early 1980s. Forth programs are compact and 
 
 Released in early 1984, ZX81-Forth looks to be a particularly advanced Forth monitor which, for example, provides multi-tasking support -- something not common on microcomputers, at the time.
 
-As acknowledged in the [manual](https://www.retrocomputers.gr/media/kunena/attachments/169/zx81-forth-manual.pdf), ZX81-Forth is a port of a Timex Sinclair 1000 ROM (referred to by several names, including [Tree Forth](https://www.timexsinclair.com/article/tree-forth/), Multi-Forth, and Pluri-Forth). The Timex Sinclair website suggests there were several versions of Tree Forth. However, all the Tree Forth ROMs I have found on in the Internet are identical (and do not contain version information). Tree Forth was configured for an NTSC display, as was typically used on the TS1000. The port to ZX81-Forth made the monitor run on a PAL system (as used in the UK) and adjusted the clock and timing routines to 50 Hz. 
+As acknowledged in the [manual](https://www.retrocomputers.gr/media/kunena/attachments/169/zx81-forth-manual.pdf), ZX81-Forth is a port of a Timex Sinclair 1000 ROM (referred to by several names, including [Tree Forth](https://www.timexsinclair.com/article/tree-forth/), Multi-Forth, and Pluri-Forth). Tree Forth was configured for an NTSC display, as was typically used on the TS1000. The port to ZX81-Forth made the monitor run on a PAL system (as used in the UK) and adjusted the clock and timing routines to 50 Hz. 
 
 Versions of both the ZX81-Forth ROM (and Tree Forth ROM) are distributed with the [EightyOne emulator](https://sourceforge.net/projects/eightyone-sinclair-emulator/). ROMs are also available from other sites, but they look to be identical to the versions distributed with EightyOne.
+
+The Timex Sinclair website suggests there were several versions of Tree Forth. However, all the Tree Forth ROMs I have found on in the Internet are identical (and do not contain version information). Interestingly, the ZX81-Forth ROM, distributed with EightyOne, has a bug (in the implementation of `+-`), which is fixed in the Tree Forth ROM also distributed with EightyOne, suggesting the Tree Forth ROM is a later release that the ZX81-Forth ROM.
 
 The Tynemouth Minstrel 3 is a modern-day, ZX81-compatible microcomputer with 32kB of RAM. I hoped to be able to run ZX81-Forth on the Minstrel 3. Sadly, neither the ZX81-Forth nor the Tree Forth ROMs, distributed with EightyOne, run on the Minstrel 3. I wanted to understand why this was and whether I could get ZX81-Forth to work, so I began to disassemble and study the ROM.
 
 ![Tree Forth on a Minstrel 3](tree_forth.png)
 
-My expectation was that the display-handling code was not (quite) compatible with the Minstrel 3. A [discussion on a retrocomputing forum](https://forum.tlienhard.com/phpBB3/viewtopic.php?t=1438) suggests that the ROMs distributed with EightyOne have been tweaked to work correctly with the emulator, so perhaps these tweaks had rendered the ROMs unusable on real hardware. (Note: I have found no evidence that the ROMS have been changed for EightyOne.)
-
-However, as I explain below, the problems were somewhat more subtle than that.
+My expectation was that the display-handling code was not (quite) compatible with the Minstrel 3. A [discussion on a retrocomputing forum](https://forum.tlienhard.com/phpBB3/viewtopic.php?t=1438) suggests that the ROMs distributed with EightyOne have been tweaked to work correctly with the emulator, so perhaps these tweaks had rendered the ROMs unusable on real hardware. (Note: In disassembling the ROM, I have found no evidence that the ROMS have been changed for EightyOne, and do not think this is the case.) However, as I explain below, the problems were somewhat more subtle than that.
 
 ZX81-Forth (and Tree Forth) do not work, in their unmodified form, on the Minstrel 3 for three reasons:
 
-* First, ZX81-Forth does not enable Z80 interrupt mode 1, which is critical to the correct operation of the monitor. The display routine in ZX81-Forth relies on the maskable interrupt routine at 0x38 to display text and, to use this routine, the Z80 needs to be configured for `IM 1`. This puzzled me at first, as I did not understand how the monitor worked on the ZX81 (when using the default interrupt mode 0). However, it turns out that the ZX81 has pull-up resistors fitted to the databus, so will have the value 0xFF on the databus when a maskable interrupt is generated, and 0xFF is the Z80 instruction for `rst 0x38`. The Minstrel 3 does not have pull-up resistors on the databus (though could be modified to do so). To correct this, I inserted an `im 1` command into the initialisation code.
+* First, ZX81-Forth does not enable Z80 interrupt mode 1, which is critical to the correct operation of the monitor. The display routine in ZX81-Forth relies on the maskable interrupt routine at address 0x38 to display text and, to use this routine, the Z80 needs to be configured for `IM 1`. This puzzled me at first, as I did not understand how the monitor worked on the ZX81 (when using the default interrupt mode 0). However, it turns out that the ZX81 has pull-up resistors fitted to the databus, so will have the value 0xFF on the databus when a maskable interrupt is generated, and 0xFF is the Z80 instruction for `rst 0x38`. The Minstrel 3 does not have pull-up resistors on the databus (though could be modified to do so). To correct this, I inserted an `im 1` command into the initialisation code.
 
 * Second, ZX81-Forth (usually) stores its state at the top of the address space (addresses 0xFB00--0xFFFF). On a ZX81 with at least 2kB of RAM, this will contain a shadow copy of the top five pages of RAM. The ZX81 hardware intercepts attempts to execute code in upper memory as part of its display-handling code. However, it does not intercept read and write operations, so this is okay. In contrast, the Minstrel 3 supports read and write operations to addresses up to 0x9FFF (which is the end of the 32K RAM). Read and write to the top of the address space (specifically, 0xFB00--0xFFFF) is not possible. To fix this, I refactored the code so that it used only the lower half of memory, with state being located in 0x7B00--0x7FFF.
 
-* Third, ZX81-Forth tries to compute how much RAM a computer has at boot time, to allow it to accommodate a range of RAM configurations. The routine effectively counts down from the top of memory (0xFFFF) until it finds the end of the last shadow copy of RAM, and relies on memory being mirror across the address space in a certain way. However, because of the way memory on the Minstrel 3 is configured (same as the default configuration of the ZXpand) and because of the memory-access difference noted in the previous point, the routine reports the wrong amount of RAM. This is also a problem when using the ZXpand and may mean ZX81-Forth will not work with a ZXpand connected (I have not checked this). Of course, neither the Minstrel 3 nor the ZXpand existed when ZX81-Forth was developed, so this is understandable. I have addressed this by hardwiring the value for upper memory to be 16kB (which, plus the RAM in 0x2000--0x3FFF) means ZX81-Forth on the Minstrel 3 has 24kB of RAM to work with, in the range 0x2000--0x7FFF. The dictionary grows up from 0x2000 and the system state is stored  in 0x7B00--0x7FFF.
+* Third, ZX81-Forth tries to compute how much RAM a computer has at boot time, to allow it to accommodate a range of RAM configurations. The routine effectively counts down from the top of memory (0xFFFF) until it finds the end of the last shadow copy of RAM, and relies on memory being mirror across the address space in a certain way. However, because of the way memory on the Minstrel 3 is configured (same as the default configuration of the ZXpand) and because of the memory-access difference noted in the previous point, the routine reports the wrong amount of RAM. This is also a problem when using the ZXpand and may mean ZX81-Forth will not work with a ZXpand connected (I have not checked this). Of course, neither the Minstrel 3 nor the ZXpand existed when ZX81-Forth was developed, so this is understandable. I have addressed this by hardwiring the value for upper memory to be 16kB (which, plus the RAM in 0x2000--0x3FFF) means ZX81-Forth on the Minstrel 3 has 24kB of RAM to work with, in the range 0x2000--0x7FFF. The dictionary grows up from 0x2000 and the system state is stored in 0x7B00--0x7FFF.
 
 Whilst the display routine would work as well on the Minstrel 3 as it does on the ZX81, I do not think it is a very good match to the PAL standard (nor the NTSC standard, for Tree Forth). In particular, it produces too few scanlines and the end of main-display scanlines does not properly contain a right-hand border. I addressed the frame-size issue by increasing the border slightly, in the hope of producing a more stable display. I have yet to tackle the right-hand border issue, as this requires more significant reworking. At present, the right-hand end of each line of text is likely to be inverted and may be corrupted. Because of this, the display is not as crisp as I would like, especially when using NTSC mode.
 
@@ -34,17 +34,39 @@ Whilst the display routine would work as well on the Minstrel 3 as it does on th
 
 You can run either ZX81-Forth or Tree Forth on the Minstrel 3, by copying one of the ROM images [hforth_pal.rom](hforth_pal.rom) or [hforth_ntsc.rom](hforth_ntsc.rom) onto a suitable EPROM and installing in your Minstrel 3.
 
-Make sure to set the appropriate jumpers for either NTSC or PAL, as appropriate to your chosen ROM, and you should be able to boot into the Forth system console screen.
+Make sure to set the display jumper for either NTSC or PAL, as appropriate to your chosen ROM, and you should be able to boot into the Forth system console screen.
 
 You can download a PDF copy of the [ZX81-Forth user guide](https://www.retrocomputers.gr/media/kunena/attachments/169/zx81-forth-manual.pdf) (which is also suitable for Tree Forth)
 
-I am also disassembling the ZX81-Forth ROM and it is possible to build the ROM from source should you wish. I have written the source in generic Z80 assembly language, which should hopefully work with most assemblers. I use the [z80asm](https://www.nongnu.org/z80asm/).
+## Building ZX81-Forth from Source
 
-Near the start of the source code, you will find two variables that can be used to create different versions of the ROM. The variable `MINSTREL3` (set to zero or one) controls whether or not to patch the ROM for the Minstrel 3, and the variable `NTSC` (set to zero or one) determins whether to assemble for PAL displays (Husband variant) or for NTSC displays (Tree Forth original).
+It is possible to build the ROM from source, should you wish. I have created a disassembly of the ZX81-Forth ROM from EightyOne, have generalised it to support several different platforms, and am in the process of documenting the source.
 
-If you set `MINSTREL3=0`, then you will assemble the original ZX81-Forth (with `NTSC=0`) or Tree Forth (with `NTSC=1`) ROM. 
+I have used generic Z80 assembly language for this, so it should be possible to assemble with most Z80 assemblers. I use the [z80asm](https://www.nongnu.org/z80asm/).
+
+Near the start of the source code, you will find four variables that can be used to create different versions of the ROM:
+* The variable `MINSTREL3` (set to zero or one) controls whether or not to patch the ROM for the Minstrel 3
+* The variable `NTSC` (set to zero or one) determines whether to assemble for PAL displays (ZX81-Forth variant) or for NTSC displays (Tree Forth original).
+* The `FIXBUG` variable (set to zero or one) determines whether or not to fix several bugs or oddities that I have found (see next section for details).
+* The variable MINSTREL4 (set to zero or one) determines whether or not to patch the ROM to work on the Minstrel 4th, which is a Jupiter Ace compatible board (see below for more details).
+
+Note that you  should set at most one of the `MINSTREL3` and `MINSTREL4` variables, when assembling the source.
+
+The original ROMs (as shipped with EightyOne) can be produced by setting `MINSTREL3=0`, `MINSTREL4=0`, `FIXBUG=0`, and then choose the value of `NTSC` for ZX81-Forth (with `NTSC=0`) or Tree Forth (with `NTSC=1`). 
 
 Happy Forth programming!
+
+## Bugs and Anomolies
+
+I have discovered a few bugs and anomolies in the course of disassembling the ROM and, where reasonable to do so, I have tried to fix these. You can accept my fixes and changes by setting `FIXBUG=1` when assembling from source.
+
+The bugs and anomolies I have found, so far, are:
+* As noted above there is a bug in the implementation of `+-`, which means it does not work with a positive modifier. For example `2 3 +- .` will throw a stack error. The Tree Forth ROM already has a fix for this, which I have copied over to the ZX81-Forth ROM.
+* On ZX81-Forth, the screen is not centred vertically and has a very small top margin. This looks to be an artefact of how the ROM was converted from NTSC to PAL, requiring a reduction in the number of scan lines. I have changed the border sizes, so the ZX81-Forth display is properly centred.
+* The implementation of `BEGIN`, `WHILE`, `REPEAT` is non-standard in that the `WHILE` condition will be satisfied only if a zero is on the Top of Stack (whereas the standard specifies the code should repeat if TOS is non-zero). This is confusing for experienced Forth programmers. I have corrected the behaviour though note this means that examples in the user guide that use While loops need to be updated accordingly.
+* When first activating the Editor screen (using Shift+1), if the cursor is in the lower part of the screen, then a memory location a little beyond the end of the display is written to incorrectly. On the ZX81, this memory location is almost always likely  to be a shadow copy of ROM, so has no effect. On the Minstrel 4th, it is likely to be in the Character RAM, so will lead to corruption of the font. I have fixed this bug only in the Minstrel 4th version, as it requires extra code, which I have located in the extended ROM area on the Minstrel 4th. As noted, on the ZX81 and Minstrel 3, the bug should not have any significant effect.
+* When switching between the Editor screen and the Console screen, it is possible that a cursor blob will be left in the Editor screen. If you then `STORE` the screen to cassette, the cursor blob is also stored. This does not have an affect, as the blob is treated as a Space character by the compiler, though I find it distracting. I have not yet fixed this issue.
+
 
 ## ZX81-Forth Disassembly
 
