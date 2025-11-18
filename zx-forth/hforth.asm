@@ -7704,18 +7704,24 @@ T:	ld hl,PSTART_DICT	;19ce - Retrieve address
 	jp GT_CONT_2		;19e3
 
 
+	;; Forth word .CO
+	;;
+	;; Pipe string from character stack to keyboard input
 	db 0x03, _PERIOD, _C, _O
 	dw 0x0012
 
+	;; Retrieve string length and delete if zero
 	rst 10h			;19ec
 	xor a			;19ed
 	or l			;19ee
 	ret z			;19ef
 
+	;; Loop through characters in string, echoing to KIB
 l19f0h:	rst 20h			;19f0
 	call WRITE_TO_KIB	;19f1
-	dec l			;19f4
+	dec l			;19f4 - Next character
 	jr nz,l19f0h		;19f5
+
 	ret			;19f7
 
 	;; Forth word .CPU
@@ -7977,104 +7983,115 @@ l1b0eh:	push hl			;1b0e
 	call TICK_WORD		;1b24
 	jp DICT_ADD_CALL_HL	;1b27
 
+	
+	;; Forth word H>A
+	;;
+	;; Convert a hex nibble to ASCII character
+	db 0x03, _H, _GREATERTHAN, _A
+	dw 0x0010
+
+l1b30h:	rst 10h			;1b30 - Retrieve TOS into A
+	ld a,l			;1b31
+
+	call BYTE_TO_ASCII	;1b32 - Convert to ASCII
+
+	ld h,000h		;1b35 - Return to HL
+	ld l,a			;1b37
+
+	rst 8			;1b38 - Put on Parameter Stack
+	
+	ret			;1b39
+
+	;; Forth word A>H
+	;;
+	;; ASCII character to hex nibble
+	db 0x03, _A, _GREATERTHAN, _H
+	dw 0x0010
+	
+l1b40h:	rst 10h			;1b40 - Retrieve TOS into A
+	ld a,l			;1b41
+	
+	call ATOI		;1b42 - Convert to integer
+
+	ld h,000h		;1b45 - Return to HL
+	ld l,a			;1b47
+
+	rst 8			;1b48 - Add to Parameter Stack
+	
+	ret			;1b49
+
+	;; Forth word HEAD
+	;;
+	;; Create dictionary header for word (used with defining words)
+	db 0x04, _H, _E, _A, _D
+	dw 0x000A
+
+	jp INIT_NEW_WORD	;1b51
 
 	
-	inc bc			;1b2a
-	ld c,b			;1b2b
-	ld a,041h		;1b2c
-	djnz l1b30h		;1b2e
-l1b30h:
-	rst 10h			;1b30
-	ld a,l			;1b31
-	call BYTE_TO_ASCII	;1b32
-	ld h,000h		;1b35
-	ld l,a			;1b37
-	rst 8			;1b38
-	ret			;1b39
-	inc bc			;1b3a
-	ld b,c			;1b3b
-	ld a,048h		;1b3c
-	djnz l1b40h		;1b3e
-l1b40h:
-	rst 10h			;1b40
-	ld a,l			;1b41
-	call ATOI		;1b42
-	ld h,000h		;1b45
-	ld l,a			;1b47
-	rst 8			;1b48
-	ret			;1b49
-	inc b			;1b4a
-	ld c,b			;1b4b
-	ld b,l			;1b4c
-	ld b,c			;1b4d
-	ld b,h			;1b4e
-	ld a,(bc)		;1b4f
-	nop			;1b50
-	jp INIT_NEW_WORD	;1b51
-	inc b			;1b54
-	ld c,c			;1b55
-	ld c,(hl)			;1b56
-	ld c,c			;1b57
-	ld d,h			;1b58
-	inc de			;1b59
-	nop			;1b5a
+	;; Forth word INIT
+	db 0x04, _I, _N, _I, _T
+	dw 0x0013
+	
 	call TICK_WORD		;1b5b
 	ld (02002h),hl		;1b5e
 	ld hl,02000h		;1b61
 	ld (hl),0a4h		;1b64
-	ret			;1b66
-	ld b,055h		;1b67
-	ld d,b			;1b69
-	ld b,h			;1b6a
-	ld b,c			;1b6b
-	ld d,h			;1b6c
-	ld b,l			;1b6d
-	inc e			;1b6e
-	nop			;1b6f
 
+	ret			;1b66
+
+	;; Forth word UPDATE
+	;; 
+	db 0x06, _U, _P, _D, _A, _T, _E
+	dw 0x001C
+	
 sub_1b70h:
 	ld hl,(P_HERE)		;1b70
 	ld (02006h),hl		;1b73
 	ld hl,(PSTART_DICT)	;1b76
 	ld (02004h),hl		;1b79
-	ld hl,(MTASK_TAIL)		;1b7c
+	ld hl,(MTASK_TAIL)	;1b7c
 	ld (02008h),hl		;1b7f
+
 	ret			;1b82
 
-	add a,h			;1b83
-	ld b,(hl)			;1b84
-	ld b,d			;1b85
-	ld d,l			;1b86
-	ld b,(hl)			;1b87
-	dec c			;1b88
-	nop			;1b89
+	;; Forth word FBUF
+	;;
+	;; Retrieve address of display buffer
+	db 0x80+0x04, _F, _B, _U, _F
+	dw 0x000D
+	
 	ld hl,P_DBUFFER		;1b8a
 	jp l1b0eh		;1b8d
-	inc b			;1b90
-	ld d,b			;1b91
-	ld b,c			;1b92
-	ld d,e			;1b93
-	ld d,e			;1b94
-	ld a,(bc)			;1b95
-	nop			;1b96
+
+	;; Forth word PASS
+	;;
+	;; Second half of warm restart ???
+	db 0x04, _P, _A, _S, _S
+	dw 0x000A
+
 	jp l09a9h		;1b97
-	inc b			;1b9a
-	ld c,a			;1b9b
-	ld d,(hl)			;1b9c
-	ld b,l			;1b9d
-	ld d,d			;1b9e
-	djnz l1ba1h		;1b9f
-l1ba1h:
-	rst 10h			;1ba1
-	ex de,hl			;1ba2
-	rst 10h			;1ba3
-	rst 8			;1ba4
-	ex de,hl			;1ba5
+
+
+	;; Forth word OVER ( X Y -- X Y X )
+	;; 
+	db 0x04, _O, _V, _E, _R
+	dw 0x0010
+
+l1ba1h:	rst 10h			;1ba1 - Retrieve TOS into DE
+	ex de,hl		;1ba2
+	rst 10h			;1ba3 - Retrieve 2OS
+	rst 8			;1ba4   and store 2OS
+
+	ex de,hl		;1ba5 - Store TOS
 	rst 8			;1ba6
-	ex de,hl			;1ba7
+
+	ex de,hl		;1ba7 - Store TOS
 	rst 8			;1ba8
+
 	ret			;1ba9
 
+	
 	;; FORTH word PRINT
 	;;
 	;; Set new printer driver
