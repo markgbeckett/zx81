@@ -83,8 +83,8 @@
 	;; elements of the original programme
 MINSTREL3:	equ 0x00
 NTSC:		equ 0x00
-FIXBUG:		equ 0x01
-MINSTREL4:	equ 0x01
+FIXBUG:		equ 0x00
+MINSTREL4:	equ 0x00
 
 	;; 	include "zx81_chars.asm"
 	include "hforth_chars.asm"
@@ -232,7 +232,7 @@ SCR_INFO_CO:	equ OFFSET+0x01B6 	; Screen info (Console)
 					; +06 - Character bitmap mask
 					; +07 - Blank character
 FLAGS2:		equ OFFSET+0x01BE	; Further flags
-					; 0 - printer disabled/ enabled
+					; 0 - echo-to-printer status
 TOKEN_LN:	equ OFFSET+0x01BF	; Track length of currently
 					; being entered token
 	
@@ -8076,88 +8076,127 @@ l1ba1h:
 	ret			;1ba9
 
 	;; FORTH word PRINT
+	;;
+	;; Set new printer driver
 	db 0x05, 0x50, 0x52, 0x49, 0x4E, 0x54
 	db 0x0F, 0x00
 
-	call TICK_WORD		;1bb2
-	ld (PRINT_DRVR),hl	;1bb5
+	call TICK_WORD		;1bb2 - Retrieve code-field address for
+				;       new print driver
+	ld (PRINT_DRVR),hl	;1bb5 - and store it
 
 	ret			;1bb8
+	
 
 	;; FORTH word P
+	;;
+	;; Enable/ disable echoing of all output to printer
 	db 0x01, 0x50
 	db 0x0F, 0x00
 
+	;; Check current status of echo-to-printer flag
 	ld hl,FLAGS2		;1bbd
 	bit 0,(hl)		;1bc0
+
+	;; Assume set and reset, then return if was set
 	res 0,(hl)		;1bc2
 	ret nz			;1bc4
-	set 0,(hl)		;1bc5
-	ret			;1bc7
-	inc b			;1bc8
-	ld d,b			;1bc9
-	ld d,d			;1bca
-	ld d,h			;1bcb
-	ld d,d			;1bcc
-	inc a			;1bcd
-	nop			;1bce
 
+	;; Otherwise not set, so set
+	set 0,(hl)		;1bc5 
+
+	ret			;1bc7
+
+	;; Forth word PRTR
+	;;
+	;; ZX Printer device driver
+	db 0x04, _P, _R, _T, _R
+	dw 0x003C
+	
 	;; Default printer driver for Sinclair ZX Printer (or compatible)
 PRINT_DRV:
 	push hl			;1bcf
-	rst 10h			;1bd0
-	ld a,l			;1bd1
+
+	rst 10h			;1bd0 - Retrieve character from Parameter
+	ld a,l			;1bd1   Stack into A
+
 	ld hl,PAD		;1bd2
 	and 07fh		;1bd5
-	cp 060h			;1bd7
-	jr c,l1bddh		;1bd9
-	add a,0e0h		;1bdb
-l1bddh:	cp 020h			;1bdd
-	jr nc,l1bf6h		;1bdf
-	cp 008h			;1be1
-	jr nz,l1bech		;1be3
+	cp "`"			;1bd7 - Check for lower-case characters
+	jr c,PR_CONT		;1bd9   and convert, if neceesary
+	add a,"A"-"a"		;1bdb
+
+PR_CONT:
+	cp _SPACE		;1bdd - Check for printable character
+	jr nc,PR_ADD_CH		;1bdf   and jump forward, if so
+
+	cp _LEFT		;1be1 - Check for LEFT and jump forward
+	jr nz,l1bech		;1be3   if not
+
+	;; Check length of string in pad and decrement, if possible
 	xor a			;1be5
 	or (hl)			;1be6
-	jr z,l1beah		;1be7
+	jr z,PR_DONE		;1be7
 	dec (hl)		;1be9
-l1beah:	pop hl			;1bea
+
+PR_DONE:
+	pop hl			;1bea
 
 	ret			;1beb
 
-l1bech:	cp 00dh		;1bec
-	jr z,l1beah		;1bee
-	cp 00ah		;1bf0
-	ld a,02eh		;1bf2
-	jr z,l1bfdh		;1bf4
-l1bf6h:	call STR_ADD_CHR	;1bf6
-	bit 5,(hl)		;1bf9
-	jr z,l1c02h		;1bfb
-l1bfdh:	call sub_1c09h		;1bfd
-	ld (hl),000h		;1c00
+l1bech:	cp _ENTER		;1bec - Check for carriage return
+	jr z,PR_DONE		;1bee
 
-l1c02h:	pop hl			;1c02
+	cp _DOWN		;1bf0
+	ld a,_PERIOD		;1bf2 - Any other control character
+				;       results in "."
+	jr z,l1bfdh		;1bf4 - Jump forward if "_DOWN"
+
+PR_ADD_CH:
+	call STR_ADD_CHR	;1bf6 - Add character to PAD
+	bit 5,(hl)		;1bf9 - Length >= 32 (assume == 32)
+	jr z,PR_DONE_2		;1bfb - Jump forward if not. Done (could
+				;       use PR_DONE for this)
+
+l1bfdh:	call DOT_P		;1bfd - Write to printer
+	ld (hl),000h		;1c00 - Reset string in PAD
+
+PR_DONE_2:
+	pop hl			;1c02
+
 	ret			;1c03
 
-
-	ld (bc),a		;1c04
-	ld l,050h		;1c05
+	;; Forth word .P
+	db 0x02, _PERIOD, _P
 	adc a,h			;1c07
 	nop			;1c08
 
-sub_1c09h:
-	xor a			;1c09
-	out (0fdh),a		;1c0a
-	out (0fbh),a		;1c0c
+DOT_P:	xor a			;1c09
+	if MINSTREL4=1
+	nop
+	nop
+	else
+	out (0xFD),a		;1c0a - Disable NMI generator
+	endif
+	
+	out (0xFB),a		;1c0c - Start ZX Printer motor
+
+	;; Save registers
 	push de			;1c0e
 	push hl			;1c0f
+
 	ld hl,PAD		;1c10
-	ld a,01fh		;1c13
-	sub (hl)			;1c15
-	jr c,l1c26h		;1c16
+
+	;; Check buffer length >= 31 characters
+	ld a,01fh		;1c13 - 
+	sub (hl)		;1c15 
+	jr c,l1c26h		;1c16 - Skip forward if so
+
+	;; Pad buffer with spaces
 	push hl			;1c18
-	inc a			;1c19
+	inc a			;1c19 - Set to _SPACE
 	ld e,a			;1c1a
-	ld a,(hl)			;1c1b
+	ld a,(hl)		;1c1b - Save it
 	inc hl			;1c1c
 	add a,l			;1c1d
 	ld l,a			;1c1e
@@ -8165,94 +8204,151 @@ l1c1fh:	ld (hl),020h		;1c1f
 	inc hl			;1c21
 	dec e			;1c22
 	jr nz,l1c1fh		;1c23
+
 	pop hl			;1c25
-l1c26h:	inc hl			;1c26
-	ex de,hl			;1c27
+
+l1c26h:	inc hl			;1c26 - Advance to start of string (past
+				;       length field)
+	ex de,hl		;1c27
 	ld hl,(STACKP_BASE)	;1c28
-	call sub_1c37h		;1c2b
+	call ZXPR_BUFFER		;1c2b
+
+	;; Restore registers
 	pop hl			;1c2e
 	pop de			;1c2f
-	ld a,004h		;1c30
-	out (0fbh),a		;1c32
-	out (0feh),a		;1c34
 
+	ld a,%00000100		;1c30 - Motor off
+	out (%11111011),a	;1c32 - ZX Printer control port
+
+	if MINSTREL4=1
+	nop
+	nop
+	else
+	out (0xFE),a		;1c34 - Enable NMI generator
+	endif
+	
 	ret			;1c36
 
-sub_1c37h:
+	;; Output to ZX printer
+	;;
+	;; See
+	;; https://www.robertprice.co.uk/robblog/using-a-zx-printer-on-an-rc2014/
+	;; for basic information on controlling ZX Printer
+	;; 
+	;; On entry
+	;;   DE - start of 32-character string
+	;;   HL - spare 32 bytes of space (uses bottom of Execution
+	;;        stack)
+ZXPR_BUFFER:
 	push bc			;1c37
-	ld c,000h		;1c38
+	
+	ld c,000h		;1c38 - Pixel row
+
 l1c3ah:	push de			;1c3a
 	push hl			;1c3b
-	ld b,020h		;1c3c
-l1c3eh:	push hl			;1c3e
+	ld b,020h		;1c3c - 32 chars per row?
+
+	;;  Populate line buffer to print
+ZP_NEXT_LINE:
+	push hl			;1c3e
 	ld h,000h		;1c3f
-	ld a,(de)			;1c41
-	sub 020h		;1c42
-	and 03fh		;1c44
-	ld l,a			;1c46
-	add hl,hl			;1c47
-	add hl,hl			;1c48
-	add hl,hl			;1c49
-	ld a,i			;1c4a
-	or h			;1c4c
-	ld h,a			;1c4d
-	ld a,c			;1c4e
-	or l			;1c4f
+	ld a,(de)		;1c41 - Retrieve character
+	sub 020h		;1c42 - Adjust for ZX81 character set
+	and 03fh		;1c44 - Mask off top two bits
+	ld l,a			;1c46 - HL = character code to print
+
+	;; Multiple by 8 ( 8 rows of pixels per character )
+	add hl,hl		;1c47
+	add hl,hl		;1c48
+	add hl,hl		;1c49
+
+	ld a,i			;1c4a - Retrieve page address of character set
+	or h			;1c4c   and apply to H register
+	ld h,a			;1c4d - HL points to character's bitmap
+
+	ld a,c			;1c4e - Retrieve pixel row
+	or l			;1c4f - and apply to HL
 	ld l,a			;1c50
-	ld a,(hl)			;1c51
+
+	ld a,(hl)		;1c51 - Retrieve pixel bitmap
+
 	pop hl			;1c52
-	ld (hl),a			;1c53
-	inc hl			;1c54
-	inc de			;1c55
-	djnz l1c3eh		;1c56
-	pop hl			;1c58
-	ld a,c			;1c59
-	cp 006h		;1c5a
-	sbc a,a			;1c5c
+
+	ld (hl),a		;1c53
+	inc hl			;1c54 - Advance pixel row pointer
+	inc de			;1c55 - Advance string pointer
+	
+	djnz ZP_NEXT_LINE	;1c56 - Next character
+
+	pop hl			;1c58 - Recover start of pixel buffer
+
+	;; Check row number and slow motor for last two rows
+	ld a,c			;1c59 - Retrieve row number
+	cp 006h			;1c5a - and check if last two rows
+	sbc a,a			;1c5c - A = FF (rows 0--5) / 00 (rows 6--7)
 	inc a			;1c5d
-	add a,a			;1c5e
+	add a,a			;1c5e - A = 0 (rows 0--5) / 2 (rows 6--7)
+
 	ld e,a			;1c5f
-	call sub_1c6bh		;1c60
-	pop de			;1c63
-	inc c			;1c64
-	bit 3,c		;1c65
-	jr z,l1c3ah		;1c67
-	pop bc			;1c69
+	call ZXPR_WRITE_LINE		;1c60
+
+	pop de			;1c63 - Return to start of character line
+
+	inc c			;1c64 - Advance to next row
+	bit 3,c			;1c65 - Check if done (row 8)
+	jr z,l1c3ah		;1c67   and loop if not
+
+	pop bc			;1c69 - Done
+
 	ret			;1c6a
 
-sub_1c6bh:
+	;; Write line
+ZXPR_WRITE_LINE:
 	push hl			;1c6b
 	push de			;1c6c
 	push bc			;1c6d
-l1c6eh:
+
+	;; Wait for start of new line
+ZP_NEWLINE:
 	in a,(0fbh)		;1c6e
 	rlca			;1c70
-	jr nc,l1c6eh		;1c71
-	ld c,020h		;1c73
-l1c75h:
+	jr nc,ZP_NEWLINE		;1c71
+
+	ld c,020h		;1c73 - 32 characters
+ZP_NEXT_CHAR:
 	ld b,008h		;1c75
-	ld d,(hl)			;1c77
+	ld d,(hl)		;1c77
 	inc hl			;1c78
-l1c79h:
+
+	;; Wait until printer is ready
+ZP_NEXT_BIT:	
+ZP_READY:
 	in a,(0fbh)		;1c79
 	rrca			;1c7b
-	jr nc,l1c79h		;1c7c
-	rlc d		;1c7e
-	ld a,e			;1c80
-	jr nc,l1c85h		;1c81
-	or 080h		;1c83
-l1c85h:
-	out (0fbh),a		;1c85
-	djnz l1c79h		;1c87
-	dec c			;1c89
-	jr nz,l1c75h		;1c8a
-	pop bc			;1c8c
+	jr nc,ZP_READY		;1c7c
+
+	;; Retrieve next pixel into carry
+	rlc d			;1c7e
+	ld a,e			;1c80 - Retrieve printer speed indicator
+	jr nc,ZP_OUT_PIXEL	;1c81 - Skip forward if no pixel
+	or 080h			;1c83 - Set to write a pixel
+
+ZP_OUT_PIXEL:
+	out (0xFB),a		;1c85 - Send to printer
+	djnz ZP_NEXT_BIT	;1c87 - Next pixel
+	
+	dec c			;1c89 - Next character
+	jr nz,ZP_NEXT_CHAR		;1c8a
+
+	pop bc			;1c8c - Done, so restore registers
 	pop de			;1c8d
 	pop hl			;1c8e
 
 	ret			;1c8f
 
 	;; Forth word .CN
+	;;
+	;; Print string to Console
 	db 0x03, _PERIOD, _C, _N
 	dw 0x0009
 	
@@ -8261,6 +8357,7 @@ l1c85h:
 	
 	;; Forth word D>
 	;; Double-precision comparison
+	;; 
 	db 0x02, _D, _GREATERTHAN
 	dw 0x000A
 
@@ -8271,10 +8368,14 @@ D_GREATERTHAN:
 	
 	;; Forth word D<
 	;; Double-precision comparison
+	;; 
 	db 0x02, _D, _LESSTHAN
 
 	if MINSTREL4=1
-	dw TX-D_LESSTHAN
+	;; Dictionary extended on Minstrel 4th, so link field is updated
+	;; accordingly
+	dw TX-D_LESSTHAN 
+
 	else
 	dw $10000-$1CA3		; Length => next word starts at 0x0000,
 				; which is a special case, indicating
@@ -8292,7 +8393,7 @@ D_LESSTHAN:
 
 	ccf			;1caf - Complement carry
 
-	jp GT_CONT_2		;1cb0 - Push resulm onto stack and done
+	jp GT_CONT_2		;1cb0 - Push result onto stack and done
 
 	
 	if MINSTREL3+MINSTREL4>0
@@ -8554,6 +8655,9 @@ CHARS:	db 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00 ; 00 Space
 
 	if MINSTREL4=1
 
+	;; Additional routines located in the extended ROM available on
+	;; Minstrel 4th.
+	
 	ds $2900-$
 
 	;; -------------------------------------------------------------
