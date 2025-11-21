@@ -83,8 +83,8 @@
 	;; elements of the original programme
 MINSTREL3:	equ 0x00
 NTSC:		equ 0x00
-FIXBUG:		equ 0x00
-MINSTREL4:	equ 0x00
+FIXBUG:		equ 0x01
+MINSTREL4:	equ 0x01
 
 	;; 	include "zx81_chars.asm"
 	include "hforth_chars.asm"
@@ -8290,12 +8290,11 @@ PR_DONE_2:
 
 	;; Forth word .P
 	db 0x02, _PERIOD, _P
-	adc a,h			;1c07
-	nop			;1c08
+	dw 0x008C
 
 DOT_P:	xor a			;1c09
 	if MINSTREL4=1
-	nop
+	di
 	nop
 	else
 	out (0xFD),a		;1c0a - Disable NMI generator
@@ -8343,7 +8342,7 @@ l1c26h:	inc hl			;1c26 - Advance to start of string (past
 	out (%11111011),a	;1c32 - ZX Printer control port
 
 	if MINSTREL4=1
-	nop
+	ei
 	nop
 	else
 	out (0xFE),a		;1c34 - Enable NMI generator
@@ -8384,7 +8383,11 @@ ZP_NEXT_LINE:
 	add hl,hl		;1c48
 	add hl,hl		;1c49
 
+	if MINSTREL4=1
+	ld a,CHARS>>8		;1c4a - High byte of character-map addr
+	else
 	ld a,i			;1c4a - Retrieve page address of character set
+	endif
 	or h			;1c4c   and apply to H register
 	ld h,a			;1c4d - HL points to character's bitmap
 
@@ -8533,7 +8536,7 @@ RESTART_NEW:
 SPARE:	ds 0x1CC0-$
 	
 	;; Jump table of 0x20 service routines, corresponding to special
-	;; key presses
+	;; non-printable characters
 SPECIAL_CHAR_TABLE:		; 1CC0h
 	dw NO_ACTION		; 00 - No action, RET
 	dw GO_HOME		; 01 - Home
@@ -8571,7 +8574,9 @@ SPECIAL_CHAR_TABLE:		; 1CC0h
 	dw EDIT			; 1E - Edit
 	dw FLASH_CURSOR		; 1F - Used to Flash Cursor
 
-	;; ZX81-FORTH BY DAVID HUSBAND  COPYRIGHT (C) 1983
+	;; ZX81-FORTH BY DAVID HUSBAND / COPYRIGHT (C) 1983
+	;; or
+	;; TREE-FORTH BY TREE SYSTEMS / COPYRIGHT (C) 1983
 COPYRIGHT_MSG:
 	if NTSC=1
 	db 0x33, _CLS, _T, _R, _E, _E, _MINUS, _F
