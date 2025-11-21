@@ -4453,14 +4453,21 @@ DSTAR:
 	;; Forth word 2DROP
 	;;
 	;; 
-	db 0x05, 0x32, 0x44, 0x52, 0x4F, 0x50
-	db 0x0D, 0x00
+	db 0x05, _2, _D, _R, _O, _P
+	dw 0x000D
+
 TWODROP:
 	push hl			;0cef
+
 	rst 10h			;0cf0
 	rst 10h			;0cf1
+
 	pop hl			;0cf2
+
 	ret			;0cf3
+
+
+	;; GOT THIS FAR
 	inc b			;0cf4
 	ld b,h			;0cf5
 	dec l			;0cf6
@@ -4507,19 +4514,21 @@ sub_0cfbh:
 	pop de			;0d2e
 	pop hl			;0d2f
 	ret			;0d30
-	dec b			;0d31
-	ld c,l			;0d32
-	ld c,c			;0d33
-	ld c,(hl)			;0d34
-	ld d,l			;0d35
-	ld d,e			;0d36
-	djnz l0d39h		;0d37
-l0d39h:
+
+	;; Forth word MINUS
+	;;
+	;; Change sign of TOS
+	db 0x05, _M, _I, _N, _U, _S
+	dw 0x0010
+
 	push hl			;0d39
+
 	rst 10h			;0d3a
 	call NEG_HL		;0d3b
 	rst 8			;0d3e
+
 	pop hl			;0d3f
+
 	ret			;0d40
 
 	;; Forth word CDUP
