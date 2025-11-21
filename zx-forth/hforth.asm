@@ -438,12 +438,11 @@ l0060h:	pop hl			;0060
 	;; Padding???
 	nop			;0062
 	nop			;0063
-l0064h:	nop			;0064
+	nop			;0064
 
 jump_to_hl:
 	jp (hl)			;0065
 
-	;;
 	;; NMI routine - used to produce top/ bottom borders, while also
 	;; running user code. When active, an NMI pulse is generated
 	;; every 64 us (that is, every one scanline) plus triggers
@@ -463,6 +462,7 @@ jump_to_hl:
 	;;
 	;; N.B. The Z80 takes 11 clock cycles to jump to this NMI
 	;; routine on an interrupt
+	;;
 NMI:	ex af, af'		; Retrieve and decrement cycle counter
 	dec a			
 
@@ -1293,6 +1293,12 @@ GET_SCR_SIZE:
 	ret			;0276
 
 	;; Retrieve and invert character at cursor location
+	;;
+	;; On entry:
+	;;   IX - points to screen information for current screen
+	;;
+	;; On exit:
+	;; 
 INVERT_CUR_CHAR:
 	push af			;0277
 	push hl			;0278
@@ -1312,6 +1318,9 @@ INVERT_CUR_CHAR:
 	;;
 	;; On entry:
 	;;   IX - screen info
+	;;
+	;; On exit:
+	;; 
 CLS:	call GET_SCR_SIZE	;0283 - BC = width, height of screen
 	ret c			;0286 - Return if zero-sized screen
 	
@@ -1320,6 +1329,7 @@ CLS:	call GET_SCR_SIZE	;0283 - BC = width, height of screen
 	ld de,DISP_WIDTH	;028a - DE = row length
 
 	ld a,(ix+007h)		;028d - Retrieve blank character for screen
+
 CLS_LOOP:
 	call SCR_BLANK_ROW	;0290
 	add hl,de		;0293 - Advance to next row
@@ -1635,7 +1645,7 @@ JP_ADDR_HL:
 	;;   DE - next cursor position
 	;;   BC - length of row to right of cursor
 	;; 
-INSERT_CHAR:
+INSERT_CHARS:
 	push hl			;036a
 	push de			;036b
 	push bc			;036c
@@ -1692,7 +1702,7 @@ RUBOUT:	call GET_SCR_POSN	;0385 - HL contains address of cursor
 	push hl			;0395 - Move current position into 
 	pop de			;0396   DE and set HL to next position
 	inc hl			;0397
-	call INSERT_CHAR	;0398 - Will delete character
+	call INSERT_CHARS	;0398 - Will delete character
 
 	;; Inset rubout character
 RO_CONT:
@@ -1757,7 +1767,7 @@ INS_LINE:
 	pop af			;03e7 - Retrieve top row of window
 	ld (ix+003h),a		;03e8 - and store it
 
-	jp CR			;03eb
+	jp CR			;03eb - Advance to Carriage Return
 
 	;; Insert current line from (editor) screen into display pad.
 	;;
@@ -1767,7 +1777,7 @@ INS_LINE:
 	;;
 	;; On exit:
 	;; 
-PUT_DPAD:
+PUT_VPAD:
 	;; Put pad only works in editor mode
 	call CHECK_EDIT_MODE	;03ee - 0 = System Execution Context/ 1
 				;       = System Editor Contaxt
@@ -1787,7 +1797,7 @@ l0400h:	ex de,hl		;0400 - DE points to display copy of pad
 	call GET_SCR_SIZE	;0402 - B=width; C=height
 	ld c,b			;0405 - BC = width
 	ld b,000h		;0406
-	call INSERT_CHAR	;0408 - This routine will copy current
+	call INSERT_CHARS	;0408 - This routine will copy current
 				;       line into display copy of PAD
 
 	ex de,hl		;040b - DE points to current screen
@@ -1812,7 +1822,8 @@ INVERT_LINE:
 
 IL_LOOP:
 	ld a,(hl)		;0413
-	xor %10000000		;0414
+	xor %10000000		;0414 - *** For consistency, should use
+				;       invert character ***
 	ld (hl),a		;0416
 	inc hl			;0417
 	djnz IL_LOOP		;0418
@@ -1822,37 +1833,49 @@ IL_LOOP:
 
 	ret			;041c
 
-l041dh:	call CHECK_EDIT_MODE	;041d 
-	ret z			;0420 - Return if in System Execution Context
-	call GET_SCR_SIZE	;0421 - Retrieve window size into BC
-	ld hl,(P_DBUFFER)	;0424
+GET_VPAD:
+	call CHECK_EDIT_MODE	;041d 
+	ret z			;0420 - Return if in System Execution
+				;       Context
+	call GET_SCR_SIZE	;0421 - Retrieve window size into B -
+				;       width, C - length
 
-	;; Advance to row 16
+	;; Advance to row 16 of display buffer
+	ld hl,(P_DBUFFER)	;0424 - Retrieve start of display buffer 
 	ld de,16*0x20		;0427 - Sixteen rows
 	add hl,de		;042a
-	call INVERT_LINE	;042b
 
-	ex de,hl		;042e
-	call CR			;042f
-	call GET_SCR_POSN	;0432
-	ex de,hl		;0435
-	ld c,b			;0436
+	call INVERT_LINE	;042b - Un-invert Visual Pad (B set to
+	 			;       window width from `call
+	 			;       GET_SCR_SIZE`)
+	
+	ex de,hl		;042e - Save start of visual pad to DE
+
+	call CR			;042f - Move to start of line
+	call GET_SCR_POSN	;0432 - Retrieve current cursor position
+
+	ex de,hl		;0435 - DE = current cursor, HL = Visual
+				;       Pad
+	ld c,b			;0436 - Set BC to length of Visual Pad
 	ld b,000h		;0437
-	call INSERT_CHAR	;0439
+
+	call INSERT_CHARS	;0439 - Copy pad into current line
 	ld b,c			;043c
-	call INVERT_LINE	;043d
+	call INVERT_LINE	;043d - Re-invert Visual Pad
 
 	ret			;0440
 
+CUT_VPAD:
 	call CHECK_EDIT_MODE	;0441
 	ret z			;0444
-	call PUT_DPAD		;0445
+	call PUT_VPAD		;0445
 	jp DEL_LINE		;0448
 
+INS_VPAD:
 	call CHECK_EDIT_MODE	;044b
 	ret z			;044e
 	call INS_LINE		;044f
-	jp l041dh		;0452
+	jp GET_VPAD		;0452
 
 
 	;; Switch between editor and console screens and, if not
@@ -2131,7 +2154,7 @@ PK_E_CHR_PRNT:
 	inc de			;052a
 
 	;; Insert character in current line
-	call INSERT_CHAR	;052b
+	call INSERT_CHARS	;052b
 
 PK_E_CONT2:
 	call INVERT_CUR_CHAR	;052e
@@ -4368,7 +4391,7 @@ MDSTAR:
 	push iy		;0c87
 	pop de			;0c89
 	pop hl			;0c8a
-	call INSERT_CHAR		;0c8b
+	call INSERT_CHARS		;0c8b
 	push de			;0c8e
 	ld b,004h		;0c8f
 	pop ix		;0c91
@@ -4654,97 +4677,129 @@ DSWAP:	push hl			;0da3 - Save registers
 
 	ret			;0dbb
 
-	;; Forth Word DO (0x0DBC)
+	;; Forth Word DO
 	db 0x02+0x80, _D, _O
 	dw 0x0021
 
-	ld hl,0x0DCE		;0dc1
-	call DICT_ADD_CALL_HL		;0dc4
-	ld hl,(P_HERE)		;0dc7
-	push hl			;0dca
-	call DICT_ADD_WORDS		;0dcb
-	pop de			;0dce
-	ld bc,08000h		;0dcf
-	call SWAP		;0dd2
-	rst 10h			;0dd5
-	add hl,bc		;0dd6
-	push hl			;0dd7
-	rst 10h			;0dd8
-	add hl,bc		;0dd9
-	push hl			;0dda
-	ex de,hl		;0ddb
-	jp (hl)			;0ddc
+	ld hl,0x0DCE		;0dc1 - Add call to dictionary
+	call DICT_ADD_CALL_HL	;0dc4
+	ld hl,(P_HERE)		;0dc7 - Put current dictionary entry point
+	push hl			;0dca   onto machine stack (used by LOOP/
+				;       +LOOP)
+
+	call DICT_ADD_WORDS	;0dcb - Populate body of DO word, ended
+				;       by LOOP or +LOOP: that is, never
+				;       returns
+	
+	;; Runtime element of DO work
+	pop de			;0dce - Retrieve return address (next
+				;       word)
+	ld bc,08000h		;0dcf - Normalise loop limit around
+				;       0x8000, so that negative and
+				;       positive limits are supported?
+	call SWAP		;0dd2 - Move loop limit to TOS
+	rst 10h			;0dd5   and retrieve into HL
+	add hl,bc		;0dd6 - Normalise and store on machine
+	push hl			;0dd7   stack
+
+	rst 10h			;0dd8 - Retrieve initial loop-index
+	add hl,bc		;0dd9   value and normalise
+
+	push hl			;0dda - Store on machine stack
+	ex de,hl		;0ddb - Retrieve return address
+	jp (hl)			;0ddc - Continue with next word
 
 	;; Forth word +LOOP (0x0DDD)
 	db 0x05+0x80, _PLUS, _L, _O, _O, _P
 	dw 0x0028
 
-l0de5h:	pop hl			;0de5
+l0de5h:	pop hl			;0de5 - Discard top three stack values
 	pop hl			;0de6
 	pop hl			;0de7
-	ld hl,l0deeh		;0de8
-	jp l0e12h		;0deb
-l0deeh:	pop bc			;0dee
-	pop de			;0def
-	rst 10h			;0df0
-	bit 7,h			;0df1
-	jr nz,l0dffh		;0df3
-	add hl,de		;0df5
-	ex de,hl		;0df6
-	pop hl			;0df7
-	push hl			;0df8
-	push de			;0df9
-l0dfah:
-	scf			;0dfa
+	ld hl,PL_RUNTIME	;0de8 - HL points to runtime body of
+				;       loop
+	jp LOOP_CONT		;0deb - Continue as for `LOOP`
+
+PL_RUNTIME:
+	pop bc			;0dee - Retrieve return address
+	pop de			;0def - Retrieve loop index into DE
+	rst 10h			;0df0 - Retrieve loop step into HL
+	bit 7,h			;0df1 - Check if negative
+	jr nz,PL_MINUS		;0df3   and skip forward if so
+
+	add hl,de		;0df5 - Add step to index and move
+	ex de,hl		;0df6   new index to DE
+
+	pop hl			;0df7 - Retrieve loop limit (and save
+	push hl			;0df8   again)
+	push de			;0df9 - Push loop index 
+
+	;; Check if reached limit
+PL_CHECK_LIMIT:
+	scf			;0dfa - Effectively, subtract index+1
 	sbc hl,de		;0dfb
-	push bc			;0dfd
-	ret			;0dfe
-l0dffh:
-	add hl,de		;0dff
-	pop de			;0e00
-	push de			;0e01
-	push hl			;0e02
-	jr l0dfah		;0e03
+	push bc			;0dfd - Push return address
+	
+	ret			;0dfe - Done - will return to JP NC
+				;       instruction in dictionary
+
+PL_MINUS:
+	add hl,de		;0dff - Subtract step from index
+	pop de			;0e00 - Retrieve limit (and save
+	push de			;0e01   again)
+	push hl			;0e02 - Push next index
+
+	jr PL_CHECK_LIMIT	;0e03
 
 	;; Forth word (LOOP) (0x0E05)
 LOOP:	db 0x04+0x80, _L, _O, _O, _P
 	dw 0x0027
 
-	pop hl			;0e0c
+	pop hl			;0e0c - Discard top three stack values 
 	pop hl			;0e0d
 	pop hl			;0e0e
-	ld hl,l0e21h		;0e0f
-l0e12h:	call DICT_ADD_CALL_HL		;0e12
-	pop hl			;0e15
-	ld a,0d2h		;0e16
-	call DICT_ADD_CHAR_AND_HL		;0e18
-	ld hl,0e1e1h		;0e1b
-	jp DICT_ADD_HL		;0e1e
-l0e21h:	pop de			;0e21
-	pop bc			;0e22
-	pop hl			;0e23
-	push hl			;0e24
-	inc bc			;0e25
-	push bc			;0e26
-	scf			;0e27
+
+	ld hl,LP_RUNTIME	;0e0f - HL points to runtime body of
+				;       LOOP
+LOOP_CONT:
+	call DICT_ADD_CALL_HL	;0e12 - Also, continuation of `+LOOP`
+	pop hl			;0e15 - Retrieve address of start of DO
+				;       body
+	ld a,0xD2		;0e16 - Z80 opcode for JP NC,NN
+	call DICT_ADD_CHAR_AND_HL	;0e18
+	ld hl,0e1e1h		;0e1b - Z80 opcode for POP HL/ POP HL to
+	jp DICT_ADD_HL		;0e1e   discard loop index and limit, if
+				;       not required
+
+LP_RUNTIME:
+	pop de			;0e21 - Retrieve return address
+	pop bc			;0e22 - Retrieve loop index
+	pop hl			;0e23 - Retrieve loop limit (and save
+	push hl			;0e24   again)
+	inc bc			;0e25 - Increment loop index (and save
+	push bc			;0e26   again)
+
+	;; Check if reached limit
+	scf			;0e27 - Effectively, subtract index+1
 	sbc hl,bc		;0e28
-	ex de,hl		;0e2a
-l0e2bh:	jp (hl)			;0e2b
+	ex de,hl		;0e2a - Move return address into HL
+l0e2bh:	jp (hl)			;0e2b - Return to dictionary, to JP NC
+				;       insturction
 
+	;; Forth word LEAVE
+	;;
+	;; Set to leave DO loop at end of current iteration
+	db 0x05, _L, _E, _A, _V, _E
+	dw 0x000E
+	
+	pop hl			;0e34 - Retrieve return address
+	pop de			;0e35 - Retrieve index (to discard)
+	pop bc			;0e36 - Retrieve limit (and save
+	push de			;0e37   again)
+	push de			;0e38 - Set index to limit
 
-	dec b			;0e2c
-	ld c,h			;0e2d
-	ld b,l			;0e2e
-	ld b,c			;0e2f
-	ld d,(hl)			;0e30
-	ld b,l			;0e31
-	ld c,000h		;0e32
-	pop hl			;0e34
-	pop de			;0e35
-	pop bc			;0e36
-	push de			;0e37
-	push de			;0e38
-	jp (hl)			;0e39
+	jp (hl)			;0e39 - Return to dictionary
+	
 
 	;; Forth word SWAP
 	;;
@@ -4827,104 +4882,154 @@ l0e7bh:	call TOS_TO_STRING	;0e7b
 	call D_TOS_TO_STRING		;0e86
 	jp PRINT_STRING		;0e89
 
-	ld bc,l0e49h		;0e8c
-	nop			;0e8f
-	pop de			;0e90
-	pop hl			;0e91
-	push hl			;0e92
-	push de			;0e93
-l0e94h:
-	ld de,08000h		;0e94
-	add hl,de			;0e97
-	rst 8			;0e98
-	ret			;0e99
-	ld bc,l0e4ah		;0e9a
-	nop			;0e9d
-	ld hl,l0005h+1		;0e9e
-	add hl,sp			;0ea1
-l0ea2h:
-	ld a,(hl)			;0ea2
-	inc hl			;0ea3
-	ld h,(hl)			;0ea4
-	ld l,a			;0ea5
-	jr l0e94h		;0ea6
-	ld (bc),a			;0ea8
-	ld c,(hl)			;0ea9
-	ld c,c			;0eaa
-	inc c			;0eab
-	nop			;0eac
-	rst 10h			;0ead
-	add hl,hl			;0eae
-	inc hl			;0eaf
-	add hl,hl			;0eb0
-	add hl,sp			;0eb1
-	jr l0ea2h		;0eb2
-	inc b			;0eb4
-	ld d,b			;0eb5
-	ld c,c			;0eb6
-	ld b,e			;0eb7
-	ld c,e			;0eb8
-	inc de			;0eb9
-	nop			;0eba
-	push iy		;0ebb
-	rst 10h			;0ebd
-	add hl,hl			;0ebe
-	pop de			;0ebf
-	add hl,de			;0ec0
-	ld e,(hl)			;0ec1
-	inc hl			;0ec2
-	ld d,(hl)			;0ec3
-	ex de,hl			;0ec4
-	rst 8			;0ec5
-	ret			;0ec6
-	ld (bc),a			;0ec7
-	ld b,e			;0ec8
-	ld d,d			;0ec9
-	ex af,af'			;0eca
-	nop			;0ecb
-	jp PRINT_NEW_LINE	;0ecc
-	inc b			;0ecf
-	ld b,l			;0ed0
-	ld c,l			;0ed1
-	ld c,c			;0ed2
-	ld d,h			;0ed3
-	inc c			;0ed4
-	nop			;0ed5
-	rst 10h			;0ed6
-	ld a,l			;0ed7
-	jp PRINT_A		;0ed8
 
-	;; Forth word ! (store to memory)
+	;; Forth word I
+	;;
+	;; Put top-level loop index onto stack
+	db 0x01, _I
+	dw 0x000E
+
+	;; Retrieve last-but-one word from machine stack (top-level loop
+	;; index)
+	pop de			;0e90 - Retrieve return address
+	pop hl			;0e91 - Retrieve loop index
+	push hl			;0e92 - Store loop index
+	push de			;0e93 - Store return address
+
+DO_NORMALISE:
+	ld de,08000h		;0e94 - Normalise index
+	add hl,de		;0e97
+
+	rst 8			;0e98 - Push onto Parameter Stack
+
+	ret			;0e99 - Done
+
+	;; Forth word J
+	;;
+	;; Retrieve second-level loop index
+	db 0x01, _J
+	dw 0x000E
+
+	;; Retrieve J (assume machine stack contains return address to
+	;; dictionary, plus index and limit for top-level DO loop, plus
+	;; index and limit for second-level DO loop)
+	ld hl,0x0006		;0e9e = 2*(2+1)
+	add hl,sp		;0ea1
+
+DO_RETRIEVE_INDEX:
+	ld a,(hl)		;0ea2
+	inc hl			;0ea3
+	ld h,(hl)		;0ea4
+	ld l,a			;0ea5
+
+	jr DO_NORMALISE		;0ea6 - Normalise index and done
+
+	;; Forth word NI
+	;;
+	;; Retrieve nested index 
+	db 0x02, _N, _I
+	dw 0x000C
+	
+	rst 10h			;0ead - Retrieve index depth
+
+	;; Machine stack contains return address plus sequence of index
+	;; and limit values for each level of loop nesting
+	add hl,hl		;0eae - HL = 2(2*level+1)
+	inc hl			;0eaf
+	add hl,hl		;0eb0
+
+	add hl,sp		;0eb1 - Point to index value
+
+	jr DO_RETRIEVE_INDEX	;0eb2 - Continue as for J index
+	
+
+	;; Forth word PICK
+	;; 
+	;; Copy Nth value to TOS
+	db 0x04, _P, _I, _C, _K
+	dw 0x0013
+	
+	push iy			;0ebb - Store location of TOS
+	rst 10h			;0ebd - Retrieve TOS and double it
+	add hl,hl		;0ebe
+
+	pop de			;0ebf - Retrieve location of TOS into DE
+	add hl,de		;0ec0   and advance to Nth item
+
+	ld e,(hl)		;0ec1 - Retrieve value into HL
+	inc hl			;0ec2
+	ld d,(hl)		;0ec3
+	ex de,hl		;0ec4
+	
+	rst 8			;0ec5 - Push onto Parameter Stack
+	
+	ret			;0ec6
+
+	;; Forth word CR
+	;;
+	;; Emit carriage return to console
+	db 0x02, _C, _R
+	dw 0x0008
+
+	jp PRINT_NEW_LINE	;0ecc
+	
+	;; Forth word EMIT
+	;;
+	;; Output character on TOS
+	db 0x04, _E, _M, _I, _T
+	dw 0x000C
+
+	rst 10h			;0ed6 - Retrieve TOS
+	ld a,l			;0ed7 - Low byte into A 
+	jp PRINT_A		;0ed8 - Print and done
+
+	;; Forth word !
+	;;
+	;; Perform DPOKE (store to memory)
 	db 0x01, _EXCLAMATION
 	dw 0x000C
 	
-	rst 10h			;0edf
+	rst 10h			;0edf - Retrieve address into DE from TOS
 	ex de,hl		;0ee0
-	rst 10h			;0ee1
-	ex de,hl		;0ee2
-	ld (hl),e		;0ee3
+	rst 10h			;0ee1 - Retrieve value from 2OS
+
+	ex de,hl		;0ee2 - DE = value; HL = address
+
+	ld (hl),e		;0ee3 - Store value
 	inc hl			;0ee4
 	ld (hl),d		;0ee5
+	
 	ret			;0ee6
 	
-	ld bc,l0b40h		;0ee7
-	nop			;0eea
-sub_0eebh:
-	rst 10h			;0eeb
-	ld e,(hl)		;0eec
+	;; Forth word @
+	;;
+	;; Perform a DPEEK
+	db 0x01, _AT
+	dw 0x000B
+
+DPEEK:	rst 10h			;0eeb - Retrieve address from parameter
+				;       stack
+	ld e,(hl)		;0eec - Perform double peek
 	inc hl			;0eed
 	ld d,(hl)		;0eee
-	ex de,hl		;0eef
-	rst 8			;0ef0
+
+	ex de,hl		;0eef - Move to HL
+	
+	rst 8			;0ef0 - Push to Parameter Stack
+	
 	ret			;0ef1
-	ld (bc),a			;0ef2
-	ld d,e			;0ef3
-	ld d,b			;0ef4
-	ld a,(bc)			;0ef5
-	nop			;0ef6
-	ld a,020h		;0ef7
+
+	;; Forth word SP
+	;;
+	;; Print a space to the console
+	;; 
+	db 0x02, _S, _P
+	dw 0x000A
+
+	ld a,_SPACE		;0ef7
 	jp PRINT_A		;0ef9
 
+	
 	;; Forth word <BUILDS
 	;;
 	db 0x07, _LESSTHAN, _B, _U, _I, _L, _D, _S
@@ -6185,7 +6290,7 @@ l13b6h: rst 10h			;13b6
 	ex de,hl		;13b7
 	rst 10h			;13b8
 	pop bc			;13b9
-	jp INSERT_CHAR		;13ba
+	jp INSERT_CHARS		;13ba
 
 	;; Default task that is executed every 15 frames
 DEF_TASK:
@@ -7022,7 +7127,7 @@ l16d5h:	jr z,GT_CONT_2		;16d5 - Jump if TOS <= 20S
 	db 0x01, _QUESTIONMARK
 	dw 0x000A
 
-	call sub_0eebh		;16e9
+	call DPEEK		;16e9
 
 	jp l0e7bh		;16ec
 
@@ -8449,10 +8554,10 @@ SPECIAL_CHAR_TABLE:		; 1CC0h
 	dw NO_ACTION		; 0F - No action, RET
 
 	dw NO_ACTION		; 10 - No action, RET
-	dw PUT_DPAD		; 11 - Put PAD
-	dw 0x041D		; 12 - ???
-	dw 0x0441		; 13 -
-	dw 0x044B		; 14 - Fetch PAD
+	dw PUT_VPAD		; 11 - Put PAD
+	dw GET_VPAD		; 12 - Get PAD
+	dw CUT_VPAD		; 13 - Cut text to V PAD
+	dw INS_VPAD		; 14 - Fetch V PAD
 	dw NO_ACTION		; 15 - No action, RET
 	dw NO_ACTION		; 16 - No action, RET
 	dw NO_ACTION		; 17 - No action, RET
@@ -8462,9 +8567,9 @@ SPECIAL_CHAR_TABLE:		; 1CC0h
 	dw DEL_LINE		; 1A - Delete line
 	dw RUBOUT		; 1B - Rubout
 	dw INS_LINE		; 1C - Graphics mode
-	dw 0x03BD		; 1D - 
+	dw ED_SCROLL		; 1D - Scroll editor window (not used)
 	dw EDIT			; 1E - Edit
-	dw FLASH_CURSOR		; 1F - ? Flashing cursor
+	dw FLASH_CURSOR		; 1F - Used to Flash Cursor
 
 	;; ZX81-FORTH BY DAVID HUSBAND  COPYRIGHT (C) 1983
 COPYRIGHT_MSG:
@@ -8670,6 +8775,8 @@ CHARS:	db 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00 ; 00 Space
 	db 0x00, 0x08, 0x1C, 0x08, 0x08, 0x08, 0x08, 0x00 ; 3E '^'
 	db 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0xFF ; 3F '_'
 
+
+	
 	if MINSTREL4=1
 
 	;; Additional routines located in the extended ROM available on
