@@ -83,8 +83,8 @@
 	;; elements of the original programme
 MINSTREL3:	equ 0x00
 NTSC:		equ 0x00
-FIXBUG:		equ 0x01
-MINSTREL4:	equ 0x01
+FIXBUG:		equ 0x00
+MINSTREL4:	equ 0x00
 
 	;; 	include "zx81_chars.asm"
 	include "hforth_chars.asm"
@@ -190,7 +190,7 @@ FLAGS3:		equ OFFSET+0x01A5	; 0 - Set if PRINT OK required;
 					; 1 - Set if compile-screen req'ed
 					; 2 - Auto-compile on LOAD
 					; 4 - Set if RAM at 2000--3FFF
-					; 5 - ??? Disabled for PAL
+					; 5 - Read/ write a variable
 					; 6 - Reset to stop multitasking
 					;     on restart/ set to continue
 					;     multitasking
@@ -4526,8 +4526,8 @@ l0d39h:
 	;;
 	;; Duplicate string on character stack
 	;; 
-	db 0x04, 0x43, 0x44, 0x55, 0x50
-	db 0x22, 0x00
+	db 0x04, _C, _D, _U, _P
+	dw 0x0022
 
 	;; Save registers
 CDUP:	push af			;0d48
@@ -4568,19 +4568,17 @@ CDUP_DONE:
 
 	ret			;0d62
 
-	dec b			;0d63
-	ld b,e			;0d64
-	ld b,h			;0d65
-	ld d,d			;0d66
-	ld c,a			;0d67
-	ld d,b			;0d68
-	ld d,000h		;0d69
-
+	
+	;; Forth word CDROP
+	;; 
 	;; Remove counted string from Character Stack
 	;; 
 	;; On entry
 	;;   Character Stack contains string (with length on Parameter Stack)
 	;; 
+	db 0x05, _C, _D, _R, _O, _P
+	dw 0x0016
+
 UNSTACK_STRING:
 	push hl			;0d6b - Save HL
 	
@@ -4602,26 +4600,32 @@ US_DONE:
 	ret			;0d78
 
 	
-	inc b			;0d79
-	ccf			;0d7a
-	ld b,h			;0d7b
-	ld d,l			;0d7c
-	ld d,b			;0d7d
-	ld c,000h		;0d7e
-	rst 10h			;0d80
-	rst 8			;0d81
+	;; Forth word ?DUP
+	;;
+	;; Duplicate TOS if non-zero
+	db 0x04, _QUESTIONMARK, _D, _U, _P
+	dw 0x000E
+	
+	rst 10h			;0d80 - Retrieve TOS and save it
+	rst 8			;0d81   again
+
+	;; Check if TOS is zero
 	ld a,l			;0d82
 	or h			;0d83
-	ret z			;0d84
-	rst 8			;0d85
+
+	ret z			;0d84 - Done if so
+
+	rst 8			;0d85 - Otherwise DUPlicate TOS
+	
 	ret			;0d86
 
-	;; Forth word DUP (0x0D87)
+	
+	;; Forth word DUP
+	;; 
 	db 0x03, _D, _U, _P
 	dw 0x0014
 
-DUP:
-	push hl			;0d8d
+DUP:	push hl			;0d8d
 	rst 10h			;0d8e - Pop Parameter Stack to HL
 	rst 8			;0d8f - Push HL to Parameter Stack 
 	rst 8			;0d90 - Push HL to Parameter Stack
@@ -4634,12 +4638,14 @@ CHECK_DEHL_ZERO:
 	or h			;0d94
 	or e			;0d95
 	or d			;0d96
+
 	ret			;0d97
 
 
 CHECK_HL_ZERO:
 	ld a,l			;0d98
 	or h			;0d99
+
 	ret			;0d9a
 
 	;; Forth word DSWAP (0x0D9B)
@@ -4825,6 +4831,7 @@ l0e4ah:	pop de			;0e4a - Restore registers
 	ret			;0e4c
 
 	;; Forth word '
+	;; 
 	db 0x01, _QUOTE
 	dw 0x0009
 	
@@ -4843,12 +4850,14 @@ l0e4ah:	pop de			;0e4a - Restore registers
 	push hl			;0e60
 	call DICT_ADD_WORDS	;0e61 - Assume returns via ';'
 
+	
 	;; Forth word ;
 	;; 
 	db 0x01+0x80, _SEMICOLON
 	dw 0x000C
 
-END_COLON_DEF:	call DICT_ADD_RET	;0e68
+END_COLON_DEF:
+	call DICT_ADD_RET	;0e68
 
 	;; Balance stack, without returning to DICT_ADD_WORDS
 	pop hl			;0e6b
@@ -4872,10 +4881,13 @@ EXIT_CDEF:
 	db 0x01, _PERIOD
 	dw 0x000A
 	
-l0e7bh:	call TOS_TO_STRING	;0e7b
+OUT_TOS:
+	call TOS_TO_STRING	;0e7b
 	jp PRINT_STRING		;0e7e
 
+	
 	;; Forth word D.
+	;; 
 	db 0x02, _D, _PERIOD
 	dw 0x000B
 
@@ -7124,12 +7136,14 @@ l16d5h:	jr z,GT_CONT_2		;16d5 - Jump if TOS <= 20S
 	jr l16d5h		;16e3
 
 
+	;; Forth word ?
+	;; 
 	db 0x01, _QUESTIONMARK
 	dw 0x000A
 
 	call DPEEK		;16e9
 
-	jp l0e7bh		;16ec
+	jp OUT_TOS		;16ec
 
 	
 	;; Forth word +! ( INC ADDR -- )
@@ -7273,7 +7287,7 @@ PAD_WORD:
 	ex de,hl		;1760 - Set HL to be 8
 	rst 8			;1761 - Push new length onto Parameter stack
 
-	;; Padd to eight characters
+	;; Pad to eight characters
 	ccf			;1762 
 	sbc hl,de		;1763
 	ld a,_SPACE		;1765
@@ -7285,10 +7299,8 @@ l176bh:	pop de			;176b
 	pop hl			;176c
 
 	ret			;176d
-
 	
-l176eh:
-	rst 8			;176e
+l176eh:	rst 8			;176e
 	jr l176bh		;176f
 
 	;; Forth word IMM
@@ -7306,38 +7318,44 @@ l1777h:	ld hl,(UNKNOWN2)	;1777
 	db 0x07, 0x49, 0x4E, 0x54, 0x45, 0x47, 0x45, 0x52
 	db 0x38, 0x00
 
-l1787h:	call INIT_NEW_WORD		;1787
-	ld hl,l1797h		;178a
-	call DICT_ADD_CALL_HL		;178d
+	call INIT_NEW_WORD	;1787
+	ld hl,INT_RUNTIME	;178a
+	call DICT_ADD_CALL_HL	;178d
 	rst 10h			;1790
 	call DICT_ADD_HL	;1791
 	jp l1777h		;1794
 
 	
 	;; Jump here from definition of BASE (and other things)
-l1797h:	ld hl,FLAGS3		;1797 - FLAGs
-	bit 5,(hl)		;179a
-	res 5,(hl)		;179c
-	pop hl			;179e
-	jr z,l17abh		;179f
-	ld a,0d7h		;17a1
-	call DICT_ADD_BYTE		;17a3
-	ld a,022h		;17a6
-	jp DICT_ADD_CHAR_AND_HL		;17a8
+INT_RUNTIME:
+	ld hl,FLAGS3		;1797 - FLAGS
+	bit 5,(hl)		;179a - Check if read/ write variable
+	res 5,(hl)		;179c - Default to reading variable
+	
+	pop hl			;179e - Retrieve return address (parameter)
+	jr z,l17abh		;179f - Jump forward if reading
 
-l17abh:	ld a,02ah		;17ab
-	call DICT_ADD_CHAR_AND_HL		;17ad
-	ld a,0cfh		;17b0
-	jp DICT_ADD_BYTE		;17b2
+	;; Write variable
+	ld a,0d7h		;17a1 - Z80 opcode for `rst 0x10`
+	call DICT_ADD_BYTE	;17a3
+	ld a,022h		;17a6 - Z80 opcode for `ld (nn),hl`
+	jp DICT_ADD_CHAR_AND_HL	;17a8
+
+	;; Read variable
+l17abh:	ld a,02ah		;17ab - Z80 op code `ld hl,(nn)`
+	call DICT_ADD_CHAR_AND_HL	;17ad
+	ld a,0cfh		;17b0 - Z80 opcode `rst 0x08`
+	jp DICT_ADD_BYTE	;17b2
 
 
-	add a,d			;17b5
-	ld d,h			;17b6
-	ld c,a			;17b7
-	dec bc			;17b8
-	nop			;17b9
+	;; Forth word TO
+	;; 
+	db 0x80+0x02, _T, _O
+	dw 0x000B
+
 	ld hl,FLAGS3		;17ba
 	set 5,(hl)		;17bd
+
 	ret			;17bf
 
 	;; Forth word BEGIN
@@ -7570,7 +7588,7 @@ EO_DONE:
 	
 	ld hl,BASE		;18b6
 	push hl			;18b9
-	jp l1797h		;18ba
+	jp INT_RUNTIME		;18ba
 
 
 	;; Forth word DECIMAL
@@ -8065,9 +8083,11 @@ SEQ_CONT:
 	dw 0x000D
 	
 	ld hl,P_EDIT_SCREEN	;1b0b
-l1b0eh:	push hl			;1b0e
 
-	jp l1797h		;1b0f
+BLK_CONT:
+	push hl			;1b0e
+
+	jp INT_RUNTIME		;1b0f
 
 
 	;; Forth work PAGE
@@ -8077,8 +8097,9 @@ l1b0eh:	push hl			;1b0e
 	dw 0x000C
 	
 	ld hl,SCREEN_NUM	;1b19
-	jr l1b0eh		;1b1c
+	jr BLK_CONT		;1b1c
 
+	
 	;; Forth word [_]
 	;;
 	;; Suppress execution of the subsequent immediate word
@@ -8167,8 +8188,9 @@ sub_1b70h:
 	dw 0x000D
 	
 	ld hl,P_DBUFFER		;1b8a
-	jp l1b0eh		;1b8d
+	jp BLK_CONT		;1b8d
 
+	
 	;; Forth word PASS
 	;;
 	;; Second half of warm restart ???
