@@ -435,7 +435,7 @@ l0060h:	pop hl			;0060
 
 	ret			;0061
 
-	;; Padding???
+	;; Padding?
 	nop			;0062
 	nop			;0063
 	nop			;0064
@@ -744,8 +744,7 @@ l00fah:	ld hl,POSSIBLE_KEY	; (10) 00fa
 	and %10111111	; (7) 00fe - Mask off shift
 
 	;; *** End of VSYNC generation phase of display routine ***
-l0100h:
-	if MINSTREL4=1
+l0100h:	if MINSTREL4=1
 	nop
 	nop
 	nop
@@ -1016,6 +1015,7 @@ l01cfh:	pop ix			;01cf
 	exx			;01d4
 	pop de			;01d5
 	pop hl			;01d6
+
 	res 7,(hl)		;01d7 - Disable task locking
 
 	jr l018bh		;01d9 - Continue to service task
@@ -1714,13 +1714,19 @@ RO_CONT:
 	
 	ret			;03a2 - Done
 
-DEL_LINE:	ld a,(ix+003h)		;03a3
+DEL_LINE:
+	ld a,(ix+003h)		;03a3
+
 	push af			;03a6
+
 	add a,(ix+001h)		;03a7
 	ld (ix+003h),a		;03aa
 	call SCROLL_SCRN	;03ad
+
 	pop af			;03b0
+
 	ld (ix+003h),a		;03b1
+
 	ret			;03b4
 
 CHECK_EDIT_MODE:
@@ -2237,6 +2243,7 @@ CL_LINE_TO_KIB:
 	xor a			;0574 - Check if done?
 	cp b			;0575
 	ret z			;0576
+
 l0577h:	ld a,(hl)		;0577
 	if MINSTREL4=1
 	nop
@@ -2875,9 +2882,9 @@ sub_0756h:
 INIT_DICT:
 	push hl			;0765
 
-	ld hl,(START_DICT_DEF)		;0766
-	ld (PSTART_DICT),hl		;0769
-	ld hl,(UNKNOWN2)		;076c
+	ld hl,(START_DICT_DEF)	;0766
+	ld (PSTART_DICT),hl	;0769
+	ld hl,(UNKNOWN2)	;076c
 	ld (P_HERE),hl		;076f
 
 	pop hl			;0772
@@ -2885,7 +2892,6 @@ INIT_DICT:
 	ret			;0773
 
 	;; Compute and add link field to word definition
-	;; GOT THIS FAR
 ADD_LINK_FIELD:
 	push de			;0774
 	
@@ -3152,9 +3158,10 @@ FPF_CONT:
 	ld l,a			;0836
 	ret nc			;0837
 	inc h			;0838
+
 	ret			;0839
 
-	
+	;; GOT THIS FAR
 	ld a,(hl)		;083a
 	bit 6,a			;083b
 	scf			;083d
@@ -3210,7 +3217,6 @@ GET_NEW_WORD:
 
 	ret			;0865
 
-	;; GOT THIS FAR
 INIT_NEW_WORD:
 	ld hl,(P_HERE)		;0866 - Retrieve current entry point for
 				;       dictionary
@@ -4467,52 +4473,71 @@ TWODROP:
 	ret			;0cf3
 
 
-	;; GOT THIS FAR
-	inc b			;0cf4
-	ld b,h			;0cf5
-	dec l			;0cf6
-	ld a,051h		;0cf7
-	rra			;0cf9
-	nop			;0cfa
+	;; Forth word D->Q
+	;;
+	;; Extend 32-bit integer to 64-bit integer
+	;; 
+	db 0x04, _D, _MINUS, _GREATERTHAN, _Q
+	dw 0x001F
 sub_0cfbh:
 	push hl			;0cfb
 	push de			;0cfc
-	call UNSTACK_DEHL		;0cfd
-	call STACK_DEHL		;0d00
-	push iy		;0d03
-	call STACK_DEHL		;0d05
-	pop hl			;0d08
-	push hl			;0d09
-	rl d		;0d0a
-	pop de			;0d0c
-	call HL_MINUS_DE	;0d0d
+
+	call UNSTACK_DEHL	;0cfd - Retrieve and duplicate 32-bit
+	call STACK_DEHL		;0d00   word from Parameter Stack
+
+	push iy			;0d03 - Save Parameter Stack pointer
+	call STACK_DEHL		;0d05   Stack second copy of number
+	pop hl			;0d08 - Retrieve previous value of
+	push hl			;0d09   Parameter Stack pointer
+	rl d			;0d0a - Move sign into carry
+	pop de			;0d0c - Retrieve Parameter Stack pointer
+				;       again
+
+	call HL_MINUS_DE	;0d0d - Zero high word preserving sign
+
 	pop de			;0d10
 	pop hl			;0d11
+
 	ret			;0d12
-	ld bc,l0e2bh		;0d13
-	nop			;0d16
+
+	;; Forth word +
+	;; 
+	db 0x01, _PLUS
+	dw 0x000E
+
 	push hl			;0d17
 	push de			;0d18
-	rst 10h			;0d19
-	ex de,hl			;0d1a
-	rst 10h			;0d1b
-	add hl,de			;0d1c
-	rst 8			;0d1d
+
+	rst 10h			;0d19 - Retrieve TOS into DE
+	ex de,hl		;0d1a
+	rst 10h			;0d1b - Retrieve 2OS
+	add hl,de		;0d1c - Add TOS to 2OS
+	rst 8			;0d1d - Return to parameter stack
+
 	pop de			;0d1e
 	pop hl			;0d1f
+
 	ret			;0d20
-	ld bc,102dh		;0d21
-	nop			;0d24
+
+	;; Forth word -
+	;; 
+	db 0x01, _MINUS
+	dw 0x0010
+	
 	push hl			;0d25
 	push de			;0d26
-	rst 10h			;0d27
-	ex de,hl			;0d28
-	rst 10h			;0d29
-	or a			;0d2a
-	sbc hl,de		;0d2b
-	rst 8			;0d2d
+
+	rst 10h			;0d27 - Retrieve TOS into DE
+	ex de,hl		;0d28
+	rst 10h			;0d29 - Retrieve 2OS
+	or a			;0d2a - Reset carry
+	sbc hl,de		;0d2b - Subtract TOS from 2OS
+	rst 8			;0d2d - Store result
+
 	pop de			;0d2e
 	pop hl			;0d2f
+
 	ret			;0d30
 
 	;; Forth word MINUS
