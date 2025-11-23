@@ -1065,7 +1065,7 @@ l01fdh:	pop af			;01fd - End of RUN_VSYNC routine
 	if MINSTREL4=1
 	ei
 	endif
-l0200h:	ret			;0200
+	ret			;0200
 
 	ds $0201-$		; Spacer for Minstrel 4th (cut-down)
 				; version of RUN_VSYNC
@@ -3161,7 +3161,7 @@ FPF_CONT:
 
 	ret			;0839
 
-	;; GOT THIS FAR
+	;; This is potentially orphaned code?
 	ld a,(hl)		;083a
 	bit 6,a			;083b
 	scf			;083d
@@ -3172,9 +3172,9 @@ FPF_CONT:
 	ld l,a			;0844
 	jr nc,l0848h		;0845
 	inc h			;0847
-l0848h:	ld a,(hl)			;0848
+l0848h:	ld a,(hl)		;0848
 	inc hl			;0849
-	ld h,(hl)			;084a
+	ld h,(hl)		;084a
 	ld l,a			;084b
 
 	ret			;084c
@@ -3190,7 +3190,7 @@ OUTPUT_ERR:
 
 	pop af			;0857 - Retrieve error code
 	
-	jp PRINT_ERR_MSG		;0858
+	jp PRINT_ERR_MSG	;0858
 	
 
 	;; Read word from keyboard (terminated by white-space) and check
@@ -3283,7 +3283,8 @@ DICT_ADD_WORDS:
 
 	jr DICT_ADD_WORDS	;089a and repeat
 
-DAW_CHECK_NUM:	rst 10h		;089c - Retrieve token length
+DAW_CHECK_NUM:
+	rst 10h			;089c - Retrieve token length
 
 	xor a			;089d - Check if zero-length and 
 	or l			;089e   loop if so
@@ -3497,6 +3498,7 @@ BYTE_TO_ASCII:
 	daa			;0920
 	adc a,040h		;0921
 	daa			;0923
+
 	ret			;0924
 
 
@@ -3851,83 +3853,108 @@ C1_MAIN_LOOP:
 	;; On exit:
 	;;   C - reset okay/ set = not number
 STR_TO_NUM:
+	;; Save registers
 	push hl			;0a36
 	push de			;0a37
 	push bc			;0a38
 
-	call CDUP		;0a39 - Duplicate token
-	xor a			;0a3c
+	call CDUP		;0a39 - Duplicate string
+
+	xor a			;0a3c - Set C=0
 	ld c,a			;0a3d
+	
 	rst 10h			;0a3e - Pop string length from stack to HL
 
-l0a3fh:	or l			;0a3f - Check if A and L are zero
-	jr z,l0a79h		;0a40 - Skip forward if so
+l0a3fh:	or l			;0a3f - Check for zero-length string and
+	jr z,STN_DONE		;0a40   exit if so
 	
-	ld b,a			;0a42 
-	ld h,c			;0a43
+	ld b,a			;0a42 - String length to B
+
+	ld h,c			;0a43 - Set HL and C to zero
 	ld l,c			;0a44
 	ld d,c			;0a45
-	rst 8			;0a46 - Push HL onto param stack
-	rst 8			;0a47 - Push HL onto stack
-	ld hl,(BASE)		;0a48 - Retrieve base
-	ex de,hl		;0a4b - DE = base
 
-l0a4ch:	rst 20h			;0a4c - Pop from character stack into A
-	call ATOI		;0a4d
+	rst 8			;0a46 - Push 0x0000 onto Parameter Stack
+	rst 8			;0a47   twice
+
+	ld hl,(BASE)		;0a48 - Retrieve base into DE
+	ex de,hl		;0a4b
+
+STN_LOOP:
+	rst 20h			;0a4c - Pop character from character stack
+	call ATOI		;0a4d   and convert to number
 	cp e			;0a50 - Check if exceeds base
-	jr nc,l0a7eh		;0a51   Exit, if exceeds
-	
-	ex de,hl		;0a53
+	jr nc,STN_MODIFIER		;0a51 - Skip forward if digit not in
+				;       current base
+
+	;; Multiply current number by base
+	ex de,hl		;0a53 - Push base onto stack
 	rst 8			;0a54 - Push HL onto param stack
-	ex de,hl		;0a55
-	ld l,a			;0a56
-	call S_TO_D		;0a57
-	call DSTAR		;0a5a
-	rst 8			;0a5d - Push HL onto param stack
-	call S_TO_D		;0a5e
-	call D_PLUS		;0a61
+	ex de,hl		;0a55 - Swap base and number
+	ld l,a			;0a56 - Store digit in l
+	call S_TO_D		;0a57 - Convert base to double-prec
+	call DSTAR		;0a5a - Multiply current value by base
 
-	djnz l0a4ch		;0a64
+	;; Add current digit
+	rst 8			;0a5d - Push current digit onto param stack
+	call S_TO_D		;0a5e - Convert to double and add to 
+	call D_PLUS		;0a61   running total
 
-l0a66h:	call UNSTACK_DEHL		;0a66
-	bit 0,c		;0a69
-	call nz,NEG_DEHL		;0a6b
-	call UNSTACK_STRING		;0a6e
-	bit 7,c		;0a71
-	ex de,hl			;0a73
-	call nz,HL_TO_PSTACK		;0a74
-	ex de,hl			;0a77
-	rst 8			;0a78
-l0a79h:	ld a,c			;0a79
+	djnz STN_LOOP		;0a64 - Repeat if more digits
 
+STN_FINALISE:
+	call UNSTACK_DEHL	;0a66 - Retrieve the final number
+	bit 0,c			;0a69 - Check for negative number
+	call nz,NEG_DEHL	;0a6b   and negative, if so
+
+	call UNSTACK_STRING	;0a6e - Remove duplicate of string
+
+	bit 7,c			;0a71 - Check if double-precision
+	ex de,hl		;0a73   and expand to double with
+	call nz,HL_TO_PSTACK	;0a74   0x0000, if so
+	ex de,hl		;0a77
+
+	rst 8			;0a78 - Push result onto stack
+
+STN_DONE:
+	ld a,c			;0a79 - Move status to A
+
+	;; Restore registers
 	pop bc			;0a7a
 	pop de			;0a7b
 	pop hl			;0a7c
 
 	ret			;0a7d
 
-l0a7eh:	cp 0f7h		;0a7e
-	jr z,l0a90h		;0a80
-	inc c			;0a82
-	cp 0f6h		;0a83
-	jr z,l0a92h		;0a85
-	rst 18h			;0a87
-l0a88h:
-	rst 20h			;0a88
-	djnz l0a88h		;0a89
-	rst 10h			;0a8b
-	rst 10h			;0a8c
-	scf			;0a8d
-	jr l0a79h		;0a8e
-l0a90h:
-	set 7,c		;0a90
-l0a92h:
-	djnz l0a4ch		;0a92
-	jr l0a66h		;0a94
+	;; Parse modifier
+STN_MODIFIER:
+	cp 0f7h			;0a7e - Check for period (double-prec)
+	jr z,STN_DOUBLE		;0a80
+	inc c			;0a82 - Assume negative
+	cp 0f6h			;0a83 - Check for minus sign
+	jr z,STN_CONT		;0a85   and skip forwards if is
+	rst 18h			;0a87 - Push back on to stack
 
+STN_LOOP2:
+	rst 20h			;0a88 - Empty character stack
+	djnz STN_LOOP2		;0a89
+	rst 10h			;0a8b - Empty parameter stack
+	rst 10h			;0a8c
+	scf			;0a8d - Indicate error
+	jr STN_DONE		;0a8e
+
+STN_DOUBLE:
+	set 7,c			;0a90 - Indicate double-precision
+
+STN_CONT:
+	djnz STN_LOOP		;0a92
+	jr STN_FINALISE		;0a94
+
+	
 	;; Convert 32-bit number on Parameter Stack into counted string
 	;; on Character Stack
 D_TOS_TO_STRING:
+	;; Save registers
 	push hl			;0a96
 	push de			;0a97
 	push bc			;0a98
@@ -3971,7 +3998,8 @@ DTTS_CONT:	ld a,_SPACE		;0ac8 - Pad with space
 	ld l,c			;0acd   and store to stack
 	rst 8			;0ace
 
-	pop bc			;0acf - Restore registers
+	;; Restore registers
+	pop bc			;0acf
 	pop de			;0ad0
 	pop hl			;0ad1
 
@@ -3979,6 +4007,7 @@ DTTS_CONT:	ld a,_SPACE		;0ac8 - Pad with space
 
 	;; Convert number to string
 TOS_TO_STRING:
+	;; Save registers
 	push hl			;0ad3 - Save registers
 	push de			;0ad4
 	push bc			;0ad5
@@ -4053,16 +4082,17 @@ MSTAR:
 	;;   Z - set for positive/ reset for negative
 ABS_SGN_HL:
 	bit 7,h			;0b19 - Check if negative
-	ret z			;0b1b
+	ret z			;0b1b   and return, if not
 
 	scf			;0b1c - Set bit 0 of A to be
 	rla			;0b1d   sign (1=-ve; 0=+ve)
 
+	;; Compute 0x0000 - HL
 NEG_HL:	push de			;0b1e
 	
 	ld de,0x0000		;0b1f
 	or a			;0b22
-	ex de,hl			;0b23
+	ex de,hl		;0b23
 	sbc hl,de		;0b24
 
 	pop de			;0b26
@@ -4169,19 +4199,21 @@ l0b55h:	djnz l0b4ah		;0b55
 	;; Forth word M/
 	db 0x02, _M, _SLASH
 	dw 0x0057
-MSLASH:
-	push hl			;0b73
+
+MSLASH:	push hl			;0b73
 	push de			;0b74
 	push bc			;0b75
 
 	xor a			;0b76
 	rst 10h			;0b77
 	call ABS_SGN_HL		;0b78
+
 	push hl			;0b7b
 	pop bc			;0b7c
+
 	call UNSTACK_DEHL		;0b7d
 	call ABS_SGN_DEHL		;0b80
-	call sub_0ba0h		;0b83
+	call DEHL_DIV_BC		;0b83
 	or a			;0b86
 	jr z,l0b94h		;0b87
 	inc a			;0b89
@@ -4201,38 +4233,40 @@ l0b94h:	call STACK_DEHL		;0b94
 
 UNSTACK_DEHL:
 	rst 10h			;0b9b - Pop 
-	ex de,hl			;0b9c
+	ex de,hl		;0b9c
 	rst 10h			;0b9d
-	ex de,hl			;0b9e
+	ex de,hl		;0b9e
+
 	ret			;0b9f
 
-sub_0ba0h:
-	push ix		;0ba0
+	;; Divide DEHL by BC
+DEHL_DIV_BC:
+	push ix			;0ba0
 	push bc			;0ba2
+
 	ld b,011h		;0ba3
 	push hl			;0ba5
-	ex de,hl			;0ba6
-	pop ix		;0ba7
+	ex de,hl		;0ba6
+
+	pop ix			;0ba7
 	pop de			;0ba9
+
 	jr l0bb5h		;0baa
-l0bach:
-	adc hl,hl		;0bac
+l0bach:	adc hl,hl		;0bac
 	or a			;0bae
 	sbc hl,de		;0baf
 	ccf			;0bb1
 	jr c,l0bb9h		;0bb2
 	add hl,de			;0bb4
-l0bb5h:
-	add ix,ix		;0bb5
+l0bb5h:	add ix,ix		;0bb5
 	jr l0bbdh		;0bb7
-l0bb9h:
-	add ix,ix		;0bb9
+l0bb9h:	add ix,ix		;0bb9
 	inc ix		;0bbb
-l0bbdh:
-	djnz l0bach		;0bbd
+l0bbdh:	djnz l0bach		;0bbd
 	push ix		;0bbf
 	pop de			;0bc1
 	pop ix		;0bc2
+
 	ret			;0bc4
 
 	;; Forth word */MOD
@@ -4258,15 +4292,11 @@ l0bbdh:
 	rst 10h			;0be8
 	pop hl			;0be9
 	ret			;0bea
-	inc b			;0beb
-	cpl			;0bec
-	ld c,l			;0bed
-	ld c,a			;0bee
-	ld b,h			;0bef
-	ld (de),a			;0bf0
 
-
-	nop			;0bf1
+	;; Forth word /MOD
+	;; 
+	db 0x04, _SLASH, _M, _O, _D
+	dw 0x0012
 
 	;; Perform 16-bit division, firstly promoting dividend to 32-bit
 DIV_TO_MDIV:
@@ -4356,77 +4386,78 @@ l0c3ah:	push ix			;0c3a
 	push de			;0c46
 	pop ix			;0c47
 	ld bc,02008h		;0c49
-l0c4ch:
-	push bc			;0c4c
-	push ix		;0c4d
+l0c4ch:	push bc			;0c4c
+	push ix			;0c4d
 	or a			;0c4f
-l0c50h:
-	rl (ix+004h)		;0c50
+l0c50h:	rl (ix+004h)		;0c50
 	inc ix			;0c54
 	dec c			;0c56
 	jr nz,l0c50h		;0c57
 	pop ix			;0c59
 	call COMPARE_DNUM	;0c5b
 	jr c,l0c67h		;0c5e
-	call HL_MINUS_DE		;0c60
+	call HL_MINUS_DE	;0c60
 	set 0,(ix+004h)		;0c63
-l0c67h:
-	pop bc			;0c67
+l0c67h:	pop bc			;0c67
 	djnz l0c4ch		;0c68
 	pop bc			;0c6a
 	pop de			;0c6b
 	rst 10h			;0c6c
 	rst 10h			;0c6d
 	call DSWAP		;0c6e
+
 	pop hl			;0c71
-	pop ix		;0c72
+	pop ix			;0c72
+
 	ret			;0c74
 
 	;; Forth word MD*
 	db 0x03, 0x4D, 0x44, 0x2A
 	db 0x4B, 0x00
-MDSTAR:
-	push ix		;0c7b
+
+MDSTAR:	push ix			;0c7b
 	push hl			;0c7d
 	push de			;0c7e
 	push bc			;0c7f
-	push iy		;0c80
+	push iy			;0c80
 	rst 8			;0c82
 	rst 8			;0c83
-	ld bc,HL_TO_PSTACK		;0c84
-	push iy		;0c87
+	ld bc,HL_TO_PSTACK	;0c84
+	push iy			;0c87
 	pop de			;0c89
 	pop hl			;0c8a
-	call INSERT_CHARS		;0c8b
+	call INSERT_CHARS	;0c8b
 	push de			;0c8e
 	ld b,004h		;0c8f
-	pop ix		;0c91
-l0c93h:
-	ld (ix+008h),000h		;0c93
+	pop ix			;0c91
+
+l0c93h:	ld (ix+008h),000h	;0c93
 	inc hl			;0c97
-	inc ix		;0c98
+	inc ix			;0c98
 	djnz l0c93h		;0c9a
 	ld bc,02008h		;0c9c
-l0c9fh:
-	push bc			;0c9f
+
+l0c9fh:	push bc			;0c9f
 	or a			;0ca0
 	bit 0,(ix+000h)		;0ca1
 	call nz,TIC		;0ca5
 	ld b,c			;0ca8
-	push ix		;0ca9
-l0cabh:
-	rr (ix+007h)		;0cab
-	dec ix		;0caf
+	push ix			;0ca9
+
+l0cabh:	rr (ix+007h)		;0cab
+	dec ix			;0caf
 	djnz l0cabh		;0cb1
-	pop ix		;0cb3
+	pop ix			;0cb3
 	pop bc			;0cb5
 	djnz l0c9fh		;0cb6
 	rst 10h			;0cb8
 	rst 10h			;0cb9
+
 	pop bc			;0cba
 	pop de			;0cbb
 	pop hl			;0cbc
-	pop ix		;0cbd
+	pop ix			;0cbd
+	
 	ret			;0cbf
 
 	;; Forth Word D/
@@ -4441,23 +4472,26 @@ D_SLASH:
 	call STACK_DEHL		;0ccb
 	jp l0c3ah		;0cce
 
+	
 	;; Forth Word D*
+	;; 
 	db 0x02, 0x44, 0x2A
 	db 0x16, 0x00
-DSTAR:
-	push hl			;0cd6
+
+DSTAR:	push hl			;0cd6
 	push de			;0cd7
+
 	call MDSTAR		;0cd8
-	call UNSTACK_DEHL		;0cdb
+	call UNSTACK_DEHL	;0cdb
 	call TWODROP		;0cde
-	call STACK_DEHL	;0ce1
+	call STACK_DEHL		;0ce1
+
 	pop de			;0ce4
 	pop hl			;0ce5
 
 	ret			;0ce6
 
 	;; Forth word 2DROP
-	;;
 	;; 
 	db 0x05, _2, _D, _R, _O, _P
 	dw 0x000D
@@ -4950,6 +4984,7 @@ DO_NORMALISE:
 
 	ret			;0e99 - Done
 
+	
 	;; Forth word J
 	;;
 	;; Retrieve second-level loop index
@@ -4970,6 +5005,7 @@ DO_RETRIEVE_INDEX:
 
 	jr DO_NORMALISE		;0ea6 - Normalise index and done
 
+	
 	;; Forth word NI
 	;;
 	;; Retrieve nested index 
@@ -5011,6 +5047,7 @@ DO_RETRIEVE_INDEX:
 	
 	ret			;0ec6
 
+	
 	;; Forth word CR
 	;;
 	;; Emit carriage return to console
@@ -5018,6 +5055,7 @@ DO_RETRIEVE_INDEX:
 	dw 0x0008
 
 	jp PRINT_NEW_LINE	;0ecc
+
 	
 	;; Forth word EMIT
 	;;
@@ -5181,80 +5219,115 @@ HEX:	ld hl,0x10		;0f7f
 
 	ret			;0f85
 
-	inc bc			;0f86
-	ld b,c			;0f87
-	ld c,(hl)			;0f88
-	ld b,h			;0f89
-	ld de,0d700h		;0f8a
-	ex de,hl			;0f8d
-	rst 10h			;0f8e
-	ld a,l			;0f8f
+
+	;; Forth word AND ( N N -- N )
+	;;
+	;; Perform bitwise AND on two, 16-bit numbers
+	db 0x03, _A, _N, _D
+	dw 0x0011
+
+	rst 0x10		;0f8c - Retrieve TOS into DE
+	ex de,hl		;0f8d   
+	rst 10h			;0f8e - Retrieve 2OS into HL
+
+	ld a,l			;0f8f - 'And' together low bytes
 	and e			;0f90
 	ld l,a			;0f91
-	ld a,h			;0f92
+	
+	ld a,h			;0f92 - 'And' together high bytes
 	and d			;0f93
 	ld h,a			;0f94
-	rst 8			;0f95
+	
+	rst 8			;0f95 - Return result to Parameter Stack
+	
 	ret			;0f96
-	ld (bc),a			;0f97
-	ld c,a			;0f98
-	ld d,d			;0f99
-	djnz l0f9ch		;0f9a
-l0f9ch:
-	rst 10h			;0f9c
-	ex de,hl			;0f9d
-	rst 10h			;0f9e
-	ld a,l			;0f9f
+
+	;; Forth word OR ( N N -- N )
+	;;
+	;; Bitwise OR comparison of two, 16-bit numbers
+	db 0x02, _O, _R		
+	dw 0x0010
+	
+	rst 10h			;0f9c - Retrieve TOS into DE
+	ex de,hl		;0f9d
+	rst 10h			;0f9e - Retrieve 2OS into HL
+	
+	ld a,l			;0f9f - 'Or' together low bytes
 	or e			;0fa0
 	ld l,a			;0fa1
-	ld a,h			;0fa2
+
+	ld a,h			;0fa2 - 'Or' together high bytes
 	or d			;0fa3
 	ld h,a			;0fa4
-	rst 8			;0fa5
+	
+	rst 8			;0fa5 - Return result to Parameter Stack
+
 	ret			;0fa6
-	inc bc			;0fa7
-	ld e,b			;0fa8
-	ld c,a			;0fa9
-	ld d,d			;0faa
-	ld de,0d700h		;0fab
-	ex de,hl			;0fae
-	rst 10h			;0faf
-	ld a,l			;0fb0
+
+	;; Forth word XOR ( N N -- N )
+	;;
+	;; Perform bitwise XOR on two, 16-bit numbers 
+	;;
+	db 0x03, _X, _O,_R
+	dw 0x0011
+
+	rst 0x10		;0fad - Retrieve TOS into DE
+	ex de,hl		;0fae
+	rst 10h			;0faf - Retrieve 2OS into HL
+
+	ld a,l			;0fb0 - 'xor' low bytes
 	xor e			;0fb1
 	ld l,a			;0fb2
-	ld a,h			;0fb3
+	
+	ld a,h			;0fb3 - 'xor' high bytes
 	xor d			;0fb4
 	ld h,a			;0fb5
-	rst 8			;0fb6
+
+	rst 8			;0fb6 - Return result to Parameter Stack
+	
 	ret			;0fb7
 
-	;; Forth word 2VAR
+	
+	;; Forth word 2VAR ( D -- )
+	;;
+	;; Create and initialise 32-bit variable
+	;; 
 	db 0x04, _2, _V, _A, _R
 	dw 0x000E
 
-	call VARIABLE		;0fbf
-	rst 10h			;0fc2
-	jp DICT_ADD_HL		;0fc3
+	call VARIABLE		;0fbf - Start by creating 16-bit
+				;       variable
+	rst 10h			;0fc2 - Retrieve high-order word
+	
+	jp DICT_ADD_HL		;0fc3 - And extend definition to 32 bits
+	
 
-	;; Forth word VARIABLE
+	;; Forth word VARIABLE ( N -- )
+	;;
+	;; Create and initialise variable
+	;; 
 	db 0x08, _V, _A, _R, _I, _A, _B, _L, _E
 	dw 0x001B
 
 VARIABLE:	
 	call INIT_NEW_WORD	;0fd1
 	
-	ld hl,V_GET_ADDR	;0fd4
+	ld hl,V_GET_ADDR	;0fd4 - Point to runtime for VARIABLE
 	call DICT_ADD_CALL_HL	;0fd7
-	rst 10h			;0fda
-	jp DICT_ADD_HL		;0fdb
+
+	rst 10h			;0fda - Retrieve initial value from TOS
+	jp DICT_ADD_HL		;0fdb   and store in dictionary
 
 V_GET_ADDR:
 	pop hl			;0fde - Retrieve address in dictionary
 				;       of variable's storage
 	rst 8			;0fdf   and push onto parameter stack
+
 	ret			;0fe0
 
 	;; Forth word TASK
+	;;
+	;; Create a new task
 	db 0x04, _T, _A, _S, _K
 	dw 0x0048
 
@@ -5303,23 +5376,34 @@ l100dh:	ld (hl),c		;100d
 	ld (hl),d		;1018
 
 	;; Retrieve address of parameter field
-	pop de			;1019 - Retrieve start of task Parameter Field
+	pop de			;1019 - Retrieve start of task Parameter
+				;       Field
 
 	;; Store address of task's Parameter Field in (PCUR_TASK_STRUCT)
 	;; and update PCUR_TASK_STRUCT to point to
 	ld hl,(PCUR_TASK_STRUCT)	;101a
 
 	;; Temporarily disable NMI generator
+	if MINSTREL4=1
+	di
+	nop
+	else
 	out (0fdh),a		;101d
-
+	endif
+	
 	;; Store address of parameter field in previous task field
 	ld (hl),e		;101f
 	inc hl			;1020
 	ld (hl),d		;1021
 
 	;; Reenable NMI generator
+	if MINSTREL4=1
+	ei
+	nop
+	else
 	out (0feh),a		;1022
-
+	endif
+	
 	;; Update location of current task parameter field to newly
 	;; created task
 	ex de,hl		;1024
@@ -5336,7 +5420,7 @@ l100dh:	ld (hl),c		;100d
 
 	ret			;1035
 
-	;;  Service AUTO mode counter???
+	;;  Service AUTO mode counter
 SERVICE_AUTO:
 	;; Check if auto-mode enabled and exit if not
  	ld hl,FLAGS3		;1036
@@ -5347,7 +5431,7 @@ SERVICE_AUTO:
 	ld de,0x0000		;103c
 	ld hl,(AUTO_CNT)	;103f
 	ex de,hl		;1042
-	ld (AUTO_CNT),hl	;1043
+	ld (AUTO_CNT),hl	;1043 
 
 	;; Check if high word is zero
 	ex de,hl		;1046
@@ -5367,9 +5451,11 @@ SERVICE_AUTO:
 	
 FAST:	ld hl,FLAGS3		;105b
 	set 7,(hl)		;105e
+
 FA_DISABLE_DISP:
 	ld hl,SKIP_DISPLAY	;1060
 	ld (P_RUN_DISP),hl	;1063
+
 	ret			;1066
 
 
@@ -5379,43 +5465,63 @@ FA_DISABLE_DISP:
 
 SLOW:	ld hl,FLAGS3		;106e
 	set 7,(hl)		;1071
+
 SL_ENABLE_DISP:
 	ld hl,RUN_DISPLAY	;1073
 	ld (P_RUN_DISP),hl	;1076
 	
 	ret			;1079
 
+	;; Forth word D@ ( ADDR -- D )
+	;;
+	;; Retrieve 32-bit number from memory
+	db 0x02, _D, _AT
+	dw 0x0021
 
-	ld (bc),a		;107a
-	ld b,h			;107b
-	ld b,b			;107c
-	ld hl,0dd00h		;107d
-	push hl			;1080
-	rst 10h			;1081
+	push ix			;107f
+	
+	rst 10h			;1081 - Retrieve address into IX
 	push hl			;1082
-	pop ix		;1083
-	call sub_108eh		;1085
-	call STACK_DEHL		;1088
-	pop ix		;108b
+	pop ix			;1083
+	
+	call PEEK_DEHL		;1085 - Read long word
+	call STACK_DEHL		;1088 - Stack long word
+
+	pop ix			;108b
+
 	ret			;108d
-sub_108eh:
+
+PEEK_DEHL:
 	ld l,(ix+000h)		;108e
 	ld h,(ix+001h)		;1091
 	ld e,(ix+002h)		;1094
 	ld d,(ix+003h)		;1097
+
 	ret			;109a
-	ld (bc),a			;109b
-	ld b,h			;109c
-	ld hl,l0021h		;109d
-	push ix		;10a0
-	rst 10h			;10a2
+
+	;; Forth word D!
+	;;
+	;; Write 32-bit word to memory
+	;; 
+	db 0x02, _D, _EXCLAMATION
+	dw 0x0021
+
+	push ix			;10a0 - Store IX
+
+	rst 10h			;10a2 - Retrieve TOS into IX
 	push hl			;10a3
-	pop ix		;10a4
-	call UNSTACK_DEHL		;10a6
-	call STORE_DEHL		;10a9
-	pop ix		;10ac
+	pop ix			;10a4
+	
+	call UNSTACK_DEHL	;10a6 - Read 32-bit value from Parameter
+				;       Stack
+	
+	call STORE_DEHL		;10a9 - Write to memory
+	
+	pop ix			;10ac - Restore IX
+
 	ret			;10ae
 
+	
 	;; Write 32-bit number to memory (Little Endian)
 	;;
 	;; On entry:
@@ -6210,64 +6316,80 @@ D_PLUS:	push hl			;1305 - Save registers
 
 	ret			;1323
 
-	;; GOT THIS FAR
-	inc bc			;1324
-	ld b,e			;1325
-	ld c,h			;1326
-	ld d,e			;1327
-	dec bc			;1328
-	nop			;1329
-	ld a,00ch		;132a
+	;; Forth word CLS
+	;;
+	;; Clear the screen
+	;; 
+	db 0x03, _C, _L, _S
+	dw 0x000B
+
+	ld a,_CLS		;132a
 	jp PRINT_A		;132c
-	inc bc			;132f
-	ld b,c			;1330
-	ld b,d			;1331
-	ld d,e			;1332
-	inc c			;1333
-	nop			;1334
-	rst 10h			;1335
-	call ABS_SGN_HL		;1336
-	rst 8			;1339
+
+	;; Forth word ABS
+	;; 
+	db 0x03, _A, _B, _S
+	dw 0x000C
+	
+	rst 10h			;1335 - Retrieve number from Parameter
+				;	Stack
+	call ABS_SGN_HL		;1336 - Compute absolute value
+	
+	rst 8			;1339 - Return to the parameter stack
+	
 	ret			;133a
-	ld b,044h		;133b
-	ld c,l			;133d
-	ld c,c			;133e
-	ld c,(hl)			;133f
-	ld d,l			;1340
-	ld d,e			;1341
-	ld (de),a			;1342
-	nop			;1343
-	call UNSTACK_DEHL		;1344
+
+	;; Forth word
+	;;
+	;; Negate a 32-bit integer
+	;; 
+	db 0x06, _D, _M, _I, _N, _U, _S
+	dw 0x0012
+
+	call UNSTACK_DEHL	;1344
 	call NEG_DEHL		;1347
 	jp STACK_DEHL		;134a
-	inc b			;134d
-	ld b,h			;134e
-	ld b,c			;134f
-	ld b,d			;1350
-	ld d,e			;1351
-	djnz l1354h		;1352
 
+
+
+	;; Forth word DABS ( D -- D )
+	;;
+	;; Find absolute value of 32-byte word
+	db 0x04, _D, _A, _B, _S
+	dw 0x0010
+	
 l1354h:	call UNSTACK_DEHL	;1354
 	call ABS_SGN_DEHL	;1357
 	jp STACK_DEHL		;135a
-	ld (bc),a			;135d
-	ld b,e			;135e
-	ld b,b			;135f
-	dec bc			;1360
-	nop			;1361
-	rst 10h			;1362
-	ld l,(hl)			;1363
+
+	;; Forth word C@ ( A -- N )
+	;;
+	;; Retrive byte at address
+	db 0x02, _C, _AT
+	dw 0x000B
+
+	rst 10h			;1362 - Retrieve address from Parameter
+				;       Stack
+	ld l,(hl)		;1363 - Read byte at the address
 	ld h,000h		;1364
-	rst 8			;1366
+
+	rst 8			;1366 - Put result on Parameter Stack
+	
 	ret			;1367
-	ld (bc),a			;1368
-	ld b,e			;1369
-	ld hl,0x000B		;136a
-	rst 10h			;136d
-	ex de,hl			;136e
-	rst 10h			;136f
-	ld a,l			;1370
-	ld (de),a			;1371
+
+	;; Forth word C!
+	;; 
+	db 0x02, _C, _EXCLAMATION
+	dw 0x000B
+
+	rst 10h			;136d - Retrieve address into DE
+	ex de,hl		;136e
+
+	rst 10h			;136f - Retrieve value to be written
+ 	ld a,l			;1370   into A
+
+	ld (de),a		;1371 - Write to memory
+	
 	ret			;1372
 
 	;; Forth word DROP
@@ -6278,65 +6400,68 @@ DROP:	rst 10h			;137a - Pop value from Parameter Stack
 
 	ret			;137b
 
+	;; Forth word BLANKS ( A N -- )
+	;;
+	;; Fill block of memory with zeros
+	db 0x06, _B, _L, _A, _N, _K, _S
+	dw 0x000F
+	
+	rst 10h			;1385 - Retrieve block length into DE
+	ex de,hl		;1386
+	ld c,_NULL		;1387 - Load C with blanking character
+	jr F_CONT		;1389 - Continue as for FILL
 
-	ld b,042h		;137c
-	ld c,h			;137e
-	ld b,c			;137f
-	ld c,(hl)			;1380
-	ld c,e			;1381
-	ld d,e			;1382
-	rrca			;1383
-	nop			;1384
-	rst 10h			;1385
-	ex de,hl			;1386
-	ld c,000h		;1387
-	jr l1396h		;1389
-	inc b			;138b
-	ld b,(hl)			;138c
-	ld c,c			;138d
-	ld c,h			;138e
-	ld c,h			;138f
-	inc d			;1390
-	nop			;1391
-	rst 10h			;1392
+	;; Forth word FILL ( A N N -- )
+	db 0x04, _F, _I, _L, _L
+	dw 0x0014
+	
+	rst 10h			;1392 - Retrieve fill character into C
 	ld c,l			;1393
-	rst 10h			;1394
-	ex de,hl			;1395
-l1396h:	rst 10h			;1396
 
-l1397h:	ld (hl),c			;1397
-	inc hl			;1398
-	dec de			;1399
-	ld a,e			;139a
+	rst 10h			;1394 - Retrieve block length into DE 
+	ex de,hl		;1395
+F_CONT:	rst 10h			;1396 - Retrieve start address of block
+
+F_LOOP:	ld (hl),c		;1397 - Write byte
+
+	inc hl			;1398 - Advance to next address
+	dec de			;1399 - Decrease counter
+
+	ld a,e			;139a - Check if DE=0
 	or d			;139b
-	jr nz,l1397h		;139c
+	jr nz,F_LOOP		;139c - Repeat if not
+	
 	ret			;139e
-	inc b			;139f
-	ld b,e			;13a0
-	ld c,a			;13a1
-	ld d,b			;13a2
-	ld e,c			;13a3
-	dec c			;13a4
-	nop			;13a5
-	ld hl,l0200h		;13a6
+
+	;; Forth word COPY ( SRC DES -- )
+	db 0x04, _C, _O, _P, _Y
+	dw 0x000D
+	
+	ld hl,16*32		;13a6 - Length of editor screen
 	push hl			;13a9
-	jr l13b6h		;13aa
-	inc b			;13ac
-	ld c,l			;13ad
-	ld c,a			;13ae
-	ld d,(hl)		;13af
-	ld b,l			;13b0
-	ld b,e			;13b1
-	nop			;13b2
-	rst 10h			;13b3
-	add hl,hl		;13b4
+
+	jr MV_KERNEL		;13aa
+
+	
+	;; Forth word MOVE ( SRC DES LEN -- )
+	;;
+	;; Nove a block of memory
+	db 0x04, _M, _O, _V, _E
+	dw 0x0043
+
+	rst 10h			;13b3 - Retrieve length of buffer
+	add hl,hl		;13b4   and double it
 	push hl			;13b5
 
-l13b6h: rst 10h			;13b6
+MV_KERNEL:
+	rst 10h			;13b6 - Retrieve destination into DE
 	ex de,hl		;13b7
-	rst 10h			;13b8
+
+	rst 10h			;13b8 - Retrieve source into BC
 	pop bc			;13b9
+
 	jp INSERT_CHARS		;13ba
+
 
 	;; Default task that is executed every 15 frames
 DEF_TASK:
@@ -6396,8 +6521,8 @@ SERVICE_CLOCK:
 
 	rst 10h			;140a - Retrieve left limit into E
 	ld e,l			;140b
-	rst 10h			;140c
 
+	rst 10h			;140c
 	ld a,l			;140d - Retrieve lower limit into H
 	rst 10h			;140e   and right limit into L
 	ld h,a			;140f
@@ -6435,6 +6560,7 @@ SERVICE_CLOCK:
 	
 	ret			;142b
 
+	
 	;; Forth word .W ( LEN SCR -- , STRING C-C -- )
 	;;
 	;; Print string to screen
@@ -6463,17 +6589,20 @@ l1443h:	pop ix			;1443 - Retrieve previous value of IX
 	
 	ret			;1445 - Done
 
+	;; Forth word # ( N -- )
+	;;
+	;; Convert TOS into character
+	;; 
+	db 0x01, _HASH
+	dw 0x0007
 	
-	ld bc,00723h		;1446
-	nop			;1449
 	jp TOS_TO_STRING	;144a
 	
-	ld (bc),a		;144d
-	ld b,h			;144e
-	inc hl			;144f
-	ex af,af'		;1450
-	nop			;1451
-	jp D_TOS_TO_STRING		;1452
+	;; Forth word D# ( D -- )
+	db 0x02, _D, _HASH
+	dw 0x0008
+
+	jp D_TOS_TO_STRING	;1452
 
 	;; Forth word ED
 	;;
@@ -6495,45 +6624,54 @@ l1443h:	pop ix			;1443 - Retrieve previous value of IX
 
 	ret			;1468
 
+	;; Forth word W@ ( A -- )
+	;;
+	;; Fetch string from memory
+	db 0x02, _W, _AT
+	dw 0x0009
 
-	ld (bc),a			;1469
-	ld d,a			;146a
-	ld b,b			;146b
-	add hl,bc			;146c
-	nop			;146d
-	rst 10h			;146e
+	rst 10h			;146e - Retrieve address into HL
+
 	jp PUSH_STRING		;146f
-	inc bc			;1472
-	ld b,e			;1473
-	ld a,04eh		;1474
-	jr l1478h		;1476
-l1478h:
-	ld de,0xFFFF		;1478 - Offset of -1
+
+	;; Forth word C>N ( -- N )
+	;;
+	;; Convert next character to code
+	db 0x03, _C, _GREATERTHAN, _N
+	dw 0x0018
+
+l1478h:	ld de,0xFFFF		;1478 - Offset of -1
 	xor a			;147b
-	rst 10h			;147c
-	add hl,de			;147d
-	jr c,l1483h		;147e
-	inc hl			;1480
-	jr l1484h		;1481
-l1483h:
-	rst 20h			;1483
-l1484h:
-	rst 8			;1484
-	ld h,000h		;1485
+	rst 10h			;147c - Retrieve string length from
+	add hl,de		;147d   Parameter Stack and decrement
+	jr c,l1483h		;147e - Jump forward if okay
+	inc hl			;1480 - Otherwise restore previous value
+
+	jr l1484h		;1481 - Skip forward to push _NULL onto
+				;       stack
+l1483h:	rst 20h			;1483 - Retrieve character from stack
+
+l1484h:	rst 8			;1484 - Push string length onto
+				;       Parameter Stack
+	ld h,000h		;1485 - Move character into HL
 	ld l,a			;1487
-	rst 8			;1488
+	rst 8			;1488 - Push onto Parameter Stack
+
 	ret			;1489
-	inc bc			;148a
-	ld c,(hl)			;148b
-	ld a,043h		;148c
-	dec c			;148e
-	nop			;148f
-	rst 10h			;1490
+
+	;; Forth word N>C ( LEN N -- )
+	db 0x03, _N, _GREATERTHAN, _C
+	dw 0x000D
+	
+	rst 10h			;1490 - Retrieve number into A
 	ld a,l			;1491
-	rst 18h			;1492
-	rst 10h			;1493
-	inc hl			;1494
-	rst 8			;1495
+
+	rst 18h			;1492 - Push onto Character Stack
+
+	rst 10h			;1493 - Retrieve string length
+	inc hl			;1494   and increment, then return
+	rst 8			;1495   to Parameter Stack
+	
 	ret			;1496
 
 	;; Forth word "
@@ -6542,22 +6680,25 @@ l1484h:
 	db 0x01+0x80, _QUOTES
 	dw 0x003B
 
-	ld hl,QUOTE		;149b
-l149eh:	call DICT_ADD_CALL_HL	;149e
+	ld hl,QUOTE		;149b - address or runtime routine
+Q_INPUT:
+	call DICT_ADD_CALL_HL	;149e
 	ld hl,(P_HERE)		;14a1
 	ld a,0xFF		;14a4
-l14a6h:	call DICT_ADD_BYTE	;14a6
+
+Q_LOOP:	call DICT_ADD_BYTE	;14a6
 	inc (hl)		;14a9
-	or a			;14aa
-	call sub_14c5h		;14ab
-	cp 022h			;14ae
-	jr nz,l14a6h		;14b0
+	or a			;14aa - Not sure necessary
+
+	call Q_GET_CHAR		;14ab
+	cp _QUOTES		;14ae
+	jr nz,Q_LOOP		;14b0
 
 	ret			;14b2
 
 Q_FIND_STR:
 	pop de			;14b3 - Retrieve second value from
-	pop hl			;14b4   parameter stack, which is
+	pop hl			;14b4   machine stack, which is
 	push de			;14b5   start of string, into HL
 
 	;; Retrieve the length of the string
@@ -6579,20 +6720,27 @@ QUOTE:	call Q_FIND_STR		;14be
 
 	jp PUSH_STRING		;14c2
 
-                                                                                sub_14c5h:
-	call SWITCH_TO_MSTACK1	;14c5
-	and 07fh		;14c8
-	call PRINT_A		;14ca
-	cp 01fh		;14cd
-	jr z,sub_14c5h		;14cf
+
+	;; Read character from keyboard
+Q_GET_CHAR:
+	call SWITCH_TO_MSTACK1	;14c5 - Switch context and wait for
+				;       keypress
+	and %01111111		;14c8 - Mask off bit 7
+	call PRINT_A		;14ca - Display char
+	cp _FLASH		;14cd - Check if was cursor flash,
+	jr z,Q_GET_CHAR		;14cf   in which case wait for another key
+
 	ret			;14d1
 
 	;; Forth word ."
+	;;
+	;; Print string
+	;; 
 	db 0x02+0x80, _PERIOD, _QUOTES
 	dw 0x0011
 	
 	ld hl, DOTQ
-	jr 0x149E
+	jr Q_INPUT
 
 	;; Execution kernel for ."
 DOTQ:	call 0x14B3		;14dc
@@ -6602,24 +6750,34 @@ DOTQ:	call 0x14B3		;14dc
 
 	;; Forth word ABORT"
 	;;
-	;;
+	;; If flag set, issue user error and (warm) restart
 	db 0x06+0x80, _A, _B, _O, _R, _T, _QUOTES
 	dw 0x0086
 	
-	ld hl,l14f1h		;14ec
-	jr l149eh		;14ef
+	ld hl,AB_RUNTIME	;14ec
+	jr Q_INPUT		;14ef
 
-l14f1h:	call Q_FIND_STR		;14f1
-	push de			;14f4
+AB_RUNTIME:
+	call Q_FIND_STR		;14f1 - Retrieve error string and
+	push de			;14f4 - store return address
+
 	push hl			;14f5
-	rst 10h			;14f6
+
+	rst 10h			;14f6 - Retrieve flag and check if zero
 	ld a,l			;14f7
 	or h			;14f8
+
 	pop hl			;14f9
-	ret z			;14fa
-	call PRINT_STR_HL		;14fb
+
+	ret z			;14fa - Return if no error
+
+	call PRINT_STR_HL	;14fb - Print error message
+
 	jp WARM_RESTART		;14fe
 
+
+	;; Tape interface
+	
 	;; Write bit (based on carry)
 WRITE_PULSE:
 	push af			;1501
@@ -6859,10 +7017,11 @@ l15c3h:	in a,(0feh)		;15c3 - Read tape signal
 
 	;; Clear editor buffer
 CLEAR_EDIT_BUFFER:
-	ld b,000h		;15d8
-	call ZERO_BYTE		;15da
+	ld b,000h		;15d8 - Set length to 256 bytes
+	call ZERO_BYTE		;15da - Call once and then repeat for
+				;second 256 bytes
 
-	;; 
+	;; Zero block of memory 
 ZERO_BYTE:
 	ld (hl),000h		;15dd
 	inc hl			;15df
@@ -6882,10 +7041,10 @@ l15e5h:	call LOAD_BYTE		;15e5
 	jr nz,l15e5h		;15ed
 	dec d			;15ef
 	jr nz,l15e5h		;15f0
-l15f2h:
-	pop hl			;15f2
+l15f2h:	pop hl			;15f2
 	pop de			;15f3
 	ret			;15f4
+
 sub_15f5h:
 	ld b,000h		;15f5
 	call sub_15fah		;15f7
@@ -7420,6 +7579,7 @@ l17abh:	ld a,02ah		;17ab - Z80 op code `ld hl,(nn)`
 
 	
 	;; Forth word WHILE
+	;; 
 	db 0x80+0x05, _W, _H, _I, _L, _E
 	dw 0x001E
 	
@@ -7461,6 +7621,7 @@ l17abh:	ld a,02ah		;17ab - Z80 op code `ld hl,(nn)`
 	jp (hl)			;17fb
 
 	;; Forth word REPEAT
+	;; 
 	db 0x80+0x06, _R, _E, _P, _E, _A, _T
 	dw 0x0018
 	
@@ -7479,7 +7640,9 @@ l1809h:	call DICT_ADD_JP_HL	;1809 - Add JP BEGIN to dictionary
 	
 	ret			;1813 - Return to wrap-up of immediate word
 
+
 	;; Forth word UNTIL
+	;; 
 	db 0x80+0x05, _U, _N, _T, _I, _L
 	dw 0x001D
 	
@@ -7506,6 +7669,7 @@ TOS_ZERO_CHECK:
 	ret			;1830
 
 	;; Forth word KEY
+	;; 
 	db 0x03, _K, _E, _Y
 	dw 0x0019
 	
@@ -7526,24 +7690,30 @@ l1837h:	ld a,_FLASH		;1837
 	;; Forth word (
 	db 0x80+0x01, _LEFTPARENTH
 	dw 0x000E
-l184eh:	call sub_14c5h		;184e
+
+GET_COMMENT:
+	call Q_GET_CHAR		;184e
 	and 07fh		;1851
-	cp 029h		;1853
-	jr nz,l184eh		;1855
+	cp _RIGHTPARENTH	;1853
+	jr nz,GET_COMMENT	;1855
+
 	ret			;1857
-	ld (bc),a			;1858
-	jr nc,$+62		;1859
-l185bh:	dec bc			;185b
-	nop			;185c
-	rst 10h			;185d
+
+	;; Forth word 0<
+	;; 
+	db 0x02, _0, _LESSTHAN
+	dw 0x000B
+
+	rst 10h			;185d - Retrieve value from Parameter Flag
 	rlc h			;185e
 	jp GT_CONT_1		;1860
-	ld (bc),a		;1863
-	jr nc,$+64		;1864
-	dec bc			;1866
-	nop			;1867
+
+	
+	db 0x02, _0, _GREATERTHAN
+	dw 0x000B
+
 	rst 10h			;1868
-	rlc h		;1869
+	rlc h			;1869
 
 l186bh:	jp GT_CONT_2		;186b
 	
@@ -7561,7 +7731,9 @@ l186bh:	jp GT_CONT_2		;186b
 	cp h			;1878 - Check MSB
 	jr l186bh		;1879
 
+
 	;; Forth word 2*
+	;; 
 	db 0x02, _2, _ASTERISK
 	dw 0x0009
 	
@@ -7636,6 +7808,7 @@ DECIMAL:
 
 	ret			;18cc
 
+	
 	;; Forth word BACK
 	;;
 	db 0x04, _B, _A, _C, _K
@@ -7648,7 +7821,9 @@ DECIMAL:
 
 	ret			;18da
 
+	
 	;; Forth word MEM
+	;; 
 	db 0x03, _M, _E, _M	; MEM
 	dw 0x003D
 
@@ -7716,10 +7891,11 @@ CHECK_MEM:
 	
 
 	;; Forth word FENCE
+	;; 
 	db 0x05, _F, _E, _N, _C, _E
 	dw 0x001E
 
-	call GET_WORD_AND_UNSTACK		;1920
+	call GET_WORD_AND_UNSTACK	;1920
 	ld (FENCE),hl		;1923
 
 	ret			;1926
@@ -7735,7 +7911,9 @@ GET_WORD_AND_UNSTACK:
 	ld a,_U			;1931 - Error: Undefined word
 	jp PRINT_ERR_MSG	;1933
 
+	
 	;; Forth word FORGET
+	;; 
 	db 0x06, _F, _O, _R, _G, _E, _T
 	dw 0x004B
 	
@@ -7784,8 +7962,9 @@ l1974h:	ex de,hl		;1974
 
 	
 	;; FORTH word TOFF
-	db 0x04, 0x54, 0x4F, 0x46, 0x46
-	db 0x0D, 0x00
+	;; 
+	db 0x04, _T, _O, _F, _F
+	dw 0x000D
 
 	ld hl,FLAGS3		;1988
 	res 6,(hl)		;198b
@@ -7793,8 +7972,9 @@ l1974h:	ex de,hl		;1974
 	ret			;198d
 
 	;; FORTH word TON
-	db 0x03, 0x54, 0x4F, 0x4E
-	db 0x0C, 0x00
+	;; 
+	db 0x03, _T, _O, _N
+	dw 0x000C
 
 	ld hl,FLAGS3		;1994
 	set 6,(hl)		;1997
@@ -7802,23 +7982,29 @@ l1974h:	ex de,hl		;1974
 	ret			;1999
 
 	;; Forth word WARM
+	;; 
 	db 0x04, _W, _A, _R, _M
 	dw 0x000A
 	
 	jp WARM_RESTART		;19a1
 
+	;; Forth word COLD
+	;; 
 	db 0x04, _C, _O, _L, _D
 	dw 0x000A
 	
 	jp COLD_RESTART		;19ab
 
+	
 	;; Forth word NUL
+	;; 
 	db 0x03, _N, _U, _L
 	dw 0x0007
 	
 NUL:	ret			;19b4
 
 	;; Forth word HERE (19b5h)
+	;; 
 	db 0x04, _H, _E, _R, _E
 	dw 0x000C
 
@@ -7826,7 +8012,9 @@ HERE:	ld hl,(P_HERE)		;19bc
 	rst 8			;19bf
 	ret			;19c0
 
+	
 	;; Forth Word H
+	;; 
 H:	db 0x01, _H
 	dw 0x0009
 
@@ -7836,6 +8024,7 @@ H:	db 0x01, _H
 	ret			;19c9
 
 	;; Forth Word T
+	;; 
 	db 0x01, _T
 	dw 0x0009
 	
@@ -7844,20 +8033,21 @@ T:	ld hl,PSTART_DICT	;19ce - Retrieve address
 
 	ret			;19d2
 
+	;; Forth word S@
+	;; 
+	db 0x02, _S, _AT
+	dw 0x0008
 	
-	ld (bc),a		;19d3
-	ld d,e			;19d4
-	ld b,b			;19d5
-	ex af,af'			;19d6
-	nop			;19d7
 	jp READ_TOKEN		;19d8
 
 
-	ld (bc),a		;19db
-	ld a,023h		;19dc
-	dec bc			;19de
-	nop			;19df
+	;; Forth work >#
+	;; 
+	db 0x02, _GREATERTHAN, _HASH
+	dw 0x000B
+
 	call STR_TO_NUM		;19e0
+
 	jp GT_CONT_2		;19e3
 
 
@@ -7881,13 +8071,16 @@ l19f0h:	rst 20h			;19f0
 
 	ret			;19f7
 
+	
 	;; Forth word .CPU
+	;; 
 	db 0x04, _PERIOD, _C, _P, _U
 	dw 0x000D
 
 	ld hl,CPU_MSG		;19ff
 	jp PRINT_STR_HL		;1a02
 
+	
 	;; Forth word U*
 	;;
 	db 0x02, _U, _ASTERISK
@@ -7897,6 +8090,7 @@ l19f0h:	rst 20h			;19f0
 	call MULT_DE_HL		;1a0d
 	jp STACK_DEHL		;1a10
 
+	
 	;; Forth word U/MOD
 	;;
 	;; Divide 32-bit number (2OS) by 16-bit number (TOS), returning
@@ -7909,9 +8103,10 @@ U_SLASH_MOD:
 	push hl			;1a1c
 	pop bc			;1a1d
 	call UNSTACK_DEHL	;1a1e
-	call sub_0ba0h		;1a21
+	call DEHL_DIV_BC	;1a21
 	jp STACK_DEHL		;1a24
 
+	
 	;; Forth word UMOD
 	;;
 	;; Divide 32-bit number (2OS) by 16-bit number (TOS), returning
@@ -7937,7 +8132,9 @@ U_SLASH_MOD:
 	sbc hl,de		;1a3f
 	jp GT_CONT_2		;1a41
 
+	
 	;; Forth word MIN
+	;; 
 	db 0x03, _M, _I, _N
 	dw 0x0011
 	
@@ -7954,6 +8151,7 @@ l1a53h:	rst 8			;1a53 - Push HL onto stack
 
 
 	;; Forth word MAX
+	;; 
 	db 0x03, _M, _A, _X	
 	dw 0x000F
 	
@@ -7962,7 +8160,9 @@ l1a53h:	rst 8			;1a53 - Push HL onto stack
 	ccf			;1a61 - Complement, so flag indicates HL > DE
 	jr MIN_CONT		;1a62 - Continue as for MIN
 
+	
 	;; Forth word PAD
+	;; 
 	db 0x03, _P, _A, _D  	; 1a64
 	dw 0x000B
 
@@ -8077,6 +8277,7 @@ l1ac2h:	call COMPARE_STACK_DNUM	;1ac2 - Compare numbers
 SEQ_CONT:	
 	jr l1a96h		;1ade
 
+	
 	;; Forth word TIME
 	;; 
 	db 0x04, _T, _I, _M, _E
@@ -8088,6 +8289,7 @@ SEQ_CONT:
 	ret			;1aeb
 
 	;; Forth word PER
+	;; 
 	db 0x03, _P, _E, _R
 	dw 0x000B
 	
@@ -8190,6 +8392,7 @@ l1b40h:	rst 10h			;1b40 - Retrieve TOS into A
 
 	
 	;; Forth word INIT
+	;; 
 	db 0x04, _I, _N, _I, _T
 	dw 0x0013
 	
@@ -8345,6 +8548,7 @@ PR_DONE_2:
 	ret			;1c03
 
 	;; Forth word .P
+	;; 
 	db 0x02, _PERIOD, _P
 	dw 0x008C
 
@@ -8537,6 +8741,7 @@ ZP_OUT_PIXEL:
 
 	
 	;; Forth word D>
+	;; 
 	;; Double-precision comparison
 	;; 
 	db 0x02, _D, _GREATERTHAN
@@ -8548,6 +8753,7 @@ D_GREATERTHAN:
 
 	
 	;; Forth word D<
+	;; 
 	;; Double-precision comparison
 	;; 
 	db 0x02, _D, _LESSTHAN
