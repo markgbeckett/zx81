@@ -32,7 +32,7 @@ Whilst the display routine would work as well on the Minstrel 3 as it does on th
 
 ## Running ZX81-Forth on a Minstrel 3
 
-You can run either ZX81-Forth or Tree Forth on the Minstrel 3, by copying one of the ROM images [hforth_pal.rom](hforth_pal.rom) or [hforth_ntsc.rom](hforth_ntsc.rom) onto a suitable EPROM and installing in your Minstrel 3.
+You can run either ZX81-Forth or Tree Forth on the Minstrel 3, by copying one of the ROM images [zx-forth_pal.rom](zx-forth_pal.rom) or [zx-forth_ntsc.rom](zx-forth_ntsc.rom) onto a suitable EPROM and installing in your Minstrel 3.
 
 Make sure to set the display jumper for either NTSC or PAL, as appropriate to your chosen ROM, and you should be able to boot into the Forth system console screen.
 
@@ -72,7 +72,7 @@ The bugs and anomolies I have found, so far, are:
 
 I am in the process of disassembling ZX81-Forth, in part because it seems a genuinely interesting piece of software to study and in part because I would like to try to run it on other Z80-based systems.
 
-You can get a sense of my progress by browsing the [source code](hforth.asm). I have worked through around three quarters of the program, though my understanding has grown as I have progressed, so some of my earlier comments may be ambiguous or even wrong. It will take a couple more iterations to get a reasonable and complete, commented assembly-language source code.
+You can get a sense of my progress by browsing the [source code](zx-forth.asm). I have worked through around three quarters of the program, though my understanding has grown as I have progressed, so some of my earlier comments may be ambiguous or even wrong. It will take a couple more iterations to get a reasonable and complete, commented assembly-language source code.
 
 In addition, I have described below some of what I think are the key elements of ZX81-Forth, to help people follow the source code. Again, this is a work in progress.
 
@@ -80,7 +80,7 @@ In addition, I have described below some of what I think are the key elements of
 
 I have sketched out a flowchart that explains how I think ZX81-Forth works.
 
-![High-level flow of the monitor](hforth_flowchart.png)
+![High-level flow of the monitor](zx-forth_flowchart.png)
 
 As with ZX81 BASIC, quite a lot of time is spent producing a screen display. This is time-critical and has to, effectively, be the controlling process.
 
