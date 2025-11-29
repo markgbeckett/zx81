@@ -87,7 +87,7 @@ FIXBUG:		equ 0x00
 MINSTREL4:	equ 0x00
 
 	;; 	include "zx81_chars.asm"
-	include "hforth_chars.asm"
+	include "zx-forth_chars.asm"
 
 	;; ROM configuration options
 	if MINSTREL3+MINSTREL4>0
@@ -6896,6 +6896,10 @@ WRITE_SCR_NUM:
 
 	if MINSTREL4=1
 
+	rst 0x10		; Retrieve screen number
+
+ST_KNL:	ld (SCREEN_NUM),hl	; and store
+	
 	call CLEARHEADER
 	ld bc,16*32
 	ld (PAD+0x0B),bc
@@ -6905,8 +6909,8 @@ WRITE_SCR_NUM:
 	push hl
 	push bc
 
-	rst 0x10		; Retrieve screen number
-
+	ld hl,(SCREEN_NUM)
+	
 	jp ST_CONT
 	
 	else
@@ -7197,8 +7201,11 @@ LS_FAIL:
 
 	call INC_SCREEN_NUM	;1665 - Increment screen number
 
-	jp ST_CONT		;1668 - Store screen
-
+	if MINSTREL4=1
+	jp ST_KNL		;1668 - Store screen
+	else
+	jp ST_CONT
+	endif
 
 INC_SCREEN_NUM:
 	ld hl,(SCREEN_NUM)	;166b
