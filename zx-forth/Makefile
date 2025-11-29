@@ -1,5 +1,5 @@
 ASM = z80asm
-AFLAGS = -L -o hforth.rom
+AFLAGS = -L -o zx-forth.rom
 
 ifeq ($(OS),Windows_NT)
 	ERASE = erase
@@ -7,7 +7,7 @@ ifeq ($(OS),Windows_NT)
 	ERASE = rm
 endif
 
-SRC = hforth.asm
+SRC = zx-forth.asm
 HEADERS = 
 
 OBJS = $(SRC:.asm=.rom)
@@ -15,10 +15,10 @@ OBJS = $(SRC:.asm=.rom)
 all: $(OBJS)
 
 %.rom:	%.asm Makefile $(HEADERS)
-	$(ASM) $(AFLAGS) $< > hforth.sym 2>&1
+	$(ASM) $(AFLAGS) $< > zx-forth.sym 2>&1
 
 compare:
-	fc /b hforth.rom "C:\opt\EightyOne V1.41\ROMs\Replacement Operating Systems\zx81-forth.rom"
+	fc /b zx-forth.rom "C:\opt\EightyOne V1.41\ROMs\Replacement Operating Systems\zx81-forth.rom"
 
 clean:
 	$(ERASE) $(OBJS)
