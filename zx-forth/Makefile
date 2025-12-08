@@ -22,3 +22,6 @@ compare:
 
 clean:
 	$(ERASE) $(OBJS)
+
+wav:
+	ffmpeg -f concat -i swamp_screens.txt -c copy swamp_zxf4.wav
