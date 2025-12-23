@@ -86,6 +86,12 @@ NTSC:		equ 0x00
 FIXBUG:		equ 0x00
 MINSTREL4:	equ 0x00
 
+	if MINSTREL4=1
+PR_PORT:	equ 0xFB
+	else
+PR_PORT:	equ 0xFB
+	endif
+	
 	;; 	include "zx81_chars.asm"
 	include "zx-forth_chars.asm"
 
@@ -8505,40 +8511,44 @@ l1ba1h:	rst 10h			;1ba1 - Retrieve TOS into DE
 PRINT_DRV:
 	push hl			;1bcf
 
-	rst 10h			;1bd0 - Retrieve character from Parameter
-	ld a,l			;1bd1   Stack into A
+	rst 10h			;1bd0 - Retrieve ASCII code of character
+	ld a,l			;1bd1   from Parameter Stack into A
 
 	ld hl,PAD		;1bd2
-	and 07fh		;1bd5
-	cp "`"			;1bd7 - Check for lower-case characters
-	jr c,PR_CONT		;1bd9   and convert, if neceesary
-	add a,"A"-"a"		;1bdb
+	and %01111111		;1bd5 - Mask off high bit
+	cp "a"-1		;1bd7 - Check for lower-case characters
+	jr c,PR_CONT		;1bd9 - Skip forward if not ... 
+	add a,"A"-"a"		;1bdb   ... or convert, if necessary
 
 PR_CONT:
 	cp _SPACE		;1bdd - Check for printable character
 	jr nc,PR_ADD_CH		;1bdf   and jump forward, if so
 
+	;; Check for LEFT character
 	cp _LEFT		;1be1 - Check for LEFT and jump forward
-	jr nz,l1bech		;1be3   if not
+	jr nz,PR_ADD_CHAR	;1be3   if not
 
-	;; Check length of string in pad and decrement, if possible
+	;; Check for non-zero string length in PAD and, if so, decrement
 	xor a			;1be5
-	or (hl)			;1be6
-	jr z,PR_DONE		;1be7
-	dec (hl)		;1be9
+	or (hl)			;1be6 
+	jr z,PR_DONE		;1be7 - Return, if empty string in PAD
+	dec (hl)		;1be9   or reduce length of string.
 
 PR_DONE:
 	pop hl			;1bea
 
 	ret			;1beb
 
-l1bech:	cp _ENTER		;1bec - Check for carriage return
+	;; Add character to print buffer (in PAD)
+PR_ADD_CHAR:
+	cp _ENTER		;1bec - Check for carriage return
 	jr z,PR_DONE		;1bee
 
+	;; Check for down and send to printer, if so
 	cp _DOWN		;1bf0
 	ld a,_PERIOD		;1bf2 - Any other control character
 				;       results in "."
-	jr z,l1bfdh		;1bf4 - Jump forward if "_DOWN"
+	jr z,PR_SEND		;1bf4 - Jump forward if "_DOWN"
 
 PR_ADD_CH:
 	call STR_ADD_CHR	;1bf6 - Add character to PAD
@@ -8546,7 +8556,8 @@ PR_ADD_CH:
 	jr z,PR_DONE_2		;1bfb - Jump forward if not. Done (could
 				;       use PR_DONE for this)
 
-l1bfdh:	call DOT_P		;1bfd - Write to printer
+PR_SEND:
+	call DOT_P		;1bfd - Write to printer
 	ld (hl),000h		;1c00 - Reset string in PAD
 
 PR_DONE_2:
@@ -8555,11 +8566,21 @@ PR_DONE_2:
 	ret			;1c03
 
 	;; Forth word .P
+	;;
+	;; Printer controlled via PR_PORT (default to 0xFB)
+	;;
+	;; D0 - reads high if printer ready
+	;; D1 - write high for motor slow ; write low for motor fast
+	;; D2 - write high to stop motor ; write low to start motor
+	;; D6 - reads low, if printer is present
+	;; D7 - reads high at start of new line; write high to print a
+	;;      pixel
 	;; 
 	db 0x02, _PERIOD, _P
 	dw 0x008C
 
 DOT_P:	xor a			;1c09
+
 	if MINSTREL4=1
 	di
 	nop
@@ -8567,7 +8588,8 @@ DOT_P:	xor a			;1c09
 	out (0xFD),a		;1c0a - Disable NMI generator
 	endif
 	
-	out (0xFB),a		;1c0c - Start ZX Printer motor
+	out (PR_PORT),a		;1c0c - Start ZX Printer motor (motor on
+				;       and fast)
 
 	;; Save registers
 	push de			;1c0e
@@ -8575,38 +8597,41 @@ DOT_P:	xor a			;1c09
 
 	ld hl,PAD		;1c10
 
-	;; Check buffer length >= 31 characters
-	ld a,01fh		;1c13 - 
+	;; Check buffer length 31 characters
+	ld a,0x1F		;1c13 - 31 characters
 	sub (hl)		;1c15 
-	jr c,l1c26h		;1c16 - Skip forward if so
+	jr c,DP_CONT		;1c16 - Skip forward if buffer length > 31
 
 	;; Pad buffer with spaces
-	push hl			;1c18
-	inc a			;1c19 - Set to _SPACE
-	ld e,a			;1c1a
-	ld a,(hl)		;1c1b - Save it
-	inc hl			;1c1c
-	add a,l			;1c1d
-	ld l,a			;1c1e
-l1c1fh:	ld (hl),020h		;1c1f
+	push hl			;1c18 - Save location of string count field
+	inc a			;1c19 - Set E to number of character
+	ld e,a			;1c1a   to be added
+	ld a,(hl)		;1c1b - Retrieve string length
+	inc hl			;1c1c - Advance to first character
+	add a,l			;1c1d - Advance to last character
+	ld l,a			;1c1e   (assumes no overflow)
+DP_PAD:				;       Pad with spaces
+	ld (hl),_SPACE		;1c1f 
 	inc hl			;1c21
-	dec e			;1c22
-	jr nz,l1c1fh		;1c23
+	dec e			;1c22 - Repeat until have 32 characters
+	jr nz,DP_PAD		;1c23
 
-	pop hl			;1c25
+	pop hl			;1c25 - Retrieve pointer to string count
+				;       field
 
-l1c26h:	inc hl			;1c26 - Advance to start of string (past
+DP_CONT:
+	inc hl			;1c26 - Advance to start of string (past
 				;       length field)
 	ex de,hl		;1c27
 	ld hl,(STACKP_BASE)	;1c28
-	call ZXPR_BUFFER		;1c2b
+	call ZXPR_BUFFER	;1c2b
 
 	;; Restore registers
 	pop hl			;1c2e
 	pop de			;1c2f
 
 	ld a,%00000100		;1c30 - Motor off
-	out (%11111011),a	;1c32 - ZX Printer control port
+	out (PR_PORT),a	;1c32 - ZX Printer control port
 
 	if MINSTREL4=1
 	ei
@@ -8625,31 +8650,33 @@ l1c26h:	inc hl			;1c26 - Advance to start of string (past
 	;; 
 	;; On entry
 	;;   DE - start of 32-character string
-	;;   HL - spare 32 bytes of space (uses bottom of Execution
+	;;   HL - spare 32 bytes of space (uses lowe half of Execution
 	;;        stack)
 ZXPR_BUFFER:
 	push bc			;1c37
 	
-	ld c,000h		;1c38 - Pixel row
+	ld c,000h		;1c38 - Start in pixel row 0
 
 l1c3ah:	push de			;1c3a
 	push hl			;1c3b
-	ld b,020h		;1c3c - 32 chars per row?
+	ld b,020h		;1c3c - 32 chars per row
 
 	;;  Populate line buffer to print
-ZP_NEXT_LINE:
+ZB_NEXT_CHAR:
 	push hl			;1c3e
 	ld h,000h		;1c3f
-	ld a,(de)		;1c41 - Retrieve character
-	sub 020h		;1c42 - Adjust for ZX81 character set
-	and 03fh		;1c44 - Mask off top two bits
-	ld l,a			;1c46 - HL = character code to print
+	ld a,(de)		;1c41 - Retrieve character code
+	sub _SPACE		;1c42 - Normalise on SPACE (position
+				;       zero in CHARS)
+	and %00111111		;1c44 - Mask off top two bits
+	ld l,a			;1c46 - HL = normalised character code 
 
 	;; Multiple by 8 ( 8 rows of pixels per character )
 	add hl,hl		;1c47
 	add hl,hl		;1c48
 	add hl,hl		;1c49
 
+	;; Set correct memory page (location of CHARS)
 	if MINSTREL4=1
 	ld a,CHARS>>8		;1c4a - High byte of character-map addr
 	else
@@ -8664,15 +8691,15 @@ ZP_NEXT_LINE:
 
 	ld a,(hl)		;1c51 - Retrieve pixel bitmap
 
-	pop hl			;1c52
+	pop hl			;1c52 - Pop buffer location
 
 	ld (hl),a		;1c53
-	inc hl			;1c54 - Advance pixel row pointer
+	inc hl			;1c54 - Advance buffer pointer
 	inc de			;1c55 - Advance string pointer
 	
-	djnz ZP_NEXT_LINE	;1c56 - Next character
+	djnz ZB_NEXT_CHAR	;1c56 - Next character
 
-	pop hl			;1c58 - Recover start of pixel buffer
+	pop hl			;1c58 - Restore start of pixel buffer
 
 	;; Check row number and slow motor for last two rows
 	ld a,c			;1c59 - Retrieve row number
@@ -8681,9 +8708,14 @@ ZP_NEXT_LINE:
 	inc a			;1c5d
 	add a,a			;1c5e - A = 0 (rows 0--5) / 2 (rows 6--7)
 
-	ld e,a			;1c5f
-	call ZXPR_WRITE_LINE		;1c60
+	ld e,a			;1c5f - E contains printer control code
 
+	if MINSTREL4=1
+	call ZXPR_COPY_LINE	;1c60
+	else
+	call ZXPR_WRITE_LINE
+	endif
+	
 	pop de			;1c63 - Return to start of character line
 
 	inc c			;1c64 - Advance to next row
@@ -8694,43 +8726,50 @@ ZP_NEXT_LINE:
 
 	ret			;1c6a
 
-	;; Write line
+	;; Write line of 32*8 pixels to printer
+	;;
+	;; On entry:
+	;;   HL - address of pixel buffer
+	;;   E - control code for printer 
 ZXPR_WRITE_LINE:
+	;; Save registers
 	push hl			;1c6b
 	push de			;1c6c
 	push bc			;1c6d
 
-	;; Wait for start of new line
+	;; Wait for start of new line (*** NOTE: this could be infinite
+	;; loop, if printer never ready ***)
 ZP_NEWLINE:
-	in a,(0fbh)		;1c6e
-	rlca			;1c70
-	jr nc,ZP_NEWLINE		;1c71
+	in a,(PR_PORT)		;1c6e
+	rlca			;1c70 - D7 high means printer at start
+				;       of new line
+	jr nc,ZP_NEWLINE	;1c71
 
 	ld c,020h		;1c73 - 32 characters
 ZP_NEXT_CHAR:
-	ld b,008h		;1c75
-	ld d,(hl)		;1c77
+	ld b,008h		;1c75 - 8 pixels
+	ld d,(hl)		;1c77 - Retrieve next eight pixels
 	inc hl			;1c78
 
-	;; Wait until printer is ready
+	;; Wait for printer to be ready to receive data (D0 high)
 ZP_NEXT_BIT:	
 ZP_READY:
-	in a,(0fbh)		;1c79
-	rrca			;1c7b
+	in a,(PR_PORT)		;1c79
+	rrca			;1c7b - Check if D0 high
 	jr nc,ZP_READY		;1c7c
 
 	;; Retrieve next pixel into carry
 	rlc d			;1c7e
 	ld a,e			;1c80 - Retrieve printer speed indicator
 	jr nc,ZP_OUT_PIXEL	;1c81 - Skip forward if no pixel
-	or 080h			;1c83 - Set to write a pixel
+	or %10000000		;1c83 - Set to write a pixel
 
 ZP_OUT_PIXEL:
-	out (0xFB),a		;1c85 - Send to printer
+	out (PR_PORT),a		;1c85 - Send to printer
 	djnz ZP_NEXT_BIT	;1c87 - Next pixel
 	
-	dec c			;1c89 - Next character
-	jr nz,ZP_NEXT_CHAR		;1c8a
+	dec c			;1c89 - Check if more pixel patterns
+	jr nz,ZP_NEXT_CHAR	;1c8a   to be written
 
 	pop bc			;1c8c - Done, so restore registers
 	pop de			;1c8d
@@ -10040,6 +10079,86 @@ E_RESET:
 
 	ret
 
+	;; Revised version of ZX Printer driver kernel, based on
+	;; Sinclair's implementation.
+	;; 
+	;; Write line of 32*8 pixels to printer
+	;;
+	;; On entry:
+	;;   HL - address of pixel buffer
+	;;   E - control code for printer
+	;;   C - row number (within character cell)
+ZXPR_COPY_LINE:
+	;; Save registers
+	push hl			;1c6b
+	push de			;1c6c
+	push bc			;1c6d
+
+
+	;; Adjust motor speed
+	ld a,e
+	out (PR_PORT),a
+
+	;; Check for break key
+ZCP_CHECK:
+	call ZCP_BREAK
+	jr nc, ZCP_DONE		; Exit if pressed
+	
+	;; Retrieve printer status
+	in a,(PR_PORT)		;
+	add a,a
+	jp m, ZCP_DONE		; Return if printer not present
+	jr nc, ZCP_CHECK	; Look back if printer not on new line
+
+	ld c, 0x20		; 32 bytes to be sent
+
+ZCP_BYTE:
+	ld d,(hl)		; Retrieve next byte
+	inc hl
+	ld b, 0x08		; Eighty pixels per byte
+
+	;; Send next pixel
+ZCP_NEXT:
+	rl e			; Shift E left (temporarily)
+	rl d			; Retrieve next bit to print
+	rr e			; into E
+
+	;; Wait for printer
+ZCP_CHK2:
+	in a,(PR_PORT)
+	rra
+	jr nc,ZCP_CHK2
+
+	ld a, e
+	out (PR_PORT),a
+
+	djnz ZCP_NEXT
+
+	dec c			; Check if more bytes to send
+	jr nz, ZCP_BYTE
+
+	ld a,%00000100		; Stop motor
+	out (PR_PORT),a
+
+	;; Restore registers
+ZCP_DONE:
+	pop bc
+	pop de
+	pop hl
+	
+	ret
+	
+ZCP_BREAK:
+	ld a, 0xFE	; Read port 0xFEFE
+	in a,(0xFE)
+	rra		; Check bit zero
+	ret c		; Break not pressed, so done
+
+	ld a, 0x7F
+	in a,(0xFE)
+	rra		; test bit for outermost key
+
+	ret
 	
 	ds $4000-$
 
