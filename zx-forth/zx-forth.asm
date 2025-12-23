@@ -83,8 +83,8 @@
 	;; elements of the original programme
 MINSTREL3:	equ 0x00
 NTSC:		equ 0x00
-FIXBUG:		equ 0x00
-MINSTREL4:	equ 0x00
+FIXBUG:		equ 0x01
+MINSTREL4:	equ 0x01
 
 	if MINSTREL4=1
 PR_PORT:	equ 0xFB
@@ -8610,8 +8610,9 @@ DOT_P:	xor a			;1c09
 	inc hl			;1c1c - Advance to first character
 	add a,l			;1c1d - Advance to last character
 	ld l,a			;1c1e   (assumes no overflow)
-DP_PAD:				;       Pad with spaces
-	ld (hl),_SPACE		;1c1f 
+
+	;; Pad with spaces
+DP_PAD:	ld (hl),_SPACE		;1c1f 
 	inc hl			;1c21
 	dec e			;1c22 - Repeat until have 32 characters
 	jr nz,DP_PAD		;1c23
@@ -8738,7 +8739,7 @@ ZXPR_WRITE_LINE:
 	push bc			;1c6d
 
 	;; Wait for start of new line (*** NOTE: this could be infinite
-	;; loop, if printer never ready ***)
+	;; loop, if printer is never ready ***)
 ZP_NEWLINE:
 	in a,(PR_PORT)		;1c6e
 	rlca			;1c70 - D7 high means printer at start
@@ -8751,8 +8752,8 @@ ZP_NEXT_CHAR:
 	ld d,(hl)		;1c77 - Retrieve next eight pixels
 	inc hl			;1c78
 
-	;; Wait for printer to be ready to receive data (D0 high)
 ZP_NEXT_BIT:	
+	;; Wait for printer to be ready to receive data (D0 high)
 ZP_READY:
 	in a,(PR_PORT)		;1c79
 	rrca			;1c7b - Check if D0 high
@@ -10094,7 +10095,6 @@ ZXPR_COPY_LINE:
 	push de			;1c6c
 	push bc			;1c6d
 
-
 	;; Adjust motor speed
 	ld a,e
 	out (PR_PORT),a
@@ -10104,18 +10104,19 @@ ZCP_CHECK:
 	call ZCP_BREAK
 	jr nc, ZCP_DONE		; Exit if pressed
 	
-	;; Retrieve printer status
+	;; Retrieve printer status ( bit 6 - printer present; bit 7 -
+	;; printer ready)
 	in a,(PR_PORT)		;
 	add a,a
-	jp m, ZCP_DONE		; Return if printer not present
-	jr nc, ZCP_CHECK	; Look back if printer not on new line
+	jp m, ZCP_DONE		; Return, if printer not present
+	jr nc, ZCP_CHECK	; Loop back, if printer not on new line
 
 	ld c, 0x20		; 32 bytes to be sent
 
 ZCP_BYTE:
 	ld d,(hl)		; Retrieve next byte
 	inc hl
-	ld b, 0x08		; Eighty pixels per byte
+	ld b, 0x08		; Eight pixels per byte
 
 	;; Send next pixel
 ZCP_NEXT:
