@@ -134,14 +134,6 @@ DECIMAL
     MAP 4 SWAP C!
 ;
 
-: PRCMPSS 12 SCI .C
-    "   N" SCI .W SCI SCCR
-    "  W+E" SCI .W SCI SCCR
-    "   S" SCI .W SCI SCCR
-    " X=YOU" SCI .W SCI SCCR
-    " #=SWAMP" SCI .W SCI SCCR
-    " #=EDGE" SCI .W SCI SCCR
-;
 -->
 
 ( SCREEN 8 - GAME STATS)
@@ -308,6 +300,17 @@ DECIMAL
     
     CASE N NE E SE S SW W NW OUT PRMAP ;
 ;
+
+( SCREEN 14 - COMPASS AND STATS )
+: PRCMPSS 12 SCI .C ( CLEAR SCREEN )
+    "   N" SCI .W SCI SCCR
+    "  W+E" SCI .W SCI SCCR
+    "   S" SCI .W SCI SCCR
+    " X=YOU" SCI .W SCI SCCR
+    " #=SWAMP" SCI .W SCI SCCR
+    " #=EDGE" SCI .W SCI SCCR
+;
+
 
 ( GOT THIS FAR )
     
