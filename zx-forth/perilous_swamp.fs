@@ -115,6 +115,7 @@ DECIMAL
 : SCCR 13 OVER .C 10 SWAP .C ;
 
 : PRMAP
+    1 SCM .C ( CURSOR HOME )
     11 0 DO
 	11 0 DO
 	    I J MAP C@
