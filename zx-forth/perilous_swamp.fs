@@ -303,6 +303,7 @@ DECIMAL
 ;
 
 ( SCREEN 14 - COMPASS AND STATS )
+
 : PRCMPSS 12 SCI .C ( CLEAR SCREEN )
     "   N" SCI .W SCI SCCR
     "  W+E" SCI .W SCI SCCR
@@ -318,8 +319,39 @@ DECIMAL
 ;
 
 
+( SCREEN 15 )
+
+: GETCOMBAT ( -- N )
+    BEGIN
+	BEGIN
+	    " HOW MANY COMBAY POINTS? " SCC .W
+	    S@ >#
+	UNTIL
+	DUP STRENGTH @ 1+ <
+    UNTIL
+    GEMS @ 3 * 100 / -
+;
+
+: DESCMON ( BEAST TREASURE -- BEAST TREASURE )
+    ( GENERATE TWO, DIFFERENT RANDOM NUMBERS )
+    BEGIN 9 RND 9 RND 2DUP = 1- UNTIL
+    " A " SCC .W
+    DESC  W@ SCC .W 
+    "  " SCC .W
+    DESC  W@ SCC .W 
+    "  " SCC .W
+    OVER BEAST W@ SCC .W
+    "  IS GUARDING " SCC .W
+    DUP TREAS W@ SCC .W
+    ( CHECK FOR WAND )
+    SCC SCCR
+    "THEIR COMBAT POINTS COME TO " OVER 10 * # SCC .W
+    SCC SCCR
+;
+
+
 ( GOT THIS FAR )
-    
+
 : ENCOUNTER ( X Y -- X Y FLAG )
     15 RND     ( CHOOSE MONSTER )
 
@@ -331,13 +363,19 @@ DECIMAL
     BEGIN
 	1 OVER 10 > IF
 	    OVER 11 -
-	    CASE THIEF PIT BAT EAGLE 1 -
+	    CASE THIEF PIT BATTED EAGLE 1 -
 	THEN
     UNTIL
 
     ( Check for eagle )
     DUP 2 = IF ( DEAL WITH EAGLE ) THEN
 
+    ( DESCRIBE MONSTER )
+    DESCMON ( BEAST -- BEAST )
+    
+    ( WORK OUT MONSTER'S STRENGTH )
+    DUP 10 *
+    
       Thief (11)
       Pit (12)
       Bat (13)
