@@ -418,7 +418,28 @@ DECIMAL
     1 SWAP - ( MAKE FLAG=1 CORRESPOND TO SUCCESS )
 ;
 
-	
+: CHECKRUN ( BEAST -- FLAG )
+    12 RND ( BEAST II )
+    DUP 11 = IF
+	DROP DROP 2
+    ELSE
+	1 ( FLAG )
+	10 0 DO
+	    DROP
+	    OVER I 1+ < ( BEAST II T1 )
+	    OVER I >
+	    AND
+	    IF
+		0 LEAVE
+	    ELSE
+		1
+	    THEN
+	LOOP
+	SWAP DROP
+	SWAP DROP
+    THEN
+;
+
 
 ( GOT THIS FAR )
 
