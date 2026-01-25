@@ -7326,7 +7326,10 @@ GT_CONT_2:
 	ex de,hl		;16d0
 	rst 10h			;16d1 - Retrieve 2OS to HL 
 	call DE_GT_HL		;16d2 - Check if TOS > 2OS
-l16d5h:	jr z,GT_CONT_2		;16d5 - Jump if TOS <= 20S  
+l16d5h:	jr z,GT_CONT_2		;16d5 - Jump if TOS <= 20S
+				;     - Pushes (1 - Carry) onto Paramter
+				;       Stack
+
 	or a			;16d7 - Reset carry
 	jr GT_CONT_1		;16d8
 
@@ -7721,14 +7724,19 @@ GET_COMMENT:
 	rlc h			;185e
 	jp GT_CONT_1		;1860
 
-	
+
+	;; Forth word 0>
+	;;
+	;; *** Bug - this actually checks for non-negative number: that
+	;; is, TOS >= 0.
 	db 0x02, _0, _GREATERTHAN
 	dw 0x000B
 
-	rst 10h			;1868
-	rlc h			;1869
+	rst 10h			;1868 - Retrieve TOS
+	rlc h			;1869 - Check sign bit
 
-l186bh:	jp GT_CONT_2		;186b
+l186bh:	jp GT_CONT_2		;186b - Pushes (1 - Carry) onto Paramter
+				;       Stack
 	
 	;; Forth word 0=
 	;;
@@ -8061,7 +8069,9 @@ T:	ld hl,PSTART_DICT	;19ce - Retrieve address
 
 	call STR_TO_NUM		;19e0
 
-	jp GT_CONT_2		;19e3
+	jp GT_CONT_2		;19e3 - Push (1 - Carry) onto Paramter
+				;       Stack
+
 
 
 	;; Forth word .CO
@@ -8143,7 +8153,9 @@ U_SLASH_MOD:
 	call UNSTACK_DEHL	;1a3b
 	or a			;1a3e
 	sbc hl,de		;1a3f
-	jp GT_CONT_2		;1a41
+	jp GT_CONT_2		;1a41 - Push (1 - Carry) onto Paramter
+				;       Stack
+
 
 	
 	;; Forth word MIN
@@ -8228,7 +8240,9 @@ l1a96h:	scf			;1a96
 	jr nz,l1a9ah		;1a97
 	ccf			;1a99
 
-l1a9ah:	jp GT_CONT_2		;1a9a
+l1a9ah:	jp GT_CONT_2		;1a9a - Push (1 - Carry) onto Paramter
+				;       Stack
+
 
 
 	;; Forth word D0=
@@ -8827,7 +8841,9 @@ D_LESSTHAN:
 
 	ccf			;1caf - Complement carry
 
-	jp GT_CONT_2		;1cb0 - Push result onto stack and done
+	jp GT_CONT_2		;1cb0 - Push (1 - Carry) onto Paramter
+				;       Stack and done
+
 
 	
 	if MINSTREL3+MINSTREL4>0
