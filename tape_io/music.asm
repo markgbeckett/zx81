@@ -2,12 +2,27 @@
 	;; Toni Baker "Mastering Machine Code on Your ZX81", Chapter 12,
 	;; page 110
 
-	;; ROM routines (8K ROM)
+	;; Select 4K (OLDROM) or 8K ROM
+OLDROM:	equ 0x01
+	
+	;; ROM references
+	if OLDROM=1
+KTABLE:	equ 0x006C
+	else			; (or 0x006C)
 KSCAN:	equ 0x02BB
 FINDCHR: equ 0x07BD
+KTABLE:	equ 0x007E		; (or 0x006C)
+	endif
 
-	org 0x4082 		; Start of contents of REM statement at
-				; beginning of BASIC program space
+	;; Start of contents of REM statement at beginning of BASIC
+	;; program space
+	;; POKE 16403,10 (to avoid listing line 10)
+	if OLDROM=1
+	org 0x402B
+	else
+	org 0x4082 		
+	endif
+		
 	
 	;; Loop-up table for notes
 NOTES: 	db 0x9B, 0x89, 0x73, 0x69
@@ -40,9 +55,74 @@ START:	call KSCAN		; Wait until a key is pressed
 	jr z,START		; not a "pause"
 
 	;; Play this note
-	in a, (0xFE)		; *** BUG : Was 0xFF ***
-	call PAUSE
+MARK:	in a, (0xFF)		; *** BUG : Was 0xFF ***
+MARK2:	call PAUSE
 	out (0xFF), a
 	call PAUSE
 	jr START		; Go round loop again
+
+	
+	;; Local copies of keyboard handling routines are needed for the
+	;; 4K ROM and are included below. For the 8K ROM, these routines
+	;; exist in an accessible form in the ROM
+	if OLDROM=1
+
+KSCAN:	ld hl, 0xFFFF		; Initially, assume no keys pressed
+
+	ld bc, 0xFEFE		; Address bottom-left half-row
+	in a,(c)
+	or 0x01			; Ignore Shift (for first half-row only)
+KS_LOOP:
+	;; Record if key pressed in current half-row
+	or 0xE0			; Mask off upper three bits
+	ld d,a			; Backup value to D
+	cpl			; For bits 0--4, 0=not pressed and 1=pressed
+	cp 0x01			; Check for A=0 (no key pressed)
+	sbc a,a			; A = 0 (key)/ A = FF (no key)
+	or b			; A = half-row identifier (key)/ A = FF
+				; (no key)
+	and l			; Update L to include half-row information
+	ld l,a			; if key pressed
+
+	;; Record key position within half-row
+	ld a,h			; Store location (in half-row) of key(s)
+	and d			; pressed
+	ld h,a
+
+	; Advance to next half-row
+	rlc b			
+	in a,(c)
+	jr c, KS_LOOP		; Repeat if not done
+
+	;; Capture Shift status into H (last scan is repeat of
+	;; bottom-left half-row)
+	rra
+	rl h
+
+	ret			; Done
+
+FINDCHR:
+	ld d,0x00
+	sra b
+	sbc a,a
+	or 0x26
+	ld l,0x05
+	sub l
+FC_LOOP:
+	add a,l
+	scf
+	rr c
+	jr c,FC_LOOP
+	inc c
+	ret nz
+	ld c,b
+	dec l
+	ld l,0x01
+	jr nz, FC_LOOP
+	ld hl, KTABLE-1
+	ld e,a
+	add hl, de
+	ret
+
+	endif
 END:	
