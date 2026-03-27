@@ -46,12 +46,17 @@ START:	call KSCAN		; Wait until a key is pressed
 	ld d,c
 	inc d
 	jr z, START		; *** BUG : Was NZ ***
+
+	;; Check for Shift-Zero
+	call CHK_ESC
+	ret z
+	
 	call FINDCHR		; Find which key is being pressed
-	ld de, NOTES-0x7E
+TEST:	ld de, NOTES-KTABLE
 	add hl, de
 	ld b,(hl)		; Select note
 	xor a
-	cp b			; Check thqat this note is
+	cp b			; Check that this note is
 	jr z,START		; not a "pause"
 
 	;; Play this note
@@ -61,6 +66,13 @@ MARK2:	call PAUSE
 	call PAUSE
 	jr START		; Go round loop again
 
+CHK_ESC:
+	and a
+	ld hl,0xFCEF
+	sbc hl,bc
+	ld a,h
+	or l
+	ret
 	
 	;; Local copies of keyboard handling routines are needed for the
 	;; 4K ROM and are included below. For the 8K ROM, these routines
